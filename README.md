@@ -242,13 +242,26 @@ server {
 
 ## 📱 Интеграция с VPN-панелями (Remnawave, Marzban, 3x-ui)
 
-Чтобы мобильный клиент Incy автоматически получал правила маршрутизации при обновлении подписки, добавьте в настройках вашей панели кастомный заголовок подписки:
+### 1. Для клиентов INCY (Автороутинг в заголовке подписки)
+Чтобы мобильный клиент Incy автоматически получал правила маршрутизации при обновлении подписки, добавьте в настройках вашей панели кастомный заголовок:
 
 * **Имя заголовка (Header Name):** `autorouting`
 * **Значение заголовка (Header Value):**
   ```text
   incy://autorouting/onadd/https://geo.example.com/<ROUTING_TOKEN>/INCY/JSONSUB.JSON
   ```
+
+---
+
+### 2. Для клиентов HAPP / Remnawave Squads (через `remnawave-routing-update`)
+Если на сервере с панелью Remnawave у вас работает сервис автообновления сквадов (`remnawave-routing-update`), подключите `geo-routing-server` к общей сети `remnawave-network` и укажите в `.env` вашего апдейтера локальные ссылки:
+
+```env
+GITHUB_RAW_URL=http://geo-routing-server/HAPP/JSONSUB.DEEPLINK
+SQUAD_1_URL=http://geo-routing-server/HAPP/JSONSUB.DEEPLINK
+SQUAD_2_URL=http://geo-routing-server/HAPP/WHITELIST.DEEPLINK
+```
+*(Токен в локальной Docker-сети указывать не нужно — сервер отдаёт файлы напрямую).*
 
 ---
 
