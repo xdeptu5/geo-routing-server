@@ -1,0 +1,44 @@
+services:
+  geo-routing-server:
+    build: .
+    container_name: geo-routing-server
+    restart: unless-stopped
+    environment:
+      TZ: UTC
+      SCHEDULE: "${SCHEDULE:-40 8 * * *}"
+      DOMAIN: "${DOMAIN:-sub.example.com}"
+      ROUTING_TOKEN: "${ROUTING_TOKEN:-}"
+      SYNC_ON_START: "${SYNC_ON_START:-true}"
+      GEOIP_SOURCE_URL: "${GEOIP_SOURCE_URL:-}"
+      GEOSITE_SOURCE_URL: "${GEOSITE_SOURCE_URL:-}"
+      ROUTING_SOURCE_REPO: "${ROUTING_SOURCE_REPO:-https://raw.githubusercontent.com/hydraponique/roscomvpn-routing/main}"
+      TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN:-}"
+      TELEGRAM_CHAT_ID: "${TELEGRAM_CHAT_ID:-}"
+      TELEGRAM_NOTIFY_SUCCESS: "${TELEGRAM_NOTIFY_SUCCESS:-false}"
+    ports:
+      # Локальный порт для реверс-прокси на хосте (Nginx/Caddy) или внешний порт (например 80)
+      - "${HTTP_BIND:-127.0.0.1}:${HTTP_PORT:-8080}:80"
+    volumes:
+      - routing_data:/app/www
+      - ./.cache:/app/.cache
+      - ./custom_geo:/app/custom_geo:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:80/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    # (Опционально) Если ваш Caddy / Nginx / Traefik работает в Docker-контейнере:
+    # Раскомментируйте блок ниже и внизу файла, чтобы связать контейнеры по имени в одной сети:
+    # networks:
+    #   - default
+    #   - proxy_network
+
+volumes:
+  routing_data:
+
+# (Опционально) Раскомментируйте, если подключаете к существующей Docker-сети вашего реверс-прокси:
+# networks:
+#   proxy_network:
+#     external: true
+#     name: ${DOCKER_PROXY_NETWORK:-proxy_network}

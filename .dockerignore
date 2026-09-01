@@ -1,0 +1,15 @@
+.git
+.github
+.cache
+.sync.lock
+www
+tmp
+custom_geo/*.dat
+*.log
+.env
+token.txt
+*.md
+LICENSE
+*.example
+__pycache__
+*.py[cod]

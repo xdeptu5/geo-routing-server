@@ -1,0 +1,28 @@
+# Environment variables and secrets
+.env
+token.txt
+
+# Local caches and downloads
+.cache/
+.sync.lock
+www/
+tmp/
+*.tmp*
+
+# Custom geo binaries (keep directory structure tracked via .gitkeep)
+custom_geo/*.dat
+!custom_geo/.gitkeep
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Logs and runtime artifacts
+*.log
+
+# Editor and OS files
+.DS_Store
+Thumbs.db
+*.swp
+*~
+*.bak
