@@ -11,8 +11,9 @@ services:
     environment:
       TZ: UTC
       SCHEDULE: "${SCHEDULE:-40 8 * * *}"
-      DOMAIN: "${DOMAIN:-sub.example.com}"
+      DOMAIN: "${DOMAIN:-geo.example.com}"
       ROUTING_TOKEN: "${ROUTING_TOKEN:-}"
+      ENABLED_CLIENTS: "${ENABLED_CLIENTS:-HAPP,INCY}"
       SYNC_ON_START: "${SYNC_ON_START:-true}"
       GEOIP_SOURCE_URL: "${GEOIP_SOURCE_URL:-}"
       GEOSITE_SOURCE_URL: "${GEOSITE_SOURCE_URL:-}"

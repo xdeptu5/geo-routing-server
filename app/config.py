@@ -2,7 +2,7 @@ import os
 import re
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 class Config:
     """Конфигурация приложения, загружаемая из переменных окружения и файлов."""
@@ -13,9 +13,16 @@ class Config:
     CUSTOM_GEO_DIR = Path(os.getenv("CUSTOM_GEO_DIR", str(BASE_DIR / "custom_geo")))
     LOCK_FILE = BASE_DIR / ".sync.lock"
     
-    DOMAIN = os.getenv("DOMAIN", "sub.example.com").strip().rstrip("/")
+    DOMAIN = os.getenv("DOMAIN", "geo.example.com").strip().rstrip("/")
     SCHEDULE = os.getenv("SCHEDULE", "40 8 * * *").strip()
     SYNC_ON_START = os.getenv("SYNC_ON_START", "true").lower() in ("true", "1", "yes")
+    
+    # Список активных клиентов для выборочной раздачи (по умолчанию HAPP и INCY)
+    ENABLED_CLIENTS: List[str] = [
+        c.strip().upper() 
+        for c in os.getenv("ENABLED_CLIENTS", "HAPP,INCY").split(",") 
+        if c.strip()
+    ]
     
     GEOIP_SOURCE_URL = os.getenv("GEOIP_SOURCE_URL", "").strip()
     GEOSITE_SOURCE_URL = os.getenv("GEOSITE_SOURCE_URL", "").strip()

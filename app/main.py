@@ -45,18 +45,18 @@ def acquire_lock(lock_path: Path):
     return lock_file
 
 def print_summary_banner(token: str):
-    """Выводит аккуратный блок с готовыми ссылками и заголовками для панелей."""
+    """Выводит аккуратный блок с готовыми ссылками для активных клиентов."""
     base_url = Config.get_base_url(token)
     
-    banner = f"""
-===============================================================================
-* Geo Routing Server Ready! Public Endpoints:
--------------------------------------------------------------------------------
-[HAPP]
+    sections = []
+    
+    if "HAPP" in Config.ENABLED_CLIENTS:
+        sections.append(f"""[HAPP]
   - GeoIP:     {base_url}/HAPP/geoip.dat
-  - GeoSite:   {base_url}/HAPP/geosite.dat
+  - GeoSite:   {base_url}/HAPP/geosite.dat""")
 
-[INCY]
+    if "INCY" in Config.ENABLED_CLIENTS:
+        sections.append(f"""[INCY]
   - GeoIP:     {base_url}/INCY/geoip.dat
   - GeoSite:   {base_url}/INCY/geosite.dat
   - JSON:      {base_url}/INCY/DEFAULT.JSON
@@ -68,7 +68,15 @@ def print_summary_banner(token: str):
 
 [PANEL AUTOROUTING HEADERS] (Remnawave / Marzban / 3x-ui)
   - Header Name:  autorouting
-  - Header Value: incy://autorouting/onadd/{base_url}/INCY/JSONSUB.JSON
+  - Header Value: incy://autorouting/onadd/{base_url}/INCY/JSONSUB.JSON""")
+
+    body = "\n\n".join(sections) if sections else "No clients enabled in ENABLED_CLIENTS."
+
+    banner = f"""
+===============================================================================
+* Geo Routing Server Ready! Public Endpoints:
+-------------------------------------------------------------------------------
+{body}
 ===============================================================================
 """
     print(banner, flush=True)
@@ -78,6 +86,7 @@ def main():
     logger = logging.getLogger("geo-routing-server")
     
     logger.info("Starting geo-routing-server synchronization...")
+    logger.info(f"Active enabled clients: {', '.join(Config.ENABLED_CLIENTS)}")
     Publisher.reset_session()
     
     # 1. Читаем токен и настройки
@@ -94,14 +103,26 @@ def main():
     # 4. Инициализируем загрузчик
     downloader = Downloader(Config.CACHE_DIR)
     
-    # 5. Запускаем процессоры клиентов
-    processors = [
-        HappProcessor(downloader, Config.STORAGE_DIR, token, Config.DOMAIN),
-        IncyProcessor(downloader, Config.STORAGE_DIR, token, Config.DOMAIN),
-    ]
+    # 5. Выбираем только включенные процессоры клиентов
+    available_processors = {
+        "HAPP": HappProcessor,
+        "INCY": IncyProcessor,
+    }
     
+    active_processors = []
+    for client_name in Config.ENABLED_CLIENTS:
+        processor_cls = available_processors.get(client_name)
+        if processor_cls:
+            active_processors.append(processor_cls(downloader, Config.STORAGE_DIR, token, Config.DOMAIN))
+        else:
+            logger.warning(f"Unknown client in ENABLED_CLIENTS: {client_name} (skipped)")
+            
+    if not active_processors:
+        logger.warning("No valid processors active. Please check ENABLED_CLIENTS in .env")
+        return
+        
     failures = 0
-    for processor in processors:
+    for processor in active_processors:
         try:
             if not processor.process():
                 failures += 1
