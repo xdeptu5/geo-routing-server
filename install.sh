@@ -116,7 +116,7 @@ run_sync_now() {
 show_links() {
     local target_dir
     target_dir="$(get_install_dir)"
-    echo -e "${GREEN}${BOLD}📋 Публичные ссылки и заголовок для VPN-панелей:${NC}"
+    echo -e "${GREEN}${BOLD}📋 Публичные ссылки и интеграции:${NC}"
     docker exec -it geo-routing-server python3 -c "
 from app.config import Config
 from app.main import print_summary_banner
@@ -294,7 +294,7 @@ install_wizard() {
     check_root
     check_dependencies
 
-    echo -e "${BOLD}--- [1/6] Выбор каталога установки ---${NC}"
+    echo -e "${BOLD}--- [1/7] Выбор каталога установки ---${NC}"
     echo -e "Вы можете указать стандартную папку или путь для Portainer / стеков."
     read -r -p "Каталог установки [Enter = /opt/geo-routing-server]: " input_dir
     INSTALL_DIR="${input_dir:-/opt/geo-routing-server}"
@@ -302,7 +302,7 @@ install_wizard() {
     save_install_dir "$INSTALL_DIR"
     echo -e "${GREEN}✓ Каталог: $INSTALL_DIR${NC}\n"
 
-    echo -e "${BOLD}--- [2/6] Настройка публичного домена ---${NC}"
+    echo -e "${BOLD}--- [2/7] Настройка публичного домена ---${NC}"
     read -r -p "Введите домен для HTTPS (например, geo.example.com): " input_domain
     while [ -z "${input_domain:-}" ]; do
         echo -e "${RED}Домен не может быть пустым!${NC}"
@@ -311,17 +311,17 @@ install_wizard() {
     DOMAIN="$input_domain"
     echo -e "${GREEN}✓ Домен: $DOMAIN${NC}\n"
 
-    echo -e "${BOLD}--- [3/6] Настройка секретного URL-токена ---${NC}"
+    echo -e "${BOLD}--- [3/7] Настройка секретного URL-токена ---${NC}"
     auto_token="$(openssl rand -hex 16)"
     echo -e "Сгенерирован случайный токен: ${CYAN}${BOLD}${auto_token}${NC}"
     read -r -p "Введите свой токен или нажмите Enter для использования сгенерированного: " input_token
     ROUTING_TOKEN="${input_token:-$auto_token}"
     echo -e "${GREEN}✓ Токен сохранён.${NC}\n"
 
-    echo -e "${BOLD}--- [4/6] Выбор активных клиентов ---${NC}"
+    echo -e "${BOLD}--- [4/7] Выбор активных клиентов ---${NC}"
     echo "1) HAPP + INCY (Раздавать базы и конфиги для обоих клиентов)"
     echo "2) Только INCY (Базы + JSON + DEEPLINK)"
-    echo "3) Только HAPP (Только geoip.dat и geosite.dat)"
+    echo "3) Только HAPP (Базы + JSON + DEEPLINK для Remnawave апдейтера)"
     read -r -p "Выберите вариант [1-3, Enter = 1]: " client_choice
     client_choice="${client_choice:-1}"
     case "$client_choice" in
@@ -331,12 +331,28 @@ install_wizard() {
     esac
     echo -e "${GREEN}✓ Клиенты: $ENABLED_CLIENTS${NC}\n"
 
-    echo -e "${BOLD}--- [5/6] Настройка локального порта ---${NC}"
+    echo -e "${BOLD}--- [5/7] Настройка локального порта ---${NC}"
     read -r -p "Локальный порт для Caddy / Nginx [Enter = 8080]: " input_port
     HTTP_PORT="${input_port:-8080}"
     echo -e "${GREEN}✓ Порт: $HTTP_PORT${NC}\n"
 
-    echo -e "${BOLD}--- [6/6] Настройка Telegram-уведомлений (Опционально) ---${NC}"
+    echo -e "${BOLD}--- [6/7] Подключение к общей Docker-сети (Remnawave / Прокси) ---${NC}"
+    read -r -p "Подключить к внешней Docker-сети (например, remnawave-network)? [y/N]: " net_choice
+    EXT_NETWORK=""
+    if [[ "$net_choice" =~ ^[YyДд]$ ]]; then
+        read -r -p "Введите имя внешней Docker-сети [Enter = remnawave-network]: " input_net
+        EXT_NETWORK="${input_net:-remnawave-network}"
+        # Проверяем, существует ли сеть, если нет — создаем
+        if ! docker network inspect "$EXT_NETWORK" &>/dev/null; then
+            echo -e "${YELLOW}Сеть $EXT_NETWORK не найдена. Создаём...${NC}"
+            docker network create "$EXT_NETWORK" || true
+        fi
+        echo -e "${GREEN}✓ Сеть: $EXT_NETWORK${NC}\n"
+    else
+        echo -e "${CYAN}Используется стандартная изолированная сеть.${NC}\n"
+    fi
+
+    echo -e "${BOLD}--- [7/7] Настройка Telegram-уведомлений (Опционально) ---${NC}"
     read -r -p "Хотите настроить Telegram-уведомления об ошибках и обновлениях? [y/N]: " tg_choice
     TG_BOT_TOKEN=""
     TG_CHAT_ID=""
@@ -374,7 +390,20 @@ TELEGRAM_THREAD_ID=${TG_THREAD_ID}
 TELEGRAM_NOTIFY_SUCCESS=${TG_NOTIFY_SUCCESS}
 EOF
 
-    # Создание compose.yaml
+    # Формирование compose.yaml с учетом внешней сети
+    local networks_block=""
+    local top_networks_block=""
+
+    if [ -n "$EXT_NETWORK" ]; then
+        networks_block="    networks:
+      - default
+      - ${EXT_NETWORK}"
+        top_networks_block="networks:
+  ${EXT_NETWORK}:
+    name: ${EXT_NETWORK}
+    external: true"
+    fi
+
     cat > "$INSTALL_DIR/compose.yaml" <<EOF
 services:
   geo-routing-server:
@@ -400,6 +429,7 @@ services:
       - routing_data:/app/www
       - ./.cache:/app/.cache
       - ./custom_geo:/app/custom_geo:ro
+${networks_block}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://127.0.0.1:80/health"]
       interval: 30s
@@ -409,6 +439,8 @@ services:
 
 volumes:
   routing_data:
+
+${top_networks_block}
 EOF
 
     mkdir -p "$INSTALL_DIR/custom_geo"
