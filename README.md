@@ -80,7 +80,7 @@
        environment:
          TZ: UTC
          SCHEDULE: "40 8 * * *"
-         DOMAIN: "sub.example.com"
+         DOMAIN: "geo.example.com"
          ROUTING_TOKEN: "ВАШ_СЕКРЕТНЫЙ_ТОКЕН"
          SYNC_ON_START: "true"
        ports:
@@ -113,7 +113,7 @@
    ```
    Отредактируйте `.env`, указав ваш публичный домен и токен:
    ```env
-   DOMAIN=sub.example.com
+   DOMAIN=geo.example.com
    ROUTING_TOKEN=change_me_to_random_secret_token
    HTTP_BIND=127.0.0.1
    HTTP_PORT=8080
@@ -140,7 +140,7 @@ docker compose logs
 
 | Переменная | По умолчанию | Описание |
 | :--- | :--- | :--- |
-| `DOMAIN` | `sub.example.com` | Публичный домен, на котором настроен ваш HTTPS-прокси |
+| `DOMAIN` | `geo.example.com` | Публичный домен (поддомен), на котором настроен ваш HTTPS-прокси |
 | `ROUTING_TOKEN` | — | **Обязательно.** Секретный URL-сегмент (`[A-Za-z0-9._-]+`) |
 | `HTTP_BIND` | `127.0.0.1` | Локальный интерфейс привязки внутреннего веб-сервера |
 | `HTTP_PORT` | `8080` | Локальный порт для проксирования с хоста |
@@ -158,26 +158,32 @@ docker compose logs
 
 ## 🌐 Настройка HTTPS Реверс-Прокси
 
-Вы можете раздавать geo-файлы как **на отдельном поддомене**, так и **на одном домене с вашими существующими сервисами** (например, подписками Remnawave или Marzban на `sub.example.com`), просто направив путь `/<ROUTING_TOKEN>/` в контейнер.
+Рекомендуется использовать **отдельный чистый поддомен** (например, `geo.example.com`), чтобы исключить пересечения путей с панелями подписок.
 
 ---
 
-### Вариант 1. Nginx на хосте
+### Вариант 1. Caddy на хосте (Быстро и просто)
 
-В конфигурацию вашего виртуального хоста добавьте блок `location /<ROUTING_TOKEN>/` (для совместного использования) или `location /` (для выделенного поддомена):
+В `/etc/caddy/Caddyfile` добавьте:
+
+```caddy
+geo.example.com {
+    reverse_proxy 127.0.0.1:8080
+}
+```
+Примените изменения: `sudo systemctl reload caddy`.
+
+---
+
+### Вариант 2. Nginx на хосте
+
+В конфигурацию вашего виртуального хоста Nginx с SSL добавьте:
 
 ```nginx
 server {
-    server_name sub.example.com;
+    server_name geo.example.com;
 
-    # 1. Ваш существующий сервис (подписки Remnawave, Marzban, сайт)
     location / {
-        proxy_pass http://127.0.0.1:8000; # порт вашего основного сервиса
-        proxy_set_header Host $host;
-    }
-
-    # 2. Раздача geo-файлов и маршрутизации ТОЛЬКО по секретному токену
-    location /ВАШ_СЕКРЕТНЫЙ_ТОКЕН/ {
         proxy_pass http://127.0.0.1:8080;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
@@ -187,27 +193,6 @@ server {
 }
 ```
 Примените изменения: `sudo nginx -t && sudo nginx -s reload`.
-
----
-
-### Вариант 2. Caddy на хосте
-
-В `/etc/caddy/Caddyfile` добавьте:
-
-```caddy
-sub.example.com {
-    # 1. Запросы по секретному токену направляем в geo-routing-server
-    handle /ВАШ_СЕКРЕТНЫЙ_ТОКЕН/* {
-        reverse_proxy 127.0.0.1:8080
-    }
-
-    # 2. Все остальные запросы отдаёт ваш основной сервис (Marzban / Remnawave)
-    handle {
-        reverse_proxy 127.0.0.1:8000
-    }
-}
-```
-Примените изменения: `sudo systemctl reload caddy`.
 
 ---
 
@@ -228,7 +213,7 @@ sub.example.com {
 * **Имя заголовка (Header Name):** `autorouting`
 * **Значение заголовка (Header Value):**
   ```text
-  incy://autorouting/onadd/https://sub.example.com/<ROUTING_TOKEN>/INCY/JSONSUB.JSON
+  incy://autorouting/onadd/https://geo.example.com/<ROUTING_TOKEN>/INCY/JSONSUB.JSON
   ```
 
 ---
@@ -277,13 +262,13 @@ custom_geo/
 ## ❓ Часто задаваемые вопросы (FAQ)
 
 <details>
-<summary><b>1. Можно ли использовать домен, где уже работают подписки Marzban или Remnawave?</b></summary>
-Да! Вам не нужен отдельный домен. Достаточно настроить Nginx или Caddy так, чтобы только путь <code>/&lt;ROUTING_TOKEN&gt;/</code> проксировался в <code>geo-routing-server</code>, а все остальные запросы шли в вашу панель подписок.
+<summary><b>1. Безопасно ли хранить токен в .env?</b></summary>
+Да, файл <code>.env</code> включён в <code>.gitignore</code> и никогда не попадает в систему контроля версий. Токен используется как Capability URL и защищён HTTPS-шифрованием от перехвата в сети.
 </details>
 
 <details>
-<summary><b>2. Безопасно ли хранить токен в .env?</b></summary>
-Да, файл <code>.env</code> включён в <code>.gitignore</code> и никогда не попадает в систему контроля версий. Токен используется как Capability URL и защищён HTTPS-шифрованием от перехвата в сети.
+<summary><b>2. Как связать сервер с Remnawave или Marzban?</b></summary>
+Лучше всего выделить отдельный поддомен (например, <code>geo.example.com</code>) и указать сформированную ссылку в заголовке <code>autorouting</code> в панели подписок.
 </details>
 
 <details>
@@ -292,8 +277,8 @@ custom_geo/
 </details>
 
 <details>
-<summary><b>4. Почему при открытии корня https://sub.example.com/ возвращается 404?</b></summary>
-Это сделано намеренно для безопасности. Без указания корректного секретного токена веб-сервер скрывает структуру файлов от сканеров. Если домен общий с панелью, корень отдаёт ваша панель.
+<summary><b>4. Почему при открытии https://geo.example.com/ возвращается 404?</b></summary>
+Это сделано намеренно для безопасности. Без указания корректного секретного токена веб-сервер скрывает структуру файлов от сканеров.
 </details>
 
 ---
