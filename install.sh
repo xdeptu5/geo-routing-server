@@ -160,6 +160,91 @@ stop_server() {
     read -r -p "Нажмите Enter для продолжения..."
 }
 
+test_telegram() {
+    local bot_token="$1"
+    local chat_id="$2"
+    if [ -z "$bot_token" ] || [ -z "$chat_id" ]; then
+        echo -e "${RED}Ошибка: Токен бота или Chat ID не заданы!${NC}"
+        return 1
+    fi
+    echo -e "${BLUE}Отправка тестового сообщения в Telegram...${NC}"
+    local response
+    response=$(curl -s -X POST "https://api.telegram.org/bot${bot_token}/sendMessage" \
+        -d "chat_id=${chat_id}" \
+        -d "text=🔔 [Geo Routing Server] Тестовое уведомление успешно доставлено!" \
+        -d "parse_mode=HTML" || true)
+    
+    if echo "$response" | grep -q '"ok":true'; then
+        echo -e "${GREEN}✓ Тестовое сообщение успешно получено в Telegram!${NC}"
+        return 0
+    else
+        echo -e "${RED}Ошибка отправки: $response${NC}"
+        return 1
+    fi
+}
+
+configure_telegram() {
+    local target_dir
+    target_dir="$(get_install_dir)"
+    local env_file="$target_dir/.env"
+
+    print_header
+    echo -e "${BOLD}🔔 Настройка Telegram-уведомлений${NC}\n"
+
+    local current_token=""
+    local current_chat=""
+    local current_notify="false"
+
+    if [ -f "$env_file" ]; then
+        current_token=$(grep "^TELEGRAM_BOT_TOKEN=" "$env_file" | cut -d'=' -f2- || true)
+        current_chat=$(grep "^TELEGRAM_CHAT_ID=" "$env_file" | cut -d'=' -f2- || true)
+        current_notify=$(grep "^TELEGRAM_NOTIFY_SUCCESS=" "$env_file" | cut -d'=' -f2- || true)
+    fi
+
+    echo -e "Текущий BOT_TOKEN: ${CYAN}${current_token:-не задан}${NC}"
+    echo -e "Текущий CHAT_ID:   ${CYAN}${current_chat:-не задан}${NC}"
+    echo -e "Уведомлять при выходе новых баз: ${CYAN}${current_notify:-false}${NC}\n"
+
+    read -r -p "Введите TELEGRAM_BOT_TOKEN [Enter = оставить текущий]: " input_token
+    input_token="${input_token:-$current_token}"
+
+    read -r -p "Введите TELEGRAM_CHAT_ID [Enter = оставить текущий]: " input_chat
+    input_chat="${input_chat:-$current_chat}"
+
+    read -r -p "Присылать уведомление при выходе новых баз? [y/N]: " input_notify
+    if [[ "$input_notify" =~ ^[YyДд]$ ]]; then
+        input_notify="true"
+    else
+        input_notify="false"
+    fi
+
+    if [ -n "$input_token" ] && [ -n "$input_chat" ]; then
+        test_telegram "$input_token" "$input_chat" || true
+    fi
+
+    # Обновляем .env файл
+    if [ -f "$env_file" ]; then
+        sed -i '/^TELEGRAM_BOT_TOKEN=/d' "$env_file"
+        sed -i '/^TELEGRAM_CHAT_ID=/d' "$env_file"
+        sed -i '/^TELEGRAM_NOTIFY_SUCCESS=/d' "$env_file"
+        
+        cat >> "$env_file" <<EOF
+TELEGRAM_BOT_TOKEN=${input_token}
+TELEGRAM_CHAT_ID=${input_chat}
+TELEGRAM_NOTIFY_SUCCESS=${input_notify}
+EOF
+        echo -e "\n${GREEN}✓ Настройки Telegram сохранены в .env!${NC}"
+        echo -e "${YELLOW}Перезапускаем контейнер для применения настроек...${NC}"
+        cd "$target_dir"
+        docker compose up -d
+        echo -e "${GREEN}✓ Контейнер перезапущен с новыми параметрами.${NC}\n"
+    else
+        echo -e "${RED}Файл .env не найден в $target_dir${NC}"
+    fi
+
+    read -r -p "Нажмите Enter для продолжения..."
+}
+
 uninstall_project() {
     local target_dir
     target_dir="$(get_install_dir)"
@@ -184,7 +269,7 @@ install_wizard() {
     check_root
     check_dependencies
 
-    echo -e "${BOLD}--- [1/5] Выбор каталога установки ---${NC}"
+    echo -e "${BOLD}--- [1/6] Выбор каталога установки ---${NC}"
     echo -e "Вы можете указать стандартную папку или путь для Portainer / стеков."
     read -r -p "Каталог установки [Enter = /opt/geo-routing-server]: " input_dir
     INSTALL_DIR="${input_dir:-/opt/geo-routing-server}"
@@ -192,7 +277,7 @@ install_wizard() {
     save_install_dir "$INSTALL_DIR"
     echo -e "${GREEN}✓ Каталог: $INSTALL_DIR${NC}\n"
 
-    echo -e "${BOLD}--- [2/5] Настройка публичного домена ---${NC}"
+    echo -e "${BOLD}--- [2/6] Настройка публичного домена ---${NC}"
     read -r -p "Введите домен для HTTPS (например, geo.example.com): " input_domain
     while [ -z "${input_domain:-}" ]; do
         echo -e "${RED}Домен не может быть пустым!${NC}"
@@ -201,14 +286,14 @@ install_wizard() {
     DOMAIN="$input_domain"
     echo -e "${GREEN}✓ Домен: $DOMAIN${NC}\n"
 
-    echo -e "${BOLD}--- [3/5] Настройка секретного URL-токена ---${NC}"
+    echo -e "${BOLD}--- [3/6] Настройка секретного URL-токена ---${NC}"
     auto_token="$(openssl rand -hex 16)"
     echo -e "Сгенерирован случайный токен: ${CYAN}${BOLD}${auto_token}${NC}"
     read -r -p "Введите свой токен или нажмите Enter для использования сгенерированного: " input_token
     ROUTING_TOKEN="${input_token:-$auto_token}"
     echo -e "${GREEN}✓ Токен сохранён.${NC}\n"
 
-    echo -e "${BOLD}--- [4/5] Выбор активных клиентов ---${NC}"
+    echo -e "${BOLD}--- [4/6] Выбор активных клиентов ---${NC}"
     echo "1) HAPP + INCY (Раздавать базы и конфиги для обоих клиентов)"
     echo "2) Только INCY (Базы + JSON + DEEPLINK)"
     echo "3) Только HAPP (Только geoip.dat и geosite.dat)"
@@ -221,10 +306,29 @@ install_wizard() {
     esac
     echo -e "${GREEN}✓ Клиенты: $ENABLED_CLIENTS${NC}\n"
 
-    echo -e "${BOLD}--- [5/5] Настройка локального порта ---${NC}"
+    echo -e "${BOLD}--- [5/6] Настройка локального порта ---${NC}"
     read -r -p "Локальный порт для Caddy / Nginx [Enter = 8080]: " input_port
     HTTP_PORT="${input_port:-8080}"
     echo -e "${GREEN}✓ Порт: $HTTP_PORT${NC}\n"
+
+    echo -e "${BOLD}--- [6/6] Настройка Telegram-уведомлений (Опционально) ---${NC}"
+    read -r -p "Хотите настроить Telegram-уведомления об ошибках и обновлениях? [y/N]: " tg_choice
+    TG_BOT_TOKEN=""
+    TG_CHAT_ID=""
+    TG_NOTIFY_SUCCESS="false"
+
+    if [[ "$tg_choice" =~ ^[YyДд]$ ]]; then
+        read -r -p "Введите TELEGRAM_BOT_TOKEN: " TG_BOT_TOKEN
+        read -r -p "Введите TELEGRAM_CHAT_ID: " TG_CHAT_ID
+        read -r -p "Присылать уведомление при выходе новых баз? [y/N]: " tg_success
+        if [[ "$tg_success" =~ ^[YyДд]$ ]]; then
+            TG_NOTIFY_SUCCESS="true"
+        fi
+        if [ -n "$TG_BOT_TOKEN" ] && [ -n "$TG_CHAT_ID" ]; then
+            test_telegram "$TG_BOT_TOKEN" "$TG_CHAT_ID" || true
+        fi
+    fi
+    echo -e "${GREEN}✓ Telegram настроен.${NC}\n"
 
     echo -e "${BLUE}📦 Создание файлов конфигурации...${NC}"
 
@@ -237,6 +341,9 @@ HTTP_BIND=127.0.0.1
 HTTP_PORT=${HTTP_PORT}
 SCHEDULE=40 8 * * *
 SYNC_ON_START=true
+TELEGRAM_BOT_TOKEN=${TG_BOT_TOKEN}
+TELEGRAM_CHAT_ID=${TG_CHAT_ID}
+TELEGRAM_NOTIFY_SUCCESS=${TG_NOTIFY_SUCCESS}
 EOF
 
     # Создание compose.yaml
@@ -313,23 +420,25 @@ main_menu() {
         echo -e "${BOLD}Выберите действие:${NC}"
         echo "1) 🔄 Синхронизировать базы прямо сейчас"
         echo "2) 📋 Показать публичные ссылки и заголовок autorouting"
-        echo "3) 🚀 Обновить сервер до последней версии"
-        echo "4) 📜 Посмотреть логи контейнера"
-        echo "5) 🔄 Перезапустить сервер"
-        echo "6) 🛑 Остановить сервер"
-        echo "7) 🗑️ Удалить проект с сервера"
+        echo "3) 🔔 Настроить / Изменить Telegram-уведомления (с тестом)"
+        echo "4) 🚀 Обновить сервер до последней версии"
+        echo "5) 📜 Посмотреть логи контейнера"
+        echo "6) 🔄 Перезапустить сервер"
+        echo "7) 🛑 Остановить сервер"
+        echo "8) 🗑️ Удалить проект с сервера"
         echo "0) 🚪 Выход"
         echo ""
-        read -r -p "Введите номер [0-7]: " menu_choice
+        read -r -p "Введите номер [0-8]: " menu_choice
 
         case "$menu_choice" in
             1) run_sync_now ;;
             2) show_links ;;
-            3) update_project ;;
-            4) view_logs ;;
-            5) restart_server ;;
-            6) stop_server ;;
-            7) uninstall_project ;;
+            3) configure_telegram ;;
+            4) update_project ;;
+            5) view_logs ;;
+            6) restart_server ;;
+            7) stop_server ;;
+            8) uninstall_project ;;
             0) exit 0 ;;
             *) echo -e "${RED}Неверный пункт меню${NC}"; sleep 1 ;;
         esac
