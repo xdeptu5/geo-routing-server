@@ -343,7 +343,7 @@ install_wizard() {
     check_dependencies
 
     echo -e "${BOLD}--- [1/7] Выбор каталога установки ---${NC}"
-    echo -e "Вы можете указать стандартную папку или путь для Portainer / стеков."
+    echo -e "Вы можете указать стандартную папку или каталог ваших стеков (Arcane, Portainer, Dockge, 1Panel и др.)."
     read -r -p "Каталог установки [Enter = /opt/geo-routing-server]: " input_dir
     INSTALL_DIR="${input_dir:-/opt/geo-routing-server}"
     mkdir -p "$INSTALL_DIR"
