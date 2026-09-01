@@ -88,11 +88,18 @@ save_install_dir() {
 
 create_cli_shortcut() {
     local target_dir="$1"
-    cat > /usr/local/bin/geo-server <<EOF
+    local wrapper_script="/usr/local/bin/geo-server"
+    
+    cat > "$wrapper_script" <<EOF
 #!/usr/bin/env bash
 bash "$target_dir/install.sh" "\$@"
 EOF
-    chmod +x /usr/local/bin/geo-server
+    chmod +x "$wrapper_script"
+    
+    # Дополнительные симлинки для гарантированного доступа из любой оболочки
+    ln -sf "$wrapper_script" /usr/bin/geo-server 2>/dev/null || true
+    ln -sf "$wrapper_script" /usr/local/bin/geoserver 2>/dev/null || true
+    ln -sf "$wrapper_script" /usr/bin/geoserver 2>/dev/null || true
 }
 
 run_sync_now() {
@@ -163,16 +170,26 @@ stop_server() {
 test_telegram() {
     local bot_token="$1"
     local chat_id="$2"
+    local thread_id="${3:-}"
+
     if [ -z "$bot_token" ] || [ -z "$chat_id" ]; then
         echo -e "${RED}Ошибка: Токен бота или Chat ID не заданы!${NC}"
         return 1
     fi
+
     echo -e "${BLUE}Отправка тестового сообщения в Telegram...${NC}"
+    local data_params=(
+        -d "chat_id=${chat_id}"
+        -d "text=🔔 <b>[Geo Routing Server]</b> Тестовое уведомление успешно доставлено!"
+        -d "parse_mode=HTML"
+    )
+
+    if [ -n "$thread_id" ]; then
+        data_params+=(-d "message_thread_id=${thread_id}")
+    fi
+
     local response
-    response=$(curl -s -X POST "https://api.telegram.org/bot${bot_token}/sendMessage" \
-        -d "chat_id=${chat_id}" \
-        -d "text=🔔 [Geo Routing Server] Тестовое уведомление успешно доставлено!" \
-        -d "parse_mode=HTML" || true)
+    response=$(curl -s -X POST "https://api.telegram.org/bot${bot_token}/sendMessage" "${data_params[@]}" || true)
     
     if echo "$response" | grep -q '"ok":true'; then
         echo -e "${GREEN}✓ Тестовое сообщение успешно получено в Telegram!${NC}"
@@ -193,16 +210,19 @@ configure_telegram() {
 
     local current_token=""
     local current_chat=""
+    local current_thread=""
     local current_notify="false"
 
     if [ -f "$env_file" ]; then
         current_token=$(grep "^TELEGRAM_BOT_TOKEN=" "$env_file" | cut -d'=' -f2- || true)
         current_chat=$(grep "^TELEGRAM_CHAT_ID=" "$env_file" | cut -d'=' -f2- || true)
+        current_thread=$(grep "^TELEGRAM_THREAD_ID=" "$env_file" | cut -d'=' -f2- || true)
         current_notify=$(grep "^TELEGRAM_NOTIFY_SUCCESS=" "$env_file" | cut -d'=' -f2- || true)
     fi
 
-    echo -e "Текущий BOT_TOKEN: ${CYAN}${current_token:-не задан}${NC}"
-    echo -e "Текущий CHAT_ID:   ${CYAN}${current_chat:-не задан}${NC}"
+    echo -e "Текущий BOT_TOKEN:  ${CYAN}${current_token:-не задан}${NC}"
+    echo -e "Текущий CHAT_ID:    ${CYAN}${current_chat:-не задан}${NC}"
+    echo -e "Текущий THREAD_ID:  ${CYAN}${current_thread:-не задан (основной чат)}${NC}"
     echo -e "Уведомлять при выходе новых баз: ${CYAN}${current_notify:-false}${NC}\n"
 
     read -r -p "Введите TELEGRAM_BOT_TOKEN [Enter = оставить текущий]: " input_token
@@ -210,6 +230,9 @@ configure_telegram() {
 
     read -r -p "Введите TELEGRAM_CHAT_ID [Enter = оставить текущий]: " input_chat
     input_chat="${input_chat:-$current_chat}"
+
+    read -r -p "Введите TELEGRAM_THREAD_ID (ID темы/топика, если есть) [Enter = ${current_thread:-нет}]: " input_thread
+    input_thread="${input_thread:-$current_thread}"
 
     read -r -p "Присылать уведомление при выходе новых баз? [y/N]: " input_notify
     if [[ "$input_notify" =~ ^[YyДд]$ ]]; then
@@ -219,18 +242,20 @@ configure_telegram() {
     fi
 
     if [ -n "$input_token" ] && [ -n "$input_chat" ]; then
-        test_telegram "$input_token" "$input_chat" || true
+        test_telegram "$input_token" "$input_chat" "$input_thread" || true
     fi
 
     # Обновляем .env файл
     if [ -f "$env_file" ]; then
         sed -i '/^TELEGRAM_BOT_TOKEN=/d' "$env_file"
         sed -i '/^TELEGRAM_CHAT_ID=/d' "$env_file"
+        sed -i '/^TELEGRAM_THREAD_ID=/d' "$env_file"
         sed -i '/^TELEGRAM_NOTIFY_SUCCESS=/d' "$env_file"
         
         cat >> "$env_file" <<EOF
 TELEGRAM_BOT_TOKEN=${input_token}
 TELEGRAM_CHAT_ID=${input_chat}
+TELEGRAM_THREAD_ID=${input_thread}
 TELEGRAM_NOTIFY_SUCCESS=${input_notify}
 EOF
         echo -e "\n${GREEN}✓ Настройки Telegram сохранены в .env!${NC}"
@@ -255,7 +280,7 @@ uninstall_project() {
         docker compose down -v || true
         rm -rf "$target_dir"
         rm -f "$CONFIG_FILE_RECORD"
-        rm -f /usr/local/bin/geo-server
+        rm -f /usr/local/bin/geo-server /usr/bin/geo-server /usr/local/bin/geoserver /usr/bin/geoserver
         echo -e "${GREEN}✓ Проект полностью удалён с сервера.${NC}"
         exit 0
     else
@@ -315,17 +340,19 @@ install_wizard() {
     read -r -p "Хотите настроить Telegram-уведомления об ошибках и обновлениях? [y/N]: " tg_choice
     TG_BOT_TOKEN=""
     TG_CHAT_ID=""
+    TG_THREAD_ID=""
     TG_NOTIFY_SUCCESS="false"
 
     if [[ "$tg_choice" =~ ^[YyДд]$ ]]; then
         read -r -p "Введите TELEGRAM_BOT_TOKEN: " TG_BOT_TOKEN
-        read -r -p "Введите TELEGRAM_CHAT_ID: " TG_CHAT_ID
+        read -r -p "Введите TELEGRAM_CHAT_ID (например, -1001234567890 или 123456789): " TG_CHAT_ID
+        read -r -p "Введите TELEGRAM_THREAD_ID (ID темы/топика, если чат с темами) [Enter = пропустить]: " TG_THREAD_ID
         read -r -p "Присылать уведомление при выходе новых баз? [y/N]: " tg_success
         if [[ "$tg_success" =~ ^[YyДд]$ ]]; then
             TG_NOTIFY_SUCCESS="true"
         fi
         if [ -n "$TG_BOT_TOKEN" ] && [ -n "$TG_CHAT_ID" ]; then
-            test_telegram "$TG_BOT_TOKEN" "$TG_CHAT_ID" || true
+            test_telegram "$TG_BOT_TOKEN" "$TG_CHAT_ID" "$TG_THREAD_ID" || true
         fi
     fi
     echo -e "${GREEN}✓ Telegram настроен.${NC}\n"
@@ -343,6 +370,7 @@ SCHEDULE=40 8 * * *
 SYNC_ON_START=true
 TELEGRAM_BOT_TOKEN=${TG_BOT_TOKEN}
 TELEGRAM_CHAT_ID=${TG_CHAT_ID}
+TELEGRAM_THREAD_ID=${TG_THREAD_ID}
 TELEGRAM_NOTIFY_SUCCESS=${TG_NOTIFY_SUCCESS}
 EOF
 
@@ -364,6 +392,7 @@ services:
       ROUTING_SOURCE_REPO: "\${ROUTING_SOURCE_REPO:-https://raw.githubusercontent.com/hydraponique/roscomvpn-routing/main}"
       TELEGRAM_BOT_TOKEN: "\${TELEGRAM_BOT_TOKEN:-}"
       TELEGRAM_CHAT_ID: "\${TELEGRAM_CHAT_ID:-}"
+      TELEGRAM_THREAD_ID: "\${TELEGRAM_THREAD_ID:-}"
       TELEGRAM_NOTIFY_SUCCESS: "\${TELEGRAM_NOTIFY_SUCCESS:-false}"
     ports:
       - "\${HTTP_BIND:-127.0.0.1}:\${HTTP_PORT:-${HTTP_PORT}}:80"
@@ -398,7 +427,7 @@ EOF
     echo -e "${GREEN}${BOLD}🎉 УСТАНОВКА УСПЕШНО ЗАВЕРШЕНА!${NC}"
     echo -e "${GREEN}${BOLD}===============================================================================${NC}"
     echo -e "Каталог проекта: ${CYAN}${INSTALL_DIR}${NC}"
-    echo -e "Быстрый вызов меню в терминале: команда ${CYAN}${BOLD}geo-server${NC}\n"
+    echo -e "Быстрый вызов меню в терминале: команда ${CYAN}${BOLD}geo-server${NC} (или ${CYAN}${BOLD}geoserver${NC})\n"
     
     show_links
 }
@@ -420,7 +449,7 @@ main_menu() {
         echo -e "${BOLD}Выберите действие:${NC}"
         echo "1) 🔄 Синхронизировать базы прямо сейчас"
         echo "2) 📋 Показать публичные ссылки и заголовок autorouting"
-        echo "3) 🔔 Настроить / Изменить Telegram-уведомления (с тестом)"
+        echo "3) 🔔 Настроить / Изменить Telegram-уведомления (с тестом темы/топика)"
         echo "4) 🚀 Обновить сервер до последней версии"
         echo "5) 📜 Посмотреть логи контейнера"
         echo "6) 🔄 Перезапустить сервер"

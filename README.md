@@ -165,7 +165,8 @@ docker compose logs
 | `GEOSITE_SOURCE_URL` | *пусто* | Кастомная ссылка на `geosite.dat` (если нужно переопределить) |
 | `ROUTING_SOURCE_REPO` | *официальный* | URL репозитория с шаблонами JSON-конфигов |
 | `TELEGRAM_BOT_TOKEN` | *пусто* | Токен бота Telegram для алертов (опционально) |
-| `TELEGRAM_CHAT_ID` | *пусто* | ID чата Telegram для получения уведомлений |
+| `TELEGRAM_CHAT_ID` | *пусто* | ID чата / группы Telegram для получения уведомлений |
+| `TELEGRAM_THREAD_ID` | *пусто* | ID темы / топика в супергруппе (если включены темы) |
 | `TELEGRAM_NOTIFY_SUCCESS`| `false` | Присылать отчеты в Telegram при выходе новых версий баз |
 | `DOCKER_PROXY_NETWORK` | `proxy_network` | Имя общей Docker-сети при работе прокси в контейнере |
 
@@ -266,8 +267,18 @@ custom_geo/
 
 ## 🤖 Telegram-уведомления
 
+В файле `.env` укажите токен вашего бота и ID чата (а также ID темы, если бот отправляет в топик форума):
+
+```env
+TELEGRAM_BOT_TOKEN=123456789:ABCDefGhIJKlmNoPQRsTUVwxyZ
+TELEGRAM_CHAT_ID=-1001234567890
+TELEGRAM_THREAD_ID=123
+TELEGRAM_NOTIFY_SUCCESS=false
+```
+
 * 🔴 **Алерты об ошибках (`alert_failure`)**: приходят всегда при возникновении сетевых сбоев, недоступности источников или повреждении файлов.
 * 🟢 **Отчеты о новых базах (`notify_changes`)**: при `TELEGRAM_NOTIFY_SUCCESS=true` сообщение отправляется **только при реальном обновлении баз** (при неизменившихся хэшах бот соблюдает тишину).
+* 💬 **Поддержка топиков**: если указан `TELEGRAM_THREAD_ID`, сообщения будут аккуратно приходить в нужную тему вашей супергруппы.
 
 ---
 

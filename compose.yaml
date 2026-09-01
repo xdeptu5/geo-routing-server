@@ -20,6 +20,7 @@ services:
       ROUTING_SOURCE_REPO: "${ROUTING_SOURCE_REPO:-https://raw.githubusercontent.com/hydraponique/roscomvpn-routing/main}"
       TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN:-}"
       TELEGRAM_CHAT_ID: "${TELEGRAM_CHAT_ID:-}"
+      TELEGRAM_THREAD_ID: "${TELEGRAM_THREAD_ID:-}"
       TELEGRAM_NOTIFY_SUCCESS: "${TELEGRAM_NOTIFY_SUCCESS:-false}"
 
     # Локальный порт для подключения вашего реверс-прокси (Caddy или Nginx):

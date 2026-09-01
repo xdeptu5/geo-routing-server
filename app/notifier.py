@@ -2,30 +2,38 @@ import json
 import logging
 import urllib.request
 from datetime import datetime, timezone
-from typing import Dict
+from typing import Any, Dict
 from app.config import Config
 from app.publisher import PublishedFileInfo
 
 logger = logging.getLogger("geo-routing-server")
 
 class TelegramNotifier:
-    """Умные, информативные Telegram-уведомления без спама."""
+    """Умные, информативные Telegram-уведомления без спама с поддержкой топиков (Thread ID)."""
     
     @staticmethod
     def _send_message(text: str) -> bool:
         bot_token = Config.TELEGRAM_BOT_TOKEN
         chat_id = Config.TELEGRAM_CHAT_ID
+        thread_id = Config.TELEGRAM_THREAD_ID
         
         if not bot_token or not chat_id:
             return False
             
         url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-        payload = {
+        payload: Dict[str, Any] = {
             "chat_id": chat_id,
             "text": text,
             "parse_mode": "HTML",
             "disable_web_page_preview": True
         }
+        
+        # Поддержка топиков/тем в супергруппах
+        if thread_id:
+            try:
+                payload["message_thread_id"] = int(thread_id)
+            except ValueError:
+                logger.warning(f"Invalid TELEGRAM_THREAD_ID: {thread_id}")
         
         try:
             req = urllib.request.Request(
@@ -77,12 +85,18 @@ class TelegramNotifier:
                 
         geo_block = "\n".join(geo_lines) if geo_lines else "—"
         
+        # Формируем список ссылок на autorouting
+        autorouting_lines = []
+        if "INCY" in Config.ENABLED_CLIENTS:
+            autorouting_lines.append(f"🔗 <b>Autorouting Header (Remnawave / Marzban):</b>\n<code>incy://autorouting/onadd/{base_url}/INCY/JSONSUB.JSON</code>")
+            
+        autorouting_block = "\n\n".join(autorouting_lines)
+        
         text = (
             f"🚀 <b>[Geo Routing Server] Вышли обновленные базы!</b>\n\n"
             f"🌐 <b>Домен:</b> <code>{Config.DOMAIN}</code>\n"
             f"⏱ <b>Время:</b> {now_str}\n\n"
             f"📊 <b>Geo-базы:</b>\n{geo_block}\n\n"
-            f"🔗 <b>Autorouting Header (Remnawave / Marzban):</b>\n"
-            f"<code>incy://autorouting/onadd/{base_url}/INCY/JSONSUB.JSON</code>"
+            f"{autorouting_block}"
         )
         cls._send_message(text)
