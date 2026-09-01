@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="./assets/banner.png" alt="Geo Routing Server Banner" width="100%" />
+
 # 🚀 Geo Routing Server
 
 **Автономный сервер для автоматической синхронизации, валидации, модификации и безопасной публикации geo-баз и конфигураций маршрутизации (`HAPP`, `INCY`).**
