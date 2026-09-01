@@ -1,6 +1,11 @@
 services:
   geo-routing-server:
+    # Вариант 1: Локальная сборка из исходников (по умолчанию)
     build: .
+    
+    # Вариант 2: Использование готового предсобранного образа (раскомментируйте вместо build):
+    # image: ghcr.io/xdeptu5/geo-routing-server:latest
+    
     container_name: geo-routing-server
     restart: unless-stopped
     environment:

@@ -5,6 +5,7 @@
 **Автономный сервер для автоматической синхронизации, валидации, модификации и безопасной публикации geo-баз и конфигураций маршрутизации (`HAPP`, `INCY`).**
 
 [![Docker Multi-Arch](https://img.shields.io/badge/docker-amd64%20%7C%20arm64-blue?logo=docker)](https://github.com/xdeptu5/geo-routing-server)
+[![GitHub Container Registry](https://img.shields.io/badge/image-ghcr.io%2Fxdeptu5%2Fgeo--routing--server-blue?logo=github)](https://github.com/xdeptu5/geo-routing-server/pkgs/container/geo-routing-server)
 [![Python 3.12](https://img.shields.io/badge/python-3.12-yellow?logo=python)](https://www.python.org)
 [![Nginx Internal](https://img.shields.io/badge/webserver-nginx%20alpine-green?logo=nginx)](https://nginx.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-orange.svg)](./LICENSE)
@@ -59,50 +60,79 @@
 * 🤖 **Умные уведомления в Telegram**: мгновенные алерты при сбоях и отчёты о новых базах без ежедневного спама.
 * ⚡ **Мгновенный старт (`SYNC_ON_START=true`)**: файлы генерируются сразу при первом запуске контейнера.
 * 🛡️ **Zero External Dependencies**: код написан на стандартной библиотеке Python. Сборка занимает 2 секунды.
-* 🐳 **Multi-Arch сборка**: нативная поддержка архитектур `linux/amd64` и `linux/arm64` (Raspberry Pi, ARM VPS).
+* 🐳 **Готовый Docker-образ**: доступен в GitHub Container Registry (`ghcr.io/xdeptu5/geo-routing-server:latest`) с поддержкой `linux/amd64` и `linux/arm64`.
 
 ---
 
-## 🚀 Быстрый запуск (за 1 минуту)
+## 🚀 Быстрый запуск
 
-### 1. Клонирование репозитория
-```bash
-git clone https://github.com/xdeptu5/geo-routing-server.git
-cd geo-routing-server
-```
+Вы можете запустить проект **двумя способами**:
 
-### 2. Настройка конфигурации
-Скопируйте шаблон окружения:
-```bash
-cp .env.example .env
-```
+### Способ А. Из готового предсобранного образа (Без клонирования репозитория)
 
-Отредактируйте `.env`, указав ваш публичный домен и сгенерировав секретный токен:
-```env
-DOMAIN=sub.example.com
-ROUTING_TOKEN=change_me_to_random_secret_token
-HTTP_BIND=127.0.0.1
-HTTP_PORT=8080
-SCHEDULE=40 8 * * *
-SYNC_ON_START=true
-```
+1. Создайте папку и файл `compose.yaml`:
+   ```yaml
+   services:
+     geo-routing-server:
+       image: ghcr.io/xdeptu5/geo-routing-server:latest
+       container_name: geo-routing-server
+       restart: unless-stopped
+       environment:
+         TZ: UTC
+         SCHEDULE: "40 8 * * *"
+         DOMAIN: "sub.example.com"
+         ROUTING_TOKEN: "ВАШ_СЕКРЕТНЫЙ_ТОКЕН"
+         SYNC_ON_START: "true"
+       ports:
+         - "127.0.0.1:8080:80"
+       volumes:
+         - routing_data:/app/www
+         - ./.cache:/app/.cache
+         - ./custom_geo:/app/custom_geo:ro
 
-> **Совет:** Быстро сгенерировать надёжный случайный токен:
-> ```bash
-> openssl rand -hex 16
-> ```
+   volumes:
+     routing_data:
+   ```
+2. Запустите:
+   ```bash
+   docker compose up -d
+   ```
 
-### 3. Запуск сервиса
-```bash
-docker compose up -d --build
-```
+---
 
-### 4. Проверка и получение готовых ссылок
+### Способ Б. Локальная сборка из исходников
+
+1. Клонируйте репозиторий:
+   ```bash
+   git clone https://github.com/xdeptu5/geo-routing-server.git
+   cd geo-routing-server
+   ```
+2. Создайте файл конфигурации `.env`:
+   ```bash
+   cp .env.example .env
+   ```
+   Отредактируйте `.env`, указав ваш публичный домен и токен:
+   ```env
+   DOMAIN=sub.example.com
+   ROUTING_TOKEN=change_me_to_random_secret_token
+   HTTP_BIND=127.0.0.1
+   HTTP_PORT=8080
+   SCHEDULE=40 8 * * *
+   SYNC_ON_START=true
+   ```
+3. Запустите сборку и контейнер:
+   ```bash
+   docker compose up -d --build
+   ```
+
+---
+
+### Получение готовых ссылок
 Посмотрите логи контейнера:
 ```bash
 docker compose logs
 ```
-Сразу после запуска контейнер выведет готовый блок со всеми ссылками и строкой для VPN-панелей.
+Сразу после запуска контейнер выведет блок со всеми готовыми ссылками и строкой для подписок.
 
 ---
 
@@ -257,7 +287,12 @@ custom_geo/
 </details>
 
 <details>
-<summary><b>3. Почему при открытии корня https://sub.example.com/ возвращается 404?</b></summary>
+<summary><b>3. Как запустить сервис без клонирования репозитория?</b></summary>
+Вы можете просто использовать готовый Docker-образ <code>ghcr.io/xdeptu5/geo-routing-server:latest</code> (см. раздел "Быстрый запуск -> Способ А").
+</details>
+
+<details>
+<summary><b>4. Почему при открытии корня https://sub.example.com/ возвращается 404?</b></summary>
 Это сделано намеренно для безопасности. Без указания корректного секретного токена веб-сервер скрывает структуру файлов от сканеров. Если домен общий с панелью, корень отдаёт ваша панель.
 </details>
 
