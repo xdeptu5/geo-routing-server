@@ -253,15 +253,19 @@ server {
 
 ---
 
-### 2. Для клиентов HAPP / Remnawave Squads (через `remnawave-routing-update`)
-Если на сервере с панелью Remnawave у вас работает сервис автообновления сквадов (`remnawave-routing-update`), подключите `geo-routing-server` к общей сети `remnawave-network` и укажите в `.env` вашего апдейтера локальные ссылки:
+### 2. Для клиентов HAPP / Remnawave Squads (через [Remnawave-Routing-update](https://github.com/lifeindarkside/Remnawave-Routing-update))
+Если на сервере с панелью Remnawave вы используете проект [lifeindarkside/Remnawave-Routing-update](https://github.com/lifeindarkside/Remnawave-Routing-update) для автоматического обновления правил в сквадах Remnawave:
 
-```env
-GITHUB_RAW_URL=http://geo-routing-server/HAPP/JSONSUB.DEEPLINK
-SQUAD_1_URL=http://geo-routing-server/HAPP/JSONSUB.DEEPLINK
-SQUAD_2_URL=http://geo-routing-server/HAPP/WHITELIST.DEEPLINK
-```
-*(Токен в локальной Docker-сети указывать не нужно — сервер отдаёт файлы напрямую).*
+1. Подключите `geo-routing-server` к вашей внешней сети `remnawave-network` (в `compose.yaml`).
+2. В файле `.env` сервиса `remnawave-routing-update` укажите локальные ссылки на сгенерированные `.DEEPLINK` файлы:
+   ```env
+   # Локальные ссылки внутри сети remnawave-network (без токена):
+   GITHUB_RAW_URL=http://geo-routing-server/HAPP/JSONSUB.DEEPLINK
+   SQUAD_1_URL=http://geo-routing-server/HAPP/JSONSUB.DEEPLINK
+   SQUAD_2_URL=http://geo-routing-server/HAPP/WHITELIST.DEEPLINK
+   SQUAD_3_URL=http://geo-routing-server/HAPP/JSONSUB.DEEPLINK
+   ```
+*(Сервис `geo-routing-server` автоматически подменяет в этих правилах ссылки на ваши локальные geo-базы и генерирует готовые `happ://routing/onadd/...` диплинки).*
 
 ---
 
