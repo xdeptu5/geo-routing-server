@@ -128,6 +128,54 @@ print_summary_banner(Config.get_token())
     read -r -p "Нажмите Enter для продолжения..."
 }
 
+show_proxy_snippets() {
+    local target_dir
+    target_dir="$(get_install_dir)"
+    local env_file="$target_dir/.env"
+
+    local domain="geo.example.com"
+    local port="8080"
+
+    if [ -f "$env_file" ]; then
+        domain=$(grep "^DOMAIN=" "$env_file" | cut -d'=' -f2- || echo "geo.example.com")
+        port=$(grep "^HTTP_PORT=" "$env_file" | cut -d'=' -f2- || echo "8080")
+    fi
+
+    echo -e "${CYAN}${BOLD}===============================================================================${NC}"
+    echo -e "${YELLOW}${BOLD}💡 ГОТОВЫЕ КОНФИГУРАЦИИ ДЛЯ ВАШЕГО РЕВЕРС-ПРОКСИ (HTTPS)${NC}"
+    echo -e "${CYAN}${BOLD}===============================================================================${NC}"
+    echo -e "Чтобы ссылки стали доступны по безопасному HTTPS, добавьте один из блоков:\n"
+
+    echo -e "${GREEN}${BOLD}[ ВАРИАНТ 1: CADDY ]${NC} (добавьте в /etc/caddy/Caddyfile):"
+    echo -e "${CYAN}-------------------------------------------------------------------------------${NC}"
+    echo -e "${BOLD}${domain} {${NC}"
+    echo -e "    ${BOLD}reverse_proxy 127.0.0.1:${port}${NC}"
+    echo -e "${BOLD}}${NC}"
+    echo -e "${CYAN}-------------------------------------------------------------------------------${NC}"
+    echo -e "После сохранения примените: ${YELLOW}sudo systemctl reload caddy${NC}\n"
+
+    echo -e "${GREEN}${BOLD}[ ВАРИАНТ 2: NGINX ]${NC} (в конфигурацию вашего сайта с SSL):"
+    echo -e "${CYAN}-------------------------------------------------------------------------------${NC}"
+    echo -e "${BOLD}server {${NC}"
+    echo -e "    ${BOLD}server_name ${domain};${NC}\n"
+    echo -e "    ${BOLD}location / {${NC}"
+    echo -e "        ${BOLD}proxy_pass http://127.0.0.1:${port};${NC}"
+    echo -e "        ${BOLD}proxy_set_header Host \$host;${NC}"
+    echo -e "        ${BOLD}proxy_set_header X-Real-IP \$remote_addr;${NC}"
+    echo -e "        ${BOLD}proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;${NC}"
+    echo -e "        ${BOLD}proxy_set_header X-Forwarded-Proto \$scheme;${NC}"
+    echo -e "    ${BOLD}}${NC}"
+    echo -e "${BOLD}}${NC}"
+    echo -e "${CYAN}-------------------------------------------------------------------------------${NC}"
+    echo -e "После сохранения примените: ${YELLOW}sudo nginx -t && sudo nginx -s reload${NC}\n"
+
+    echo -e "${GREEN}${BOLD}[ ВАРИАНТ 3: NGINX PROXY MANAGER (GUI) ]${NC}:"
+    echo -e "Forward Hostname / IP: ${BOLD}127.0.0.1${NC}"
+    echo -e "Forward Port:          ${BOLD}${port}${NC}"
+    echo -e "SSL:                   ${BOLD}Request a new SSL Certificate (Force SSL: ON)${NC}"
+    echo -e "${CYAN}===============================================================================${NC}\n"
+}
+
 update_project() {
     local target_dir
     target_dir="$(get_install_dir)"
@@ -461,6 +509,7 @@ EOF
     echo -e "Каталог проекта: ${CYAN}${INSTALL_DIR}${NC}"
     echo -e "Быстрый вызов меню в терминале: команда ${CYAN}${BOLD}geo-server${NC} (или ${CYAN}${BOLD}geoserver${NC})\n"
     
+    show_proxy_snippets
     show_links
 }
 
@@ -481,25 +530,27 @@ main_menu() {
         echo -e "${BOLD}Выберите действие:${NC}"
         echo "1) 🔄 Синхронизировать базы прямо сейчас"
         echo "2) 📋 Показать публичные ссылки и заголовок autorouting"
-        echo "3) 🔔 Настроить / Изменить Telegram-уведомления (с тестом темы/топика)"
-        echo "4) 🚀 Обновить сервер до последней версии"
-        echo "5) 📜 Посмотреть логи контейнера"
-        echo "6) 🔄 Перезапустить сервер"
-        echo "7) 🛑 Остановить сервер"
-        echo "8) 🗑️ Удалить проект с сервера"
+        echo "3) 🌐 Показать готовые конфиги для Caddy / Nginx / NPM"
+        echo "4) 🔔 Настроить / Изменить Telegram-уведомления (с тестом темы/топика)"
+        echo "5) 🚀 Обновить сервер до последней версии"
+        echo "6) 📜 Посмотреть логи контейнера"
+        echo "7) 🔄 Перезапустить сервер"
+        echo "8) 🛑 Остановить сервер"
+        echo "9) 🗑️ Удалить проект с сервера"
         echo "0) 🚪 Выход"
         echo ""
-        read -r -p "Введите номер [0-8]: " menu_choice
+        read -r -p "Введите номер [0-9]: " menu_choice
 
         case "$menu_choice" in
             1) run_sync_now ;;
             2) show_links ;;
-            3) configure_telegram ;;
-            4) update_project ;;
-            5) view_logs ;;
-            6) restart_server ;;
-            7) stop_server ;;
-            8) uninstall_project ;;
+            3) show_proxy_snippets; read -r -p "Нажмите Enter для возврата в меню..." ;;
+            4) configure_telegram ;;
+            5) update_project ;;
+            6) view_logs ;;
+            7) restart_server ;;
+            8) stop_server ;;
+            9) uninstall_project ;;
             0) exit 0 ;;
             *) echo -e "${RED}Неверный пункт меню${NC}"; sleep 1 ;;
         esac
