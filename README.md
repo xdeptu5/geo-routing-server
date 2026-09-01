@@ -82,6 +82,7 @@
          SCHEDULE: "40 8 * * *"
          DOMAIN: "geo.example.com"
          ROUTING_TOKEN: "ВАШ_СЕКРЕТНЫЙ_ТОКЕН"
+         ENABLED_CLIENTS: "HAPP,INCY"
          SYNC_ON_START: "true"
        ports:
          - "127.0.0.1:8080:80"
