@@ -333,7 +333,7 @@ TELEGRAM_NOTIFY_SUCCESS=false
 
 <details>
 <summary><b>3. Как запустить сервис без клонирования репозитория?</b></summary>
-Вы можете просто использовать готовый Docker-образ <code>ghcr.io/xdeptu5/geo-routing-server:latest</code> (см. раздел "Быстрый запуск -> Способ А").
+Вы можете просто использовать готовый Docker-образ <code>ghcr.io/xdeptu5/geo-routing-server:latest</code> (см. раздел "Быстрый запуск -> Способ 2").
 </details>
 
 <details>
