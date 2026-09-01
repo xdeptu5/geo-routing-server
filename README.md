@@ -4,11 +4,11 @@
 
 **Автономный сервер для автоматической синхронизации, валидации, модификации и безопасной публикации geo-баз и конфигураций маршрутизации (`HAPP`, `INCY`).**
 
-[![Docker Multi-Arch](https://img.shields.io/badge/docker-amd64%20%7C%20arm64-blue?logo=docker)](https://github.com)
+[![Docker Multi-Arch](https://img.shields.io/badge/docker-amd64%20%7C%20arm64-blue?logo=docker)](https://github.com/xdeptu5/geo-routing-server)
 [![Python 3.12](https://img.shields.io/badge/python-3.12-yellow?logo=python)](https://www.python.org)
 [![Nginx Internal](https://img.shields.io/badge/webserver-nginx%20alpine-green?logo=nginx)](https://nginx.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-orange.svg)](./LICENSE)
-[![Zero Dependencies](https://img.shields.io/badge/dependencies-standard%20library-brightgreen)](https://github.com)
+[![Zero Dependencies](https://img.shields.io/badge/dependencies-standard%20library-brightgreen)](https://github.com/xdeptu5/geo-routing-server)
 
 </div>
 
@@ -128,26 +128,26 @@ docker compose logs
 
 ## 🌐 Настройка HTTPS Реверс-Прокси
 
-### Вариант 1. Caddy (Рекомендуется)
-Если на сервере ещё нет веб-сервера, установите Caddy (`sudo apt install caddy`). Он автоматически выпустит и будет продлевать бесплатный SSL-сертификат.
-
-В `/etc/caddy/Caddyfile` добавьте:
-```caddy
-sub.example.com {
-    reverse_proxy 127.0.0.1:8080
-}
-```
-Примените изменения: `sudo systemctl reload caddy`.
+Вы можете раздавать geo-файлы как **на отдельном поддомене**, так и **на одном домене с вашими существующими сервисами** (например, подписками Remnawave или Marzban на `sub.example.com`), просто направив путь `/<ROUTING_TOKEN>/` в контейнер.
 
 ---
 
-### Вариант 2. Nginx на хосте
-В конфигурацию вашего виртуального хоста с SSL добавьте:
+### Вариант 1. Nginx на хосте (с поддержкой существующего сайта / подписок)
+
+В конфигурацию вашего виртуального хоста добавьте блок `location /<ROUTING_TOKEN>/`:
+
 ```nginx
 server {
     server_name sub.example.com;
 
+    # 1. Ваш существующий сервис (подписки Remnawave, Marzban, сайт)
     location / {
+        proxy_pass http://127.0.0.1:8000; # порт вашего основного сервиса
+        proxy_set_header Host $host;
+    }
+
+    # 2. Раздача geo-файлов и маршрутизации ТОЛЬКО по секретному токену
+    location /ВАШ_СЕКРЕТНЫЙ_ТОКЕН/ {
         proxy_pass http://127.0.0.1:8080;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
@@ -157,6 +157,27 @@ server {
 }
 ```
 Примените изменения: `sudo nginx -t && sudo nginx -s reload`.
+
+---
+
+### Вариант 2. Caddy (с поддержкой существующего сайта / подписок)
+
+В `/etc/caddy/Caddyfile` используйте блоки `handle`:
+
+```caddy
+sub.example.com {
+    # 1. Запросы по секретному токену направляем в geo-routing-server
+    handle /ВАШ_СЕКРЕТНЫЙ_ТОКЕН/* {
+        reverse_proxy 127.0.0.1:8080
+    }
+
+    # 2. Все остальные запросы отдаёт ваш основной сервис (Marzban / Remnawave)
+    handle {
+        reverse_proxy 127.0.0.1:8000
+    }
+}
+```
+Примените изменения: `sudo systemctl reload caddy`.
 
 ---
 
@@ -226,18 +247,18 @@ custom_geo/
 ## ❓ Часто задаваемые вопросы (FAQ)
 
 <details>
-<summary><b>1. Безопасно ли хранить токен в .env?</b></summary>
+<summary><b>1. Можно ли использовать домен, где уже работают подписки Marzban или Remnawave?</b></summary>
+Да! Вам не нужен отдельный домен. Достаточно настроить Nginx или Caddy так, чтобы только путь <code>/&lt;ROUTING_TOKEN&gt;/</code> проксировался в <code>geo-routing-server</code>, а все остальные запросы шли в вашу панель подписок.
+</details>
+
+<details>
+<summary><b>2. Безопасно ли хранить токен в .env?</b></summary>
 Да, файл <code>.env</code> включён в <code>.gitignore</code> и никогда не попадает в систему контроля версий. Токен используется как Capability URL и защищён HTTPS-шифрованием от перехвата в сети.
 </details>
 
 <details>
-<summary><b>2. Почему при открытии https://sub.example.com/ возвращается 404?</b></summary>
-Это сделано намеренно для безопасности. Без указания корректного секретного токена веб-сервер не отдаёт файлы и скрывает структуру каталогов от сетевых сканеров.
-</details>
-
-<details>
-<summary><b>3. Как часто обновляются базы?</b></summary>
-По умолчанию синхронизация запускается каждый день в 08:40 UTC (настраивается переменной <code>SCHEDULE</code>).
+<summary><b>3. Почему при открытии корня https://sub.example.com/ возвращается 404?</b></summary>
+Это сделано намеренно для безопасности. Без указания корректного секретного токена веб-сервер скрывает структуру файлов от сканеров. Если домен общий с панелью, корень отдаёт ваша панель.
 </details>
 
 ---

@@ -4,8 +4,13 @@
 # Добавьте этот блок внутри вашей секции `server { ... }` для домена (sub.example.com).
 # ==============================================================================
 
-# Вариант 1: Если Nginx установлен прямо на хосте
-location / {
+# ------------------------------------------------------------------------------
+# СЦЕНАРИЙ 1 (РЕКОМЕНДУЕМЫЙ): Совместное использование домена с другими сервисами
+# (например, подписками Remnawave / Marzban / 3x-ui / сайтом на том же домене)
+# ------------------------------------------------------------------------------
+# Замените <ROUTING_TOKEN> на значение вашего ROUTING_TOKEN из файла .env.
+
+location /<ROUTING_TOKEN>/ {
     proxy_pass http://127.0.0.1:8080;
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
@@ -13,9 +18,21 @@ location / {
     proxy_set_header X-Forwarded-Proto $scheme;
 }
 
-# Вариант 2: Если Nginx работает в Docker-контейнере в одной сети с geo-routing-server
-# (раскомментируйте networks в compose.yaml)
+# ------------------------------------------------------------------------------
+# СЦЕНАРИЙ 2: Выделенный поддомен только под geo-routing-server
+# ------------------------------------------------------------------------------
 # location / {
+#     proxy_pass http://127.0.0.1:8080;
+#     proxy_set_header Host $host;
+#     proxy_set_header X-Real-IP $remote_addr;
+#     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+#     proxy_set_header X-Forwarded-Proto $scheme;
+# }
+
+# ------------------------------------------------------------------------------
+# СЦЕНАРИЙ 3: Если Nginx и geo-routing-server работают в одной Docker-сети
+# ------------------------------------------------------------------------------
+# location /<ROUTING_TOKEN>/ {
 #     proxy_pass http://geo-routing-server:80;
 #     proxy_set_header Host $host;
 #     proxy_set_header X-Real-IP $remote_addr;
