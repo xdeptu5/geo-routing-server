@@ -13,6 +13,7 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 BOLD='\033[1m'
+DIM='\033[2m'
 NC='\033[0m'
 
 CONFIG_FILE_RECORD="/etc/geo-routing-server.conf"
@@ -391,35 +392,51 @@ uninstall_project() {
     fi
 }
 
+# ==============================================================================
+# МАСТЕР УСТАНОВКИ
+# ==============================================================================
+
 install_wizard() {
     print_header
     check_root
     check_dependencies
 
-    echo -e "${BOLD}--- [1/7] Выбор каталога установки ---${NC}"
-    echo -e "Вы можете указать стандартную папку или каталог ваших стеков (Arcane, Portainer, Dockge, 1Panel и др.)."
-    read -r -p "Каталог установки [Enter = /opt/geo-routing-server]: " input_dir
+    # ────────────────────────────────────────────────────────────────────────
+    # ШАГ 1: Каталог установки
+    # ────────────────────────────────────────────────────────────────────────
+    echo -e "${BOLD}--- [Шаг 1] Каталог установки ---${NC}"
+    echo -e "Укажите папку для проекта. ${DIM}Подходит любая: /opt/, стеки Arcane, Portainer, Dockge, 1Panel и др.${NC}"
+    read -r -p "Каталог [Enter = /opt/geo-routing-server]: " input_dir
     INSTALL_DIR="${input_dir:-/opt/geo-routing-server}"
     mkdir -p "$INSTALL_DIR"
     save_install_dir "$INSTALL_DIR"
     echo -e "${GREEN}✓ Каталог: $INSTALL_DIR${NC}\n"
 
-    echo -e "${BOLD}--- [2/7] Выбор активных модулей ---${NC}"
-    echo "1) HAPP + INCY (Полный сервер всё-в-одном: базы + автороутинг + диплинки)"
-    echo "2) Только INCY (Автороутинг + Geo-базы для Incy)"
-    echo "3) HAPP: Только генератор для Remnawave (локальные диплинки, без раздачи баз)"
-    echo "4) HAPP: Только публичная раздача Geo-баз (Geo Node)"
-    echo "5) HAPP: Полный (локальный генератор + раздача баз)"
+    # ────────────────────────────────────────────────────────────────────────
+    # ШАГ 2: Режим работы сервера
+    # ────────────────────────────────────────────────────────────────────────
+    echo -e "${BOLD}--- [Шаг 2] Что будет делать этот сервер? ---${NC}"
+    echo ""
+    echo -e "  ${BOLD}1)${NC} Полный сервер ${DIM}— раздаёт geo-базы и правила для HAPP и INCY (всё-в-одном)${NC}"
+    echo -e "  ${BOLD}2)${NC} Только INCY ${DIM}— раздаёт geo-базы и автороутинг только для клиента Incy${NC}"
+    echo -e "  ${BOLD}3)${NC} Для панели Remnawave ${DIM}— только отправка правил маршрутизации (самый лёгкий вариант)${NC}"
+    echo -e "  ${BOLD}4)${NC} Публичный сервер geo-баз ${DIM}— только раздача файлов geoip.dat / geosite.dat${NC}"
+    echo -e "  ${BOLD}5)${NC} HAPP полный ${DIM}— и правила для Remnawave, и раздача geo-баз${NC}"
+    echo ""
     read -r -p "Выберите вариант [1-5, Enter = 1]: " client_choice
     client_choice="${client_choice:-1}"
     
     PUBLIC_GEO_BASE_URL=""
+    NEEDS_PUBLIC_DOMAIN=true  # нужен ли публичный домен и порт
+
     case "$client_choice" in
         2) ENABLED_CLIENTS="INCY" ;;
         3) 
             ENABLED_CLIENTS="HAPP_DEEPLINK"
-            echo -e "\n${CYAN}Опционально: укажите URL к внешнему серверу баз (если базы на другом сервере).${NC}"
-            read -r -p "PUBLIC_GEO_BASE_URL [Enter = использовать исходные источники]: " input_geo_url
+            NEEDS_PUBLIC_DOMAIN=false
+            echo -e "\n${CYAN}Опционально: если geo-базы раздаются с другого вашего сервера, укажите его URL.${NC}"
+            echo -e "${DIM}Пример: https://geo-node.example.com/secret_token/HAPP${NC}"
+            read -r -p "URL к внешним geo-базам [Enter = пропустить]: " input_geo_url
             PUBLIC_GEO_BASE_URL="${input_geo_url:-}"
             ;;
         4) ENABLED_CLIENTS="HAPP_GEO" ;;
@@ -428,77 +445,119 @@ install_wizard() {
     esac
     echo -e "${GREEN}✓ Режим: $ENABLED_CLIENTS${NC}\n"
 
-    # Прямая интеграция с Remnawave
+    # ────────────────────────────────────────────────────────────────────────
+    # ШАГ 3: Интеграция с Remnawave (только если выбран HAPP-модуль)
+    # ────────────────────────────────────────────────────────────────────────
     REMNA_BLOCK=""
     if [[ "$ENABLED_CLIENTS" =~ HAPP ]]; then
-        echo -e "${BOLD}--- Настройка интеграции с Remnawave API ---${NC}"
-        read -r -p "Настроить прямую автосинхронизацию с Remnawave API (без сторонних апдейтеров)? [y/N]: " remna_choice
+        echo -e "${BOLD}--- [Шаг 3] Прямая интеграция с Remnawave ---${NC}"
+        echo -e "${DIM}Сервер может сам отправлять правила маршрутизации прямо в API вашей панели Remnawave.${NC}"
+        echo -e "${DIM}Вам не нужны сторонние контейнеры-апдейтеры — всё работает из коробки.${NC}\n"
+        read -r -p "Настроить интеграцию с Remnawave? [y/N]: " remna_choice
         if [[ "$remna_choice" =~ ^[YyДд]$ ]]; then
-            read -r -p "REMNAWAVE_BASE_URL [Enter = http://remnawave:3000/api]: " r_base
+            echo ""
+            read -r -p "URL API панели Remnawave [Enter = http://remnawave:3000/api]: " r_base
             r_base="${r_base:-http://remnawave:3000/api}"
-            read -r -p "REMNAWAVE_TOKEN (JWT токен панели): " r_token
-            read -r -p "Количество сквадов для привязки [1-5, Enter = 1]: " r_count
+            read -r -p "JWT токен администратора (из панели Remnawave → Настройки → API): " r_token
+            echo ""
+            read -r -p "Сколько сквадов (групп пользователей) привязать? [1-5, Enter = 1]: " r_count
             r_count="${r_count:-1}"
             
             REMNA_BLOCK="REMNAWAVE_BASE_URL=${r_base}
 REMNAWAVE_TOKEN=${r_token}
 "
             for ((i=1; i<=r_count; i++)); do
-                echo -e "${CYAN}Сквад #$i:${NC}"
-                read -r -p "  UUID сквада $i: " s_uuid
-                read -r -p "  Правило для сквада $i [Enter = JSONSUB.JSON]: " s_rule
+                echo -e "\n${CYAN}── Сквад #$i ──${NC}"
+                read -r -p "  UUID сквада (из панели Remnawave → Группы): " s_uuid
+                read -r -p "  Какое правило отправлять? [Enter = JSONSUB.JSON]: " s_rule
                 s_rule="${s_rule:-JSONSUB.JSON}"
                 REMNA_BLOCK="${REMNA_BLOCK}REMNAWAVE_SQUAD_${i}_UUID=${s_uuid}
 REMNAWAVE_SQUAD_${i}_RULE=${s_rule}
 "
             done
-            echo -e "${GREEN}✓ Интеграция с Remnawave настроена.${NC}\n"
+            echo -e "\n${GREEN}✓ Интеграция с Remnawave настроена.${NC}\n"
+        else
+            echo -e "${DIM}Пропущено. Вы сможете настроить это позже через меню: geo-server → пункт 4${NC}\n"
         fi
     fi
 
-    echo -e "${BOLD}--- [3/7] Настройка публичного домена ---${NC}"
-    read -r -p "Введите домен для HTTPS (например, geo.example.com): " input_domain
-    DOMAIN="${input_domain:-geo.example.com}"
-    echo -e "${GREEN}✓ Домен: $DOMAIN${NC}\n"
+    # ────────────────────────────────────────────────────────────────────────
+    # ШАГ 4: Публичный домен (только если нужен)
+    # ────────────────────────────────────────────────────────────────────────
+    DOMAIN="local"
+    ROUTING_TOKEN="local"
+    HTTP_PORT="8080"
 
-    echo -e "${BOLD}--- [4/7] Настройка секретного URL-токена ---${NC}"
-    auto_token="$(openssl rand -hex 16)"
-    echo -e "Сгенерирован случайный токен: ${CYAN}${BOLD}${auto_token}${NC}"
-    read -r -p "Введите свой токен или нажмите Enter для использования сгенерированного: " input_token
-    ROUTING_TOKEN="${input_token:-$auto_token}"
-    echo -e "${GREEN}✓ Токен сохранён.${NC}\n"
+    if [ "$NEEDS_PUBLIC_DOMAIN" = true ]; then
+        echo -e "${BOLD}--- [Шаг 4] Публичный домен для HTTPS ---${NC}"
+        echo -e "${DIM}Домен, на который вы направите реверс-прокси (Caddy / Nginx / NPM).${NC}"
+        read -r -p "Введите домен (например, geo.example.com): " input_domain
+        DOMAIN="${input_domain:-geo.example.com}"
+        echo -e "${GREEN}✓ Домен: $DOMAIN${NC}\n"
 
-    echo -e "${BOLD}--- [5/7] Настройка локального порта ---${NC}"
-    read -r -p "Локальный порт для Caddy / Nginx [Enter = 8080]: " input_port
-    HTTP_PORT="${input_port:-8080}"
-    echo -e "${GREEN}✓ Порт: $HTTP_PORT${NC}\n"
+        # ШАГ 5: Токен
+        echo -e "${BOLD}--- [Шаг 5] Секретный URL-токен ---${NC}"
+        echo -e "${DIM}Токен — секретная часть URL, которая защищает ваши файлы от сканеров.${NC}"
+        echo -e "${DIM}Пример ссылки: https://${DOMAIN}/${NC}${CYAN}<ТОКЕН>${NC}${DIM}/HAPP/geoip.dat${NC}"
+        auto_token="$(openssl rand -hex 16)"
+        echo -e "Сгенерирован случайный токен: ${CYAN}${BOLD}${auto_token}${NC}"
+        read -r -p "Введите свой или нажмите Enter: " input_token
+        ROUTING_TOKEN="${input_token:-$auto_token}"
+        echo -e "${GREEN}✓ Токен сохранён.${NC}\n"
 
-    echo -e "${BOLD}--- [6/7] Подключение к общей Docker-сети (Remnawave / Прокси) ---${NC}"
-    read -r -p "Подключить к внешней Docker-сети (например, remnawave-network)? [y/N]: " net_choice
-    EXT_NETWORK=""
-    if [[ "$net_choice" =~ ^[YyДд]$ ]]; then
-        read -r -p "Введите имя внешней Docker-сети [Enter = remnawave-network]: " input_net
-        EXT_NETWORK="${input_net:-remnawave-network}"
-        if ! docker network inspect "$EXT_NETWORK" &>/dev/null; then
-            echo -e "${YELLOW}Сеть $EXT_NETWORK не найдена. Создаём...${NC}"
-            docker network create "$EXT_NETWORK" || true
-        fi
-        echo -e "${GREEN}✓ Сеть: $EXT_NETWORK${NC}\n"
+        # ШАГ 6: Порт
+        echo -e "${BOLD}--- [Шаг 6] Локальный порт ---${NC}"
+        echo -e "${DIM}На этот порт ваш реверс-прокси будет перенаправлять трафик.${NC}"
+        read -r -p "Порт [Enter = 8080]: " input_port
+        HTTP_PORT="${input_port:-8080}"
+        echo -e "${GREEN}✓ Порт: $HTTP_PORT${NC}\n"
     else
-        echo -e "${CYAN}Используется стандартная изолированная сеть.${NC}\n"
+        echo -e "${DIM}ℹ️ Шаги «Домен», «Токен» и «Порт» пропущены — в локальном режиме они не нужны.${NC}\n"
     fi
 
-    echo -e "${BOLD}--- [7/7] Настройка Telegram-уведомлений (Опционально) ---${NC}"
-    read -r -p "Хотите настроить Telegram-уведомления об ошибках и обновлениях? [y/N]: " tg_choice
+    # ────────────────────────────────────────────────────────────────────────
+    # ШАГ 7: Docker-сеть (только если есть смысл)
+    # ────────────────────────────────────────────────────────────────────────
+    EXT_NETWORK=""
+    NEEDS_NETWORK=false
+
+    # Сеть нужна, если: используется HAPP (для Remnawave) ИЛИ пользователь явно настроил Remnawave
+    if [[ "$ENABLED_CLIENTS" =~ HAPP ]] || [ -n "$REMNA_BLOCK" ]; then
+        NEEDS_NETWORK=true
+    fi
+
+    if [ "$NEEDS_NETWORK" = true ]; then
+        echo -e "${BOLD}--- [Шаг 7] Подключение к Docker-сети ---${NC}"
+        echo -e "${DIM}Если Remnawave или ваш реверс-прокси работает в Docker, подключите контейнер к их общей сети.${NC}"
+        read -r -p "Подключить к внешней Docker-сети? [y/N]: " net_choice
+        if [[ "$net_choice" =~ ^[YyДд]$ ]]; then
+            read -r -p "Имя сети [Enter = remnawave-network]: " input_net
+            EXT_NETWORK="${input_net:-remnawave-network}"
+            if ! docker network inspect "$EXT_NETWORK" &>/dev/null; then
+                echo -e "${YELLOW}Сеть $EXT_NETWORK не найдена. Создаём...${NC}"
+                docker network create "$EXT_NETWORK" || true
+            fi
+            echo -e "${GREEN}✓ Сеть: $EXT_NETWORK${NC}\n"
+        else
+            echo -e "${DIM}Пропущено. Используется стандартная изолированная сеть.${NC}\n"
+        fi
+    fi
+
+    # ────────────────────────────────────────────────────────────────────────
+    # ШАГ 8: Telegram (всегда опционален)
+    # ────────────────────────────────────────────────────────────────────────
+    echo -e "${BOLD}--- [Последний шаг] Telegram-уведомления (опционально) ---${NC}"
+    echo -e "${DIM}Бот будет присылать алерты при ошибках синхронизации и (по желанию) отчёты о новых базах.${NC}"
+    read -r -p "Настроить Telegram? [y/N]: " tg_choice
     TG_BOT_TOKEN=""
     TG_CHAT_ID=""
     TG_THREAD_ID=""
     TG_NOTIFY_SUCCESS="false"
 
     if [[ "$tg_choice" =~ ^[YyДд]$ ]]; then
-        read -r -p "Введите TELEGRAM_BOT_TOKEN: " TG_BOT_TOKEN
-        read -r -p "Введите TELEGRAM_CHAT_ID (например, -1001234567890 или 123456789): " TG_CHAT_ID
-        read -r -p "Введите TELEGRAM_THREAD_ID (ID темы/топика, если чат с темами) [Enter = пропустить]: " TG_THREAD_ID
+        read -r -p "TELEGRAM_BOT_TOKEN: " TG_BOT_TOKEN
+        read -r -p "TELEGRAM_CHAT_ID (например, -1001234567890): " TG_CHAT_ID
+        read -r -p "TELEGRAM_THREAD_ID (ID темы/топика, если чат с темами) [Enter = пропустить]: " TG_THREAD_ID
         read -r -p "Присылать уведомление при выходе новых баз? [y/N]: " tg_success
         if [[ "$tg_success" =~ ^[YyДд]$ ]]; then
             TG_NOTIFY_SUCCESS="true"
@@ -509,23 +568,27 @@ REMNAWAVE_SQUAD_${i}_RULE=${s_rule}
     fi
     echo -e "${GREEN}✓ Telegram настроен.${NC}\n"
 
+    # ────────────────────────────────────────────────────────────────────────
+    # ГЕНЕРАЦИЯ КОНФИГУРАЦИИ
+    # ────────────────────────────────────────────────────────────────────────
     echo -e "${BLUE}📦 Создание файлов конфигурации...${NC}"
 
-    cat > "$INSTALL_DIR/.env" <<EOF
-DOMAIN=${DOMAIN}
-ROUTING_TOKEN=${ROUTING_TOKEN}
-ENABLED_CLIENTS=${ENABLED_CLIENTS}
-PUBLIC_GEO_BASE_URL=${PUBLIC_GEO_BASE_URL}
-${REMNA_BLOCK}
-HTTP_BIND=127.0.0.1
-HTTP_PORT=${HTTP_PORT}
-SCHEDULE=40 8 * * *
-SYNC_ON_START=true
-TELEGRAM_BOT_TOKEN=${TG_BOT_TOKEN}
-TELEGRAM_CHAT_ID=${TG_CHAT_ID}
-TELEGRAM_THREAD_ID=${TG_THREAD_ID}
-TELEGRAM_NOTIFY_SUCCESS=${TG_NOTIFY_SUCCESS}
-EOF
+    # Формируем .env — записываем только заполненные значения
+    {
+        echo "DOMAIN=${DOMAIN}"
+        echo "ROUTING_TOKEN=${ROUTING_TOKEN}"
+        echo "ENABLED_CLIENTS=${ENABLED_CLIENTS}"
+        [ -n "$PUBLIC_GEO_BASE_URL" ] && echo "PUBLIC_GEO_BASE_URL=${PUBLIC_GEO_BASE_URL}"
+        [ -n "$REMNA_BLOCK" ] && printf '%s' "$REMNA_BLOCK"
+        echo "HTTP_BIND=127.0.0.1"
+        echo "HTTP_PORT=${HTTP_PORT}"
+        echo "SCHEDULE=40 8 * * *"
+        echo "SYNC_ON_START=true"
+        [ -n "$TG_BOT_TOKEN" ] && echo "TELEGRAM_BOT_TOKEN=${TG_BOT_TOKEN}"
+        [ -n "$TG_CHAT_ID" ] && echo "TELEGRAM_CHAT_ID=${TG_CHAT_ID}"
+        [ -n "$TG_THREAD_ID" ] && echo "TELEGRAM_THREAD_ID=${TG_THREAD_ID}"
+        echo "TELEGRAM_NOTIFY_SUCCESS=${TG_NOTIFY_SUCCESS}"
+    } > "$INSTALL_DIR/.env"
 
     local networks_block=""
     local top_networks_block=""
@@ -550,7 +613,7 @@ services:
       DOMAIN: "\${DOMAIN:-${DOMAIN}}"
       ROUTING_TOKEN: "\${ROUTING_TOKEN:-${ROUTING_TOKEN}}"
       ENABLED_CLIENTS: "\${ENABLED_CLIENTS:-${ENABLED_CLIENTS}}"
-      PUBLIC_GEO_BASE_URL: "\${PUBLIC_GEO_BASE_URL:-${PUBLIC_GEO_BASE_URL}}"
+      PUBLIC_GEO_BASE_URL: "\${PUBLIC_GEO_BASE_URL:-}"
       SCHEDULE: "\${SCHEDULE:-40 8 * * *}"
       SYNC_ON_START: "\${SYNC_ON_START:-true}"
       GEOIP_SOURCE_URL: "\${GEOIP_SOURCE_URL:-}"
@@ -606,9 +669,15 @@ EOF
     echo -e "Каталог проекта: ${CYAN}${INSTALL_DIR}${NC}"
     echo -e "Быстрый вызов меню в терминале: команда ${CYAN}${BOLD}geo-server${NC} (или ${CYAN}${BOLD}geoserver${NC})\n"
     
-    show_proxy_snippets
+    if [ "$NEEDS_PUBLIC_DOMAIN" = true ]; then
+        show_proxy_snippets
+    fi
     show_links
 }
+
+# ==============================================================================
+# ГЛАВНОЕ МЕНЮ
+# ==============================================================================
 
 main_menu() {
     while true; do
@@ -628,10 +697,10 @@ main_menu() {
         echo "2) 📋 Показать публичные ссылки и заголовок autorouting"
         echo "3) 🌐 Показать готовые конфиги для Caddy / Nginx / NPM"
         echo "4) ⚡ Настроить прямую синхронизацию с Remnawave API"
-        echo "5) 🔔 Настроить / Изменить Telegram-уведомления (с тестом темы/топика)"
+        echo "5) 🔔 Настроить / Изменить Telegram-уведомления"
         echo "6) 🚀 Обновить сервер до последней версии"
         echo "7) 📜 Посмотреть логи контейнера"
-        echo "8) 🔄 Перезапустить сервер"
+        echo "8) ♻️ Перезапустить сервер"
         echo "9) 🛑 Остановить сервер"
         echo "10) 🗑️ Удалить проект с сервера"
         echo "0) 🚪 Выход"
