@@ -234,5 +234,17 @@ load_functions() {
     [ "$status" -eq 0 ]
 }
 
+@test "install.sh: поддерживает CLI флаг --help" {
+    run bash "$INSTALL_SH" --help
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "Usage:" ]]
+}
+
+@test "install.sh: содержит перехватчик ошибок trap handle_error" {
+    run bash -c "grep -q 'handle_error' '$INSTALL_SH' && grep -q 'trap .*ERR' '$INSTALL_SH'"
+    [ "$status" -eq 0 ]
+}
+
+
 
 

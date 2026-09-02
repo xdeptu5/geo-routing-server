@@ -17,6 +17,80 @@ DIM='\033[2m'
 NC='\033[0m'
 
 CONFIG_FILE_RECORD="/etc/geo-routing-server.conf"
+LANG_RECORD="/etc/geo-routing-server.lang"
+UI_LANG=""
+
+handle_error() {
+    local code=$?
+    local line=$1
+    [ "$code" -eq 0 ] && return
+
+    echo -e "\n${RED}${BOLD}===============================================================================${NC}"
+    if [ "${UI_LANG:-ru}" = "en" ]; then
+        echo -e "${RED}[!] An error occurred during execution (exit code $code, line $line).${NC}"
+        echo -e "${YELLOW}What would you like to do?${NC}"
+        echo "  1) Open management menu (geoserver)"
+        echo "  2) Start installation again from scratch (clean files)"
+        echo "  3) Completely uninstall project from server"
+        echo "  4) Exit to shell"
+        read -r -p "Select option [1-4, Enter = 1]: " err_choice
+    else
+        echo -e "${RED}[!] Произошла ошибка во время выполнения (код $code, строка $line).${NC}"
+        echo -e "${YELLOW}Что вы хотите сделать?${NC}"
+        echo "  1) Открыть главное меню управления (geoserver)"
+        echo "  2) Начать настройку заново (с чистого листа)"
+        echo "  3) Полностью удалить проект с сервера"
+        echo "  4) Выйти в терминал"
+        read -r -p "Выберите вариант [1-4, Enter = 1]: " err_choice
+    fi
+    err_choice="${err_choice:-1}"
+    case "$err_choice" in
+        1) main_menu ;;
+        2) 
+            local target_dir
+            target_dir="$(get_install_dir)"
+            if [ -n "$target_dir" ] && [ "$target_dir" != "/" ] && [ "$target_dir" != "/root" ] && [ -d "$target_dir" ]; then
+                rm -rf "$target_dir" 2>/dev/null || true
+            fi
+            install_wizard
+            ;;
+        3) uninstall_project ;;
+        *) exit "$code" ;;
+    esac
+}
+
+trap 'handle_error $LINENO' ERR
+
+detect_or_ask_language() {
+    for arg in "$@"; do
+        if [ "$arg" = "--lang=en" ] || [ "$arg" = "--en" ]; then
+            UI_LANG="en"
+            echo "$UI_LANG" > "$LANG_RECORD" 2>/dev/null || true
+            return
+        elif [ "$arg" = "--lang=ru" ] || [ "$arg" = "--ru" ]; then
+            UI_LANG="ru"
+            echo "$UI_LANG" > "$LANG_RECORD" 2>/dev/null || true
+            return
+        fi
+    done
+
+    if [ -f "$LANG_RECORD" ]; then
+        UI_LANG="$(cat "$LANG_RECORD" 2>/dev/null | tr -d '[:space:]')"
+    fi
+    
+    if [ -z "${UI_LANG:-}" ]; then
+        echo -e "\n${BOLD}Language / Выберите язык:${NC}"
+        echo -e "  1) Русский (RU) [Enter]"
+        echo -e "  2) English (EN)"
+        read -r -p "> " lang_choice
+        if [ "$lang_choice" = "2" ] || [[ "$lang_choice" =~ ^[Ee][Nn]$ ]]; then
+            UI_LANG="en"
+        else
+            UI_LANG="ru"
+        fi
+        echo "$UI_LANG" > "$LANG_RECORD" 2>/dev/null || true
+    fi
+}
 
 print_header() {
     clear || true
@@ -525,7 +599,7 @@ uninstall_project() {
             rm -rf "$target_dir"
         fi
 
-        rm -f "$CONFIG_FILE_RECORD"
+        rm -f "$CONFIG_FILE_RECORD" "$LANG_RECORD"
         rm -f /usr/local/bin/geo-server /usr/bin/geo-server /usr/local/bin/geoserver /usr/bin/geoserver
         echo -e "${GREEN}[+] Проект полностью удалён с сервера.${NC}"
         exit 0
@@ -992,30 +1066,58 @@ main_menu() {
         print_header
         local target_dir
         target_dir="$(get_install_dir)"
-        echo -e "Каталог проекта: ${CYAN}$target_dir${NC}"
         
-        if docker ps --format '{{.Names}}' | grep -q "^geo-routing-server$"; then
-            echo -e "Статус контейнера: ${GREEN}[+] Запущен и активен${NC}\n"
-        else
-            echo -e "Статус контейнера: ${RED}[-] Остановлен или не существует${NC}\n"
-        fi
+        if [ "${UI_LANG:-ru}" = "en" ]; then
+            echo -e "Project directory: ${CYAN}$target_dir${NC}"
+            if docker ps --format '{{.Names}}' | grep -q "^geo-routing-server$"; then
+                echo -e "Container status: ${GREEN}[+] Running & Active${NC}\n"
+            else
+                echo -e "Container status: ${RED}[-] Stopped or Not Found${NC}\n"
+            fi
 
-        echo -e "${BOLD}Выберите действие:${NC}"
-        printf " %-4s %s\n" "1)"  "Синхронизировать базы прямо сейчас"
-        printf " %-4s %s\n" "2)"  "Показать публичные ссылки и заголовок autorouting"
-        printf " %-4s %s\n" "3)"  "Показать готовые конфиги для Caddy / Nginx / NPM"
-        printf " %-4s %s\n" "4)"  "Настроить прямую синхронизацию с Remnawave API"
-        printf " %-4s %s\n" "5)"  "Настроить / Изменить Telegram-уведомления"
-        printf " %-4s %s\n" "6)"  "Перенастроить сервер заново (мастер установки)"
-        printf " %-4s %s\n" "7)"  "Обновить Docker-образ сервера (pull & restart)"
-        printf " %-4s %s\n" "8)"  "Обновить скрипт управления (меню и CLI из GitHub)"
-        printf " %-4s %s\n" "9)"  "Посмотреть логи контейнера"
-        printf " %-4s %s\n" "10)" "Перезапустить сервер"
-        printf " %-4s %s\n" "11)" "Остановить сервер"
-        printf " %-4s %s\n" "12)" "Удалить проект с сервера"
-        printf " %-4s %s\n" "0)"  "Выход"
-        echo ""
-        read -r -p "Введите номер [0-12]: " menu_choice
+            echo -e "${BOLD}Choose an action:${NC}"
+            printf " %-4s %s\n" "1)"  "Sync geo-databases right now"
+            printf " %-4s %s\n" "2)"  "Show public links and autorouting header"
+            printf " %-4s %s\n" "3)"  "Show ready reverse-proxy configs (Caddy / Nginx / NPM)"
+            printf " %-4s %s\n" "4)"  "Configure Remnawave API sync"
+            printf " %-4s %s\n" "5)"  "Configure Telegram notifications"
+            printf " %-4s %s\n" "6)"  "Reconfigure server (run wizard)"
+            printf " %-4s %s\n" "7)"  "Update Docker image (pull & restart)"
+            printf " %-4s %s\n" "8)"  "Update management script from GitHub"
+            printf " %-4s %s\n" "9)"  "View container logs"
+            printf " %-4s %s\n" "10)" "Restart server"
+            printf " %-4s %s\n" "11)" "Stop server"
+            printf " %-4s %s\n" "12)" "Uninstall project from server"
+            printf " %-4s %s\n" "13)" "Сменить язык / Change language (RU/EN)"
+            printf " %-4s %s\n" "0)"  "Exit"
+            echo ""
+            read -r -p "Enter choice [0-13]: " menu_choice
+        else
+            echo -e "Каталог проекта: ${CYAN}$target_dir${NC}"
+            if docker ps --format '{{.Names}}' | grep -q "^geo-routing-server$"; then
+                echo -e "Статус контейнера: ${GREEN}[+] Запущен и активен${NC}\n"
+            else
+                echo -e "Статус контейнера: ${RED}[-] Остановлен или не существует${NC}\n"
+            fi
+
+            echo -e "${BOLD}Выберите действие:${NC}"
+            printf " %-4s %s\n" "1)"  "Синхронизировать базы прямо сейчас"
+            printf " %-4s %s\n" "2)"  "Показать публичные ссылки и заголовок autorouting"
+            printf " %-4s %s\n" "3)"  "Показать готовые конфиги для Caddy / Nginx / NPM"
+            printf " %-4s %s\n" "4)"  "Настроить прямую синхронизацию с Remnawave API"
+            printf " %-4s %s\n" "5)"  "Настроить / Изменить Telegram-уведомления"
+            printf " %-4s %s\n" "6)"  "Перенастроить сервер заново (мастер установки)"
+            printf " %-4s %s\n" "7)"  "Обновить Docker-образ сервера (pull & restart)"
+            printf " %-4s %s\n" "8)"  "Обновить скрипт управления (меню и CLI из GitHub)"
+            printf " %-4s %s\n" "9)"  "Посмотреть логи контейнера"
+            printf " %-4s %s\n" "10)" "Перезапустить сервер"
+            printf " %-4s %s\n" "11)" "Остановить сервер"
+            printf " %-4s %s\n" "12)" "Удалить проект с сервера"
+            printf " %-4s %s\n" "13)" "Сменить язык / Change language (RU/EN)"
+            printf " %-4s %s\n" "0)"  "Выход"
+            echo ""
+            read -r -p "Введите номер [0-13]: " menu_choice
+        fi
 
         case "$menu_choice" in
             1) run_sync_now ;;
@@ -1030,18 +1132,89 @@ main_menu() {
             10) restart_server ;;
             11) stop_server ;;
             12) uninstall_project ;;
+            13)
+                if [ "${UI_LANG:-ru}" = "ru" ]; then
+                    UI_LANG="en"
+                else
+                    UI_LANG="ru"
+                fi
+                echo "$UI_LANG" > "$LANG_RECORD" 2>/dev/null || true
+                echo -e "${GREEN}[+] Language / Язык: $UI_LANG${NC}"
+                sleep 1
+                ;;
             0) exit 0 ;;
-            *) echo -e "${RED}[!] Неверный пункт меню${NC}"; sleep 1 ;;
+            *) echo -e "${RED}[!] Неверный пункт меню / Invalid option${NC}"; sleep 1 ;;
         esac
     done
 }
 
 main() {
+    detect_or_ask_language "$@"
+
+    case "${1:-}" in
+        --uninstall|-u|uninstall)
+            uninstall_project
+            exit 0
+            ;;
+        --reconfigure|-r|reconfigure|install)
+            install_wizard
+            exit 0
+            ;;
+        --menu|-m|menu)
+            main_menu
+            exit 0
+            ;;
+        --logs|-l|logs)
+            view_logs
+            exit 0
+            ;;
+        --sync|-s|sync)
+            run_sync_now
+            exit 0
+            ;;
+        --help|-h|help)
+            echo "Usage: geo-server [command]"
+            echo "Commands:"
+            echo "  menu          Open management menu"
+            echo "  install       Run installer wizard"
+            echo "  uninstall     Uninstall project and remove all data"
+            echo "  logs          View container logs"
+            echo "  sync          Force run routing sync"
+            exit 0
+            ;;
+    esac
+
     local target_dir
     target_dir="$(get_install_dir)"
     
-    if [ -f "$target_dir/compose.yaml" ]; then
+    if [ -d "$target_dir" ] && [ -f "$target_dir/compose.yaml" ]; then
         main_menu
+    elif [ -d "$target_dir" ]; then
+        print_header
+        if [ "${UI_LANG:-ru}" = "en" ]; then
+            echo -e "${YELLOW}[!] An incomplete or previous installation was detected in $target_dir${NC}\n"
+            echo "  1) Run installer wizard (resume / reconfigure)"
+            echo "  2) Reset and start fresh (clean all files)"
+            echo "  3) Completely uninstall project from server"
+            read -r -p "Select option [1-3, Enter = 1]: " init_choice
+        else
+            echo -e "${YELLOW}[!] Обнаружена незавершенная или прерванная установка в $target_dir${NC}\n"
+            echo "  1) Начать установку заново (сохранив старые данные)"
+            echo "  2) Очистить все файлы и начать с чистого листа"
+            echo "  3) Полностью удалить проект с сервера"
+            read -r -p "Выберите вариант [1-3, Enter = 1]: " init_choice
+        fi
+        init_choice="${init_choice:-1}"
+        case "$init_choice" in
+            2) 
+                if [ -n "$target_dir" ] && [ "$target_dir" != "/" ] && [ "$target_dir" != "/root" ] && [ -d "$target_dir" ]; then
+                    rm -rf "$target_dir"
+                fi
+                install_wizard
+                ;;
+            3) uninstall_project ;;
+            *) install_wizard ;;
+        esac
     else
         install_wizard
     fi
