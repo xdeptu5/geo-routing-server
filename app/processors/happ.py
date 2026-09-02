@@ -10,6 +10,7 @@ from app.processors.base import BaseProcessor
 from app.processors.geo import GeoManager
 from app.config import Config
 from app.publisher import Publisher
+from app.remnawave import RemnawaveSync
 
 logger = logging.getLogger("geo-routing-server")
 
@@ -50,6 +51,24 @@ class HappProcessor(BaseProcessor):
         if needs_deeplink:
             logger.info("Processing HAPP configuration and DEEPLINK files...")
             config_files = self._discover_config_files()
+            
+            # Если настроены конкретные сквады Remnawave, генерируем ТОЛЬКО запрошенные правила
+            squads = RemnawaveSync.load_squad_configs()
+            configured_rules = set()
+            for sq in squads:
+                r = sq.get("rule", "").strip().upper()
+                if r:
+                    configured_rules.add(r if r.endswith(".JSON") else f"{r}.JSON")
+            global_rule = os.getenv("REMNAWAVE_GLOBAL_RULE", "").strip().upper()
+            if global_rule:
+                configured_rules.add(global_rule if global_rule.endswith(".JSON") else f"{global_rule}.JSON")
+
+            if configured_rules:
+                filtered = [f for f in config_files if f.upper() in configured_rules]
+                if filtered:
+                    config_files = filtered
+                else:
+                    config_files = list(configured_rules)
             
             # Определяем ссылки на geo-базы, которые нужно зашить в правила
             base_public_url = Config.get_base_url(self.token)
