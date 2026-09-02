@@ -343,6 +343,14 @@ configure_remnawave() {
     read -r -p "Сколько сквадов хотите привязать? [1-5, Enter = 1]: " count_squads
     count_squads="${count_squads:-1}"
 
+    echo -e "\n${CYAN}${BOLD}[i] Источник правил маршрутизации:${NC} ${CYAN}https://github.com/hydraponique/roscomvpn-routing${NC}"
+    echo -e "${DIM}Сервер берет готовые правила из папки HAPP этого репозитория.${NC}"
+    echo -e "Доступные варианты правил:"
+    echo -e "  ${BOLD}1) JSONSUB.JSON${NC}   — Антизапрет / Обход блокировок ${DIM}(трафик РФ напрямую, заблокированное через VPN)${NC} [Рекомендуется]"
+    echo -e "  ${BOLD}2) WHITELIST.JSON${NC} — Белый список ${DIM}(весь интернет через VPN, кроме незаблокированных сервисов РФ)${NC}"
+    echo -e "  ${BOLD}3) DEFAULT.JSON${NC}   — Базовое стандартное правило"
+    echo -e "  ${DIM}(или введите имя любого другого .JSON файла из репозитория)${NC}"
+
     local squads_env=""
     for ((i=1; i<=count_squads; i++)); do
         echo -e "\n${CYAN}--- Настройка Сквада #$i ---${NC}"
@@ -653,6 +661,7 @@ install_wizard() {
     local prev_public_geo=""
     local prev_cf_id=""
     local prev_cf_secret=""
+    local prev_routing_repo="https://raw.githubusercontent.com/hydraponique/roscomvpn-routing/main"
 
     if [ -f "$INSTALL_DIR/.env" ]; then
         echo -e "${CYAN}[i] Найден существующий файл .env — текущие значения будут предложены по умолчанию.${NC}\n"
@@ -669,6 +678,7 @@ install_wizard() {
         prev_public_geo="$(grep "^PUBLIC_GEO_BASE_URL=" "$INSTALL_DIR/.env" | cut -d'=' -f2- || echo "$prev_public_geo")"
         prev_cf_id="$(grep "^CLOUDFLARE_ZERO_TRUST_CLIENT_ID=" "$INSTALL_DIR/.env" | cut -d'=' -f2- || true)"
         prev_cf_secret="$(grep "^CLOUDFLARE_ZERO_TRUST_CLIENT_SECRET=" "$INSTALL_DIR/.env" | cut -d'=' -f2- || true)"
+        prev_routing_repo="$(grep "^ROUTING_SOURCE_REPO=" "$INSTALL_DIR/.env" | cut -d'=' -f2- || echo "$prev_routing_repo")"
     fi
 
     # ────────────────────────────────────────────────────────────────────────
@@ -736,6 +746,14 @@ install_wizard() {
             REMNA_BLOCK="REMNAWAVE_BASE_URL=${r_base}
 REMNAWAVE_TOKEN=${r_token}
 "
+            echo -e "\n${CYAN}${BOLD}[i] Источник правил маршрутизации:${NC} ${CYAN}https://github.com/hydraponique/roscomvpn-routing${NC}"
+            echo -e "${DIM}Сервер берет готовые правила из папки HAPP этого репозитория.${NC}"
+            echo -e "Доступные варианты правил:"
+            echo -e "  ${BOLD}1) JSONSUB.JSON${NC}   — Антизапрет / Обход блокировок ${DIM}(трафик РФ напрямую, заблокированное через VPN)${NC} [Рекомендуется]"
+            echo -e "  ${BOLD}2) WHITELIST.JSON${NC} — Белый список ${DIM}(весь интернет через VPN, кроме незаблокированных сервисов РФ)${NC}"
+            echo -e "  ${BOLD}3) DEFAULT.JSON${NC}   — Базовое стандартное правило"
+            echo -e "  ${DIM}(или введите имя любого другого .JSON файла из репозитория)${NC}"
+
             for ((i=1; i<=r_count; i++)); do
                 echo -e "\n${CYAN}── Сквад #$i ──${NC}"
                 read -r -p "  UUID сквада (из панели Remnawave → Группы): " s_uuid

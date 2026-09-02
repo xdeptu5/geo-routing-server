@@ -245,6 +245,12 @@ load_functions() {
     [ "$status" -eq 0 ]
 }
 
+@test "install.sh: документирует источник правил roscomvpn-routing и варианты JSONSUB/WHITELIST" {
+    run bash -c "grep -q 'roscomvpn-routing' '$INSTALL_SH' && grep -q 'JSONSUB.JSON' '$INSTALL_SH' && grep -q 'WHITELIST.JSON' '$INSTALL_SH'"
+    [ "$status" -eq 0 ]
+}
+
+
 
 
 
