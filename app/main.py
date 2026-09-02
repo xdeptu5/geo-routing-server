@@ -63,42 +63,41 @@ def ensure_internal_symlinks(storage_dir: Path, token: str):
                     pass
 
 def print_summary_banner(token: str):
-    """Выводит аккуратный блок со ссылками для внешних клиентов и внутренних Docker-сервисов."""
+    """Выводит чистый, аккуратный блок со ссылками строго под выбранные модули."""
     base_url = Config.get_base_url(token)
+    clients_set = set(Config.ENABLED_CLIENTS)
     
     sections = []
     
-    if "HAPP" in Config.ENABLED_CLIENTS:
-        sections.append(f"""[HAPP]
-  - Публичные HTTPS ссылки (для клиентов с токеном):
-      GeoIP:     {base_url}/HAPP/geoip.dat
-      GeoSite:   {base_url}/HAPP/geosite.dat
-      JSON:      {base_url}/HAPP/DEFAULT.JSON
-                 {base_url}/HAPP/JSONSUB.JSON
-                 {base_url}/HAPP/WHITELIST.JSON
-      DEEPLINK:  {base_url}/HAPP/DEFAULT.DEEPLINK
-                 {base_url}/HAPP/JSONSUB.DEEPLINK
-                 {base_url}/HAPP/WHITELIST.DEEPLINK
-  - Локальные Docker ссылки (для remnawave-routing-update в remnawave-network):
+    # HAPP блок
+    happ_geo = "HAPP" in clients_set or "HAPP_GEO" in clients_set
+    happ_deeplink = "HAPP" in clients_set or "HAPP_DEEPLINK" in clients_set or "HAPP_LOCAL" in clients_set
+    
+    if happ_geo or happ_deeplink:
+        happ_lines = ["[HAPP]"]
+        if happ_deeplink:
+            happ_lines.append(f"""  - Локальные ссылки в сети Docker (для remnawave-routing-update):
       SQUAD URL: http://geo-routing-server/HAPP/JSONSUB.DEEPLINK
                  http://geo-routing-server/HAPP/WHITELIST.DEEPLINK""")
+        if happ_geo:
+            happ_lines.append(f"""  - Публичные HTTPS ссылки на базы (для клиентов с токеном):
+      GeoIP:     {base_url}/HAPP/geoip.dat
+      GeoSite:   {base_url}/HAPP/geosite.dat""")
+        sections.append("\n".join(happ_lines))
 
-    if "INCY" in Config.ENABLED_CLIENTS:
-        sections.append(f"""[INCY]
-  - Публичные HTTPS ссылки (для клиентов с токеном):
+    # INCY блок
+    if "INCY" in clients_set or "INCY_GEO" in clients_set:
+        incy_lines = ["[INCY]"]
+        incy_lines.append(f"""  - Публичные HTTPS ссылки (для клиентов с токеном):
       GeoIP:     {base_url}/INCY/geoip.dat
-      GeoSite:   {base_url}/INCY/geosite.dat
-      JSON:      {base_url}/INCY/DEFAULT.JSON
-                 {base_url}/INCY/JSONSUB.JSON
-                 {base_url}/INCY/WHITELIST.JSON
-      DEEPLINK:  {base_url}/INCY/DEFAULT.DEEPLINK
-                 {base_url}/INCY/JSONSUB.DEEPLINK
-                 {base_url}/INCY/WHITELIST.DEEPLINK
-  - Заголовок подписки (Remnawave / Marzban Autorouting):
+      GeoSite:   {base_url}/INCY/geosite.dat""")
+        if "INCY" in clients_set:
+            incy_lines.append(f"""  - Заголовок подписки (Remnawave / Marzban Autorouting):
       Header Name:  autorouting
       Header Value: incy://autorouting/onadd/{base_url}/INCY/JSONSUB.JSON""")
+        sections.append("\n".join(incy_lines))
 
-    body = "\n\n".join(sections) if sections else "No clients enabled in ENABLED_CLIENTS."
+    body = "\n\n".join(sections) if sections else "No active clients configured in ENABLED_CLIENTS."
 
     banner = f"""
 ===============================================================================
@@ -114,7 +113,7 @@ def main():
     logger = logging.getLogger("geo-routing-server")
     
     logger.info("Starting geo-routing-server synchronization...")
-    logger.info(f"Active enabled clients: {', '.join(Config.ENABLED_CLIENTS)}")
+    logger.info(f"Active enabled modules: {', '.join(Config.ENABLED_CLIENTS)}")
     Publisher.reset_session()
     
     # 1. Читаем токен и настройки
@@ -131,19 +130,15 @@ def main():
     # 4. Инициализируем загрузчик
     downloader = Downloader(Config.CACHE_DIR)
     
-    # 5. Выбираем только включенные процессоры клиентов
-    available_processors = {
-        "HAPP": HappProcessor,
-        "INCY": IncyProcessor,
-    }
-    
+    # 5. Инициализируем активные процессоры
+    clients_set = set(Config.ENABLED_CLIENTS)
     active_processors = []
-    for client_name in Config.ENABLED_CLIENTS:
-        processor_cls = available_processors.get(client_name)
-        if processor_cls:
-            active_processors.append(processor_cls(downloader, Config.STORAGE_DIR, token, Config.DOMAIN))
-        else:
-            logger.warning(f"Unknown client in ENABLED_CLIENTS: {client_name} (skipped)")
+    
+    if any(k in clients_set for k in ("HAPP", "HAPP_DEEPLINK", "HAPP_LOCAL", "HAPP_GEO")):
+        active_processors.append(HappProcessor(downloader, Config.STORAGE_DIR, token, Config.DOMAIN))
+        
+    if any(k in clients_set for k in ("INCY", "INCY_GEO")):
+        active_processors.append(IncyProcessor(downloader, Config.STORAGE_DIR, token, Config.DOMAIN))
             
     if not active_processors:
         logger.warning("No valid processors active. Please check ENABLED_CLIENTS in .env")

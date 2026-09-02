@@ -17,12 +17,15 @@ class Config:
     SCHEDULE = os.getenv("SCHEDULE", "40 8 * * *").strip()
     SYNC_ON_START = os.getenv("SYNC_ON_START", "true").lower() in ("true", "1", "yes")
     
-    # Список активных клиентов для выборочной раздачи (по умолчанию HAPP и INCY)
+    # Список активных модулей: HAPP, HAPP_DEEPLINK, HAPP_GEO, INCY, INCY_GEO
     ENABLED_CLIENTS: List[str] = [
         c.strip().upper() 
         for c in os.getenv("ENABLED_CLIENTS", "HAPP,INCY").split(",") 
         if c.strip()
     ]
+    
+    # Внешний URL к гео-базам (если базы отдаются с другого сервера)
+    PUBLIC_GEO_BASE_URL = os.getenv("PUBLIC_GEO_BASE_URL", "").strip().rstrip("/")
     
     GEOIP_SOURCE_URL = os.getenv("GEOIP_SOURCE_URL", "").strip()
     GEOSITE_SOURCE_URL = os.getenv("GEOSITE_SOURCE_URL", "").strip()
@@ -50,7 +53,12 @@ class Config:
                 print(f"ERROR: Failed to read token file {token_file}: {e}", file=sys.stderr)
                 sys.exit(1)
         
+        # Если включен только локальный генератор диплинков HAPP, токен может быть пустым или дефолтным
+        is_only_local = cls.ENABLED_CLIENTS == ["HAPP_DEEPLINK"] or cls.ENABLED_CLIENTS == ["HAPP_LOCAL"]
+        
         if not token or token == "change_me_to_random_secret_token":
+            if is_only_local:
+                return "local"
             print("ERROR: ROUTING_TOKEN is not configured! Please set a valid secret token in .env or token.txt", file=sys.stderr)
             sys.exit(1)
             

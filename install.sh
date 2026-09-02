@@ -135,10 +135,19 @@ show_proxy_snippets() {
 
     local domain="geo.example.com"
     local port="8080"
+    local clients="HAPP,INCY"
 
     if [ -f "$env_file" ]; then
         domain=$(grep "^DOMAIN=" "$env_file" | cut -d'=' -f2- || echo "geo.example.com")
         port=$(grep "^HTTP_PORT=" "$env_file" | cut -d'=' -f2- || echo "8080")
+        clients=$(grep "^ENABLED_CLIENTS=" "$env_file" | cut -d'=' -f2- || echo "HAPP,INCY")
+    fi
+
+    # Если включен только локальный генератор Remnawave, прокси настраивать не обязательно
+    if [ "$clients" = "HAPP_DEEPLINK" ] || [ "$clients" = "HAPP_LOCAL" ]; then
+        echo -e "${GREEN}${BOLD}ℹ️ Режим «Только генератор для Remnawave»: сервер работает локально внутри Docker-сети.${NC}"
+        echo -e "Настройка внешнего реверс-прокси не требуется, если вы не планируете открывать сервер наружу.\n"
+        return 0
     fi
 
     echo -e "${CYAN}${BOLD}===============================================================================${NC}"
@@ -350,34 +359,41 @@ install_wizard() {
     save_install_dir "$INSTALL_DIR"
     echo -e "${GREEN}✓ Каталог: $INSTALL_DIR${NC}\n"
 
-    echo -e "${BOLD}--- [2/7] Настройка публичного домена ---${NC}"
+    echo -e "${BOLD}--- [2/7] Выбор активных модулей ---${NC}"
+    echo "1) HAPP + INCY (Полный сервер всё-в-одном: базы + автороутинг + диплинки)"
+    echo "2) Только INCY (Автороутинг + Geo-базы для Incy)"
+    echo "3) HAPP: Только генератор для Remnawave (локальные диплинки, без раздачи баз)"
+    echo "4) HAPP: Только публичная раздача Geo-баз (Geo Node)"
+    echo "5) HAPP: Полный (локальный генератор + раздача баз)"
+    read -r -p "Выберите вариант [1-5, Enter = 1]: " client_choice
+    client_choice="${client_choice:-1}"
+    
+    PUBLIC_GEO_BASE_URL=""
+    case "$client_choice" in
+        2) ENABLED_CLIENTS="INCY" ;;
+        3) 
+            ENABLED_CLIENTS="HAPP_DEEPLINK"
+            echo -e "\n${CYAN}Опционально: укажите URL к внешнему серверу баз (если базы на другом сервере).${NC}"
+            read -r -p "PUBLIC_GEO_BASE_URL [Enter = использовать исходные источники]: " input_geo_url
+            PUBLIC_GEO_BASE_URL="${input_geo_url:-}"
+            ;;
+        4) ENABLED_CLIENTS="HAPP_GEO" ;;
+        5) ENABLED_CLIENTS="HAPP" ;;
+        *) ENABLED_CLIENTS="HAPP,INCY" ;;
+    esac
+    echo -e "${GREEN}✓ Режим: $ENABLED_CLIENTS${NC}\n"
+
+    echo -e "${BOLD}--- [3/7] Настройка публичного домена ---${NC}"
     read -r -p "Введите домен для HTTPS (например, geo.example.com): " input_domain
-    while [ -z "${input_domain:-}" ]; do
-        echo -e "${RED}Домен не может быть пустым!${NC}"
-        read -r -p "Введите домен: " input_domain
-    done
-    DOMAIN="$input_domain"
+    DOMAIN="${input_domain:-geo.example.com}"
     echo -e "${GREEN}✓ Домен: $DOMAIN${NC}\n"
 
-    echo -e "${BOLD}--- [3/7] Настройка секретного URL-токена ---${NC}"
+    echo -e "${BOLD}--- [4/7] Настройка секретного URL-токена ---${NC}"
     auto_token="$(openssl rand -hex 16)"
     echo -e "Сгенерирован случайный токен: ${CYAN}${BOLD}${auto_token}${NC}"
     read -r -p "Введите свой токен или нажмите Enter для использования сгенерированного: " input_token
     ROUTING_TOKEN="${input_token:-$auto_token}"
     echo -e "${GREEN}✓ Токен сохранён.${NC}\n"
-
-    echo -e "${BOLD}--- [4/7] Выбор активных клиентов ---${NC}"
-    echo "1) HAPP + INCY (Раздавать базы и конфиги для обоих клиентов)"
-    echo "2) Только INCY (Базы + JSON + DEEPLINK)"
-    echo "3) Только HAPP (Базы + JSON + DEEPLINK для Remnawave апдейтера)"
-    read -r -p "Выберите вариант [1-3, Enter = 1]: " client_choice
-    client_choice="${client_choice:-1}"
-    case "$client_choice" in
-        2) ENABLED_CLIENTS="INCY" ;;
-        3) ENABLED_CLIENTS="HAPP" ;;
-        *) ENABLED_CLIENTS="HAPP,INCY" ;;
-    esac
-    echo -e "${GREEN}✓ Клиенты: $ENABLED_CLIENTS${NC}\n"
 
     echo -e "${BOLD}--- [5/7] Настройка локального порта ---${NC}"
     read -r -p "Локальный порт для Caddy / Nginx [Enter = 8080]: " input_port
@@ -390,7 +406,6 @@ install_wizard() {
     if [[ "$net_choice" =~ ^[YyДд]$ ]]; then
         read -r -p "Введите имя внешней Docker-сети [Enter = remnawave-network]: " input_net
         EXT_NETWORK="${input_net:-remnawave-network}"
-        # Проверяем, существует ли сеть, если нет — создаем
         if ! docker network inspect "$EXT_NETWORK" &>/dev/null; then
             echo -e "${YELLOW}Сеть $EXT_NETWORK не найдена. Создаём...${NC}"
             docker network create "$EXT_NETWORK" || true
@@ -428,6 +443,7 @@ install_wizard() {
 DOMAIN=${DOMAIN}
 ROUTING_TOKEN=${ROUTING_TOKEN}
 ENABLED_CLIENTS=${ENABLED_CLIENTS}
+PUBLIC_GEO_BASE_URL=${PUBLIC_GEO_BASE_URL}
 HTTP_BIND=127.0.0.1
 HTTP_PORT=${HTTP_PORT}
 SCHEDULE=40 8 * * *
@@ -462,6 +478,7 @@ services:
       DOMAIN: "\${DOMAIN:-${DOMAIN}}"
       ROUTING_TOKEN: "\${ROUTING_TOKEN:-${ROUTING_TOKEN}}"
       ENABLED_CLIENTS: "\${ENABLED_CLIENTS:-${ENABLED_CLIENTS}}"
+      PUBLIC_GEO_BASE_URL: "\${PUBLIC_GEO_BASE_URL:-${PUBLIC_GEO_BASE_URL}}"
       SCHEDULE: "\${SCHEDULE:-40 8 * * *}"
       SYNC_ON_START: "\${SYNC_ON_START:-true}"
       GEOIP_SOURCE_URL: "\${GEOIP_SOURCE_URL:-}"
