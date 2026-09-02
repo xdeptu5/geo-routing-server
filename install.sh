@@ -482,11 +482,23 @@ uninstall_project() {
     local target_dir
     target_dir="$(get_install_dir)"
     echo -e "${RED}${BOLD}[!] ВНИМАНИЕ: Вы действительно хотите удалить Geo Routing Server? [y/N]${NC}"
+    if [ -n "$target_dir" ]; then
+        echo -e "${DIM}Будут удалены: контейнер, тома данных, каталог $target_dir и команда geo-server.${NC}"
+    fi
     read -r -p "> " confirm
     if [[ "$confirm" =~ ^[YyДд]$ ]]; then
-        cd "$target_dir" || true
-        docker compose down -v || true
-        rm -rf "$target_dir"
+        echo -e "${YELLOW}[*] Остановка и удаление контейнеров...${NC}"
+        if [ -n "$target_dir" ] && [ -d "$target_dir" ]; then
+            (cd "$target_dir" && docker compose down -v --remove-orphans 2>/dev/null) || true
+        fi
+        # Принудительное удаление контейнера на случай, если compose.yaml был поврежден
+        docker rm -f geo-routing-server 2>/dev/null || true
+
+        # Безопасное удаление каталога проекта
+        if [ -n "$target_dir" ] && [ "$target_dir" != "/" ] && [ "$target_dir" != "/root" ] && [ "$target_dir" != "/home" ] && [ -d "$target_dir" ]; then
+            rm -rf "$target_dir"
+        fi
+
         rm -f "$CONFIG_FILE_RECORD"
         rm -f /usr/local/bin/geo-server /usr/bin/geo-server /usr/local/bin/geoserver /usr/bin/geoserver
         echo -e "${GREEN}[+] Проект полностью удалён с сервера.${NC}"
