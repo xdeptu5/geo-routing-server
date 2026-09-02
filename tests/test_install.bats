@@ -211,3 +211,9 @@ load_functions() {
     "
     [ "$status" -eq 0 ]
 }
+
+@test "install.sh: prev_cf_id и prev_cf_secret объявлены (нет unbound variable под set -u)" {
+    run bash -c "grep -q 'local prev_cf_id=' '$INSTALL_SH' && grep -q 'local prev_cf_secret=' '$INSTALL_SH'"
+    [ "$status" -eq 0 ]
+}
+

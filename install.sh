@@ -261,17 +261,32 @@ REMNAWAVE_SQUAD_${i}_RULE=${sq_rule}
         current_cf_secret=$(grep "^CLOUDFLARE_ZERO_TRUST_CLIENT_SECRET=" "$env_file" | cut -d'=' -f2- || true)
     fi
 
+    local cf_prompt="y/N"
+    [ -n "$current_cf_id" ] && cf_prompt="Y/n"
     echo -e "\n${CYAN}Опционально: если Remnawave защищена Cloudflare Zero Trust (Service Token):${NC}"
-    read -r -p "CLOUDFLARE_ZERO_TRUST_CLIENT_ID [Enter = ${current_cf_id:-нет}]: " input_cf_id
-    input_cf_id="${input_cf_id:-$current_cf_id}"
-
-    read -r -p "CLOUDFLARE_ZERO_TRUST_CLIENT_SECRET [Enter = ${current_cf_secret:-нет}]: " input_cf_secret
-    input_cf_secret="${input_cf_secret:-$current_cf_secret}"
+    read -r -p "Использовать Cloudflare Zero Trust для подключения к панели? [$cf_prompt]: " cf_choice
+    if [ -n "$current_cf_id" ]; then
+        cf_choice="${cf_choice:-Y}"
+    else
+        cf_choice="${cf_choice:-N}"
+    fi
 
     local cf_env=""
-    if [ -n "$input_cf_id" ] && [ -n "$input_cf_secret" ]; then
-        cf_env="CLOUDFLARE_ZERO_TRUST_CLIENT_ID=${input_cf_id}
+    if [[ "$cf_choice" =~ ^[YyДд]$ ]]; then
+        read -r -p "CLOUDFLARE_ZERO_TRUST_CLIENT_ID [Enter = ${current_cf_id:-пропустить}]: " input_cf_id
+        input_cf_id="${input_cf_id:-$current_cf_id}"
+
+        read -r -p "CLOUDFLARE_ZERO_TRUST_CLIENT_SECRET [Enter = ${current_cf_secret:-пропустить}]: " input_cf_secret
+        input_cf_secret="${input_cf_secret:-$current_cf_secret}"
+
+        if [ -n "$input_cf_id" ] && [ -n "$input_cf_secret" ]; then
+            cf_env="CLOUDFLARE_ZERO_TRUST_CLIENT_ID=${input_cf_id}
 CLOUDFLARE_ZERO_TRUST_CLIENT_SECRET=${input_cf_secret}
+"
+        fi
+    elif [ -n "$current_cf_id" ] && [ -n "$current_cf_secret" ]; then
+        cf_env="CLOUDFLARE_ZERO_TRUST_CLIENT_ID=${current_cf_id}
+CLOUDFLARE_ZERO_TRUST_CLIENT_SECRET=${current_cf_secret}
 "
     fi
 
@@ -524,6 +539,8 @@ install_wizard() {
     local prev_tg_thread=""
     local prev_tg_notify="false"
     local prev_public_geo=""
+    local prev_cf_id=""
+    local prev_cf_secret=""
 
     if [ -f "$INSTALL_DIR/.env" ]; then
         echo -e "${CYAN}[i] Найден существующий файл .env — текущие значения будут предложены по умолчанию.${NC}\n"
@@ -617,16 +634,31 @@ REMNAWAVE_SQUAD_${i}_RULE=${s_rule}
 "
             done
 
+            local cf_prompt="y/N"
+            [ -n "$prev_cf_id" ] && cf_prompt="Y/n"
             echo -e "\n${CYAN}Опционально: если Remnawave защищена Cloudflare Zero Trust (Service Token):${NC}"
-            read -r -p "CLOUDFLARE_ZERO_TRUST_CLIENT_ID [Enter = ${prev_cf_id:-пропустить}]: " r_cf_id
-            r_cf_id="${r_cf_id:-$prev_cf_id}"
+            read -r -p "Использовать Cloudflare Zero Trust для подключения к панели? [$cf_prompt]: " cf_choice
+            if [ -n "$prev_cf_id" ]; then
+                cf_choice="${cf_choice:-Y}"
+            else
+                cf_choice="${cf_choice:-N}"
+            fi
 
-            read -r -p "CLOUDFLARE_ZERO_TRUST_CLIENT_SECRET [Enter = ${prev_cf_secret:-пропустить}]: " r_cf_secret
-            r_cf_secret="${r_cf_secret:-$prev_cf_secret}"
+            if [[ "$cf_choice" =~ ^[YyДд]$ ]]; then
+                read -r -p "CLOUDFLARE_ZERO_TRUST_CLIENT_ID [Enter = ${prev_cf_id:-пропустить}]: " r_cf_id
+                r_cf_id="${r_cf_id:-$prev_cf_id}"
 
-            if [ -n "$r_cf_id" ] && [ -n "$r_cf_secret" ]; then
-                REMNA_BLOCK="${REMNA_BLOCK}CLOUDFLARE_ZERO_TRUST_CLIENT_ID=${r_cf_id}
+                read -r -p "CLOUDFLARE_ZERO_TRUST_CLIENT_SECRET [Enter = ${prev_cf_secret:-пропустить}]: " r_cf_secret
+                r_cf_secret="${r_cf_secret:-$prev_cf_secret}"
+
+                if [ -n "$r_cf_id" ] && [ -n "$r_cf_secret" ]; then
+                    REMNA_BLOCK="${REMNA_BLOCK}CLOUDFLARE_ZERO_TRUST_CLIENT_ID=${r_cf_id}
 CLOUDFLARE_ZERO_TRUST_CLIENT_SECRET=${r_cf_secret}
+"
+                fi
+            elif [ -n "$prev_cf_id" ] && [ -n "$prev_cf_secret" ]; then
+                REMNA_BLOCK="${REMNA_BLOCK}CLOUDFLARE_ZERO_TRUST_CLIENT_ID=${prev_cf_id}
+CLOUDFLARE_ZERO_TRUST_CLIENT_SECRET=${prev_cf_secret}
 "
             fi
 
