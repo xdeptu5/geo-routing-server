@@ -33,6 +33,9 @@ services:
       REMNAWAVE_SQUAD_2_RULE: "${REMNAWAVE_SQUAD_2_RULE:-}"
       REMNAWAVE_SQUAD_3_UUID: "${REMNAWAVE_SQUAD_3_UUID:-}"
       REMNAWAVE_SQUAD_3_RULE: "${REMNAWAVE_SQUAD_3_RULE:-}"
+      # Если Remnawave защищена Cloudflare Zero Trust (Service Token):
+      CLOUDFLARE_ZERO_TRUST_CLIENT_ID: "${CLOUDFLARE_ZERO_TRUST_CLIENT_ID:-}"
+      CLOUDFLARE_ZERO_TRUST_CLIENT_SECRET: "${CLOUDFLARE_ZERO_TRUST_CLIENT_SECRET:-}"
 
     # Локальный порт для подключения вашего реверс-прокси (Caddy или Nginx):
     ports:

@@ -159,6 +159,8 @@ docker compose up -d --build
 | `REMNAWAVE_SQUAD_N_UUID` | *пусто* | UUID сквада N (N = 1, 2, 3…) для автоматического патча |
 | `REMNAWAVE_SQUAD_N_RULE` | `JSONSUB.JSON` | Имя JSON-правила для сквада N (`JSONSUB.JSON`, `WHITELIST.JSON`) |
 | `REMNAWAVE_GLOBAL_RULE` | *пусто* | Глобальное правило для всех подписок панели (опционально) |
+| `CLOUDFLARE_ZERO_TRUST_CLIENT_ID` | *пусто* | Client ID сервисного токена Cloudflare Zero Trust (если панель за туннелем) |
+| `CLOUDFLARE_ZERO_TRUST_CLIENT_SECRET` | *пусто* | Client Secret сервисного токена Cloudflare Zero Trust |
 
 ---
 
@@ -166,12 +168,16 @@ docker compose up -d --build
 
 ### 1. HAPP / Remnawave (Нативная интеграция)
 
-Сервер **напрямую отправляет** свежие правила в API Remnawave в момент обновления баз — без задержек и без сторонних апдейтеров.
+Сервер **напрямую отправляет** свежие правила в API Remnawave в момент обновления баз — без задержек и без сторонних апдейтеров. Поддерживаются как локальные панели внутри Docker-сети, так и удалённые панели за **Cloudflare Zero Trust Tunnel**.
 
 В `.env` укажите URL панели, токен и UUID сквадов:
 ```env
-REMNAWAVE_BASE_URL=http://remnawave:3000/api
+REMNAWAVE_BASE_URL=https://remna.example.com/api
 REMNAWAVE_TOKEN=ваш_jwt_токен_из_панели
+
+# (Опционально) Если панель находится на другом сервере за Cloudflare Access / Zero Trust:
+# CLOUDFLARE_ZERO_TRUST_CLIENT_ID=ef901e38c8f40a4f1eb83fb9a66898e3.access
+# CLOUDFLARE_ZERO_TRUST_CLIENT_SECRET=73ad856d7639e0e77bc757c08a8c95781...
 
 # Привязка правил к сквадам (группам пользователей):
 REMNAWAVE_SQUAD_1_UUID=23c97b42-289d-490a-ad73-bd17ab426657

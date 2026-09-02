@@ -252,13 +252,35 @@ REMNAWAVE_SQUAD_${i}_RULE=${sq_rule}
 "
     done
 
+    local current_cf_id=""
+    local current_cf_secret=""
+    if [ -f "$env_file" ]; then
+        current_cf_id=$(grep "^CLOUDFLARE_ZERO_TRUST_CLIENT_ID=" "$env_file" | cut -d'=' -f2- || true)
+        current_cf_secret=$(grep "^CLOUDFLARE_ZERO_TRUST_CLIENT_SECRET=" "$env_file" | cut -d'=' -f2- || true)
+    fi
+
+    echo -e "\n${CYAN}Опционально: если Remnawave защищена Cloudflare Zero Trust (Service Token):${NC}"
+    read -r -p "CLOUDFLARE_ZERO_TRUST_CLIENT_ID [Enter = ${current_cf_id:-нет}]: " input_cf_id
+    input_cf_id="${input_cf_id:-$current_cf_id}"
+
+    read -r -p "CLOUDFLARE_ZERO_TRUST_CLIENT_SECRET [Enter = ${current_cf_secret:-нет}]: " input_cf_secret
+    input_cf_secret="${input_cf_secret:-$current_cf_secret}"
+
+    local cf_env=""
+    if [ -n "$input_cf_id" ] && [ -n "$input_cf_secret" ]; then
+        cf_env="CLOUDFLARE_ZERO_TRUST_CLIENT_ID=${input_cf_id}
+CLOUDFLARE_ZERO_TRUST_CLIENT_SECRET=${input_cf_secret}
+"
+    fi
+
     # Удаляем старые записи из .env и сохраняем новые
     if [ -f "$env_file" ]; then
         sed -i '/^REMNAWAVE_/d' "$env_file"
+        sed -i '/^CLOUDFLARE_ZERO_TRUST_/d' "$env_file"
         cat >> "$env_file" <<EOF
 REMNAWAVE_BASE_URL=${input_base}
 REMNAWAVE_TOKEN=${input_token}
-${squads_env}
+${cf_env}${squads_env}
 EOF
         echo -e "\n${GREEN}[+] Настройки Remnawave сохранены! Перезапускаем контейнер...${NC}"
         cd "$target_dir"
@@ -510,6 +532,8 @@ install_wizard() {
         prev_tg_thread="$(grep "^TELEGRAM_THREAD_ID=" "$INSTALL_DIR/.env" | cut -d'=' -f2- || echo "$prev_tg_thread")"
         prev_tg_notify="$(grep "^TELEGRAM_NOTIFY_SUCCESS=" "$INSTALL_DIR/.env" | cut -d'=' -f2- || echo "$prev_tg_notify")"
         prev_public_geo="$(grep "^PUBLIC_GEO_BASE_URL=" "$INSTALL_DIR/.env" | cut -d'=' -f2- || echo "$prev_public_geo")"
+        prev_cf_id="$(grep "^CLOUDFLARE_ZERO_TRUST_CLIENT_ID=" "$INSTALL_DIR/.env" | cut -d'=' -f2- || true)"
+        prev_cf_secret="$(grep "^CLOUDFLARE_ZERO_TRUST_CLIENT_SECRET=" "$INSTALL_DIR/.env" | cut -d'=' -f2- || true)"
     fi
 
     # ────────────────────────────────────────────────────────────────────────
@@ -584,6 +608,20 @@ REMNAWAVE_TOKEN=${r_token}
 REMNAWAVE_SQUAD_${i}_RULE=${s_rule}
 "
             done
+
+            echo -e "\n${CYAN}Опционально: если Remnawave защищена Cloudflare Zero Trust (Service Token):${NC}"
+            read -r -p "CLOUDFLARE_ZERO_TRUST_CLIENT_ID [Enter = ${prev_cf_id:-пропустить}]: " r_cf_id
+            r_cf_id="${r_cf_id:-$prev_cf_id}"
+
+            read -r -p "CLOUDFLARE_ZERO_TRUST_CLIENT_SECRET [Enter = ${prev_cf_secret:-пропустить}]: " r_cf_secret
+            r_cf_secret="${r_cf_secret:-$prev_cf_secret}"
+
+            if [ -n "$r_cf_id" ] && [ -n "$r_cf_secret" ]; then
+                REMNA_BLOCK="${REMNA_BLOCK}CLOUDFLARE_ZERO_TRUST_CLIENT_ID=${r_cf_id}
+CLOUDFLARE_ZERO_TRUST_CLIENT_SECRET=${r_cf_secret}
+"
+            fi
+
             echo -e "\n${GREEN}[+] Интеграция с Remnawave настроена.${NC}\n"
         else
             echo -e "${DIM}Пропущено. Вы сможете настроить это позже через меню: geo-server → пункт 4${NC}\n"
@@ -769,6 +807,8 @@ services:
       REMNAWAVE_SQUAD_2_RULE: "\${REMNAWAVE_SQUAD_2_RULE:-}"
       REMNAWAVE_SQUAD_3_UUID: "\${REMNAWAVE_SQUAD_3_UUID:-}"
       REMNAWAVE_SQUAD_3_RULE: "\${REMNAWAVE_SQUAD_3_RULE:-}"
+      CLOUDFLARE_ZERO_TRUST_CLIENT_ID: "\${CLOUDFLARE_ZERO_TRUST_CLIENT_ID:-}"
+      CLOUDFLARE_ZERO_TRUST_CLIENT_SECRET: "\${CLOUDFLARE_ZERO_TRUST_CLIENT_SECRET:-}"
     ports:
       - "\${HTTP_BIND:-127.0.0.1}:\${HTTP_PORT:-${HTTP_PORT}}:80"
     volumes:

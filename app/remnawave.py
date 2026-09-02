@@ -31,6 +31,15 @@ class RemnawaveSync:
             "Authorization": f"Bearer {token}",
             "User-Agent": "geo-routing-server",
         }
+
+        # Поддержка Cloudflare Zero Trust / Cloudflare Access Tunnel
+        cf_id = os.getenv("CLOUDFLARE_ZERO_TRUST_CLIENT_ID", "").strip() or os.getenv("CF_ACCESS_CLIENT_ID", "").strip()
+        cf_secret = os.getenv("CLOUDFLARE_ZERO_TRUST_CLIENT_SECRET", "").strip() or os.getenv("CF_ACCESS_CLIENT_SECRET", "").strip()
+
+        if cf_id and cf_secret:
+            headers["CF-Access-Client-Id"] = cf_id
+            headers["CF-Access-Client-Secret"] = cf_secret
+
         if not base_url.startswith("https://"):
             headers["X-Forwarded-Proto"] = "https"
             headers["X-Forwarded-For"] = "127.0.0.1"
