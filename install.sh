@@ -235,7 +235,9 @@ configure_remnawave() {
     read -r -p "REMNAWAVE_BASE_URL [Enter = ${current_base:-http://remnawave:3000/api}]: " input_base
     input_base="${input_base:-${current_base:-http://remnawave:3000/api}}"
 
-    read -r -p "REMNAWAVE_TOKEN (JWT токен панели) [Enter = оставить]: " input_token
+    local r_token_hint="пропустить"
+    [ -n "$current_token" ] && r_token_hint="оставить текущий"
+    read -r -p "REMNAWAVE_TOKEN (JWT токен панели) [Enter = $r_token_hint]: " input_token
     input_token="${input_token:-$current_token}"
 
     read -r -p "Сколько сквадов хотите привязать? [1-5, Enter = 1]: " count_squads
@@ -413,10 +415,14 @@ configure_telegram() {
     echo -e "Текущий THREAD_ID:  ${CYAN}${current_thread:-не задан (основной чат)}${NC}"
     echo -e "Уведомлять при выходе новых баз: ${CYAN}${current_notify:-false}${NC}\n"
 
-    read -r -p "Введите TELEGRAM_BOT_TOKEN [Enter = оставить текущий]: " input_token
+    local tg_token_hint="пропустить"
+    [ -n "$current_token" ] && tg_token_hint="оставить текущий"
+    read -r -p "Введите TELEGRAM_BOT_TOKEN [Enter = $tg_token_hint]: " input_token
     input_token="${input_token:-$current_token}"
 
-    read -r -p "Введите TELEGRAM_CHAT_ID [Enter = оставить текущий]: " input_chat
+    local tg_chat_hint="пропустить"
+    [ -n "$current_chat" ] && tg_chat_hint="оставить текущий"
+    read -r -p "Введите TELEGRAM_CHAT_ID [Enter = $tg_chat_hint]: " input_chat
     input_chat="${input_chat:-$current_chat}"
 
     read -r -p "Введите TELEGRAM_THREAD_ID (ID темы/топика, если есть) [Enter = ${current_thread:-нет}]: " input_thread
@@ -590,7 +596,9 @@ install_wizard() {
             echo ""
             read -r -p "URL API панели Remnawave [Enter = ${prev_remna_base:-http://remnawave:3000/api}]: " r_base
             r_base="${r_base:-${prev_remna_base:-http://remnawave:3000/api}}"
-            read -r -p "JWT токен администратора [Enter = сохранить текущий]: " r_token
+            local r_token_hint="пропустить"
+            [ -n "$prev_remna_token" ] && r_token_hint="сохранить текущий"
+            read -r -p "JWT токен администратора [Enter = $r_token_hint]: " r_token
             r_token="${r_token:-$prev_remna_token}"
             echo ""
             read -r -p "Сколько сквадов (групп пользователей) привязать? [1-5, Enter = 1]: " r_count
