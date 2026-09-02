@@ -22,24 +22,24 @@ print_header() {
     clear || true
     echo -e "${CYAN}${BOLD}"
     echo "==============================================================================="
-    echo "                      🚀 GEO ROUTING SERVER MANAGER                            "
+    echo "                      * GEO ROUTING SERVER MANAGER                            "
     echo "==============================================================================="
     echo -e "${NC}"
 }
 
 check_root() {
     if [ "$(id -u)" -ne 0 ]; then
-        echo -e "${RED}Ошибка: Запустите скрипт с правами root или через sudo!${NC}"
+        echo -e "${RED}[!] Ошибка: Запустите скрипт с правами root или через sudo!${NC}"
         exit 1
     fi
 }
 
 check_dependencies() {
-    echo -e "${BLUE}🔍 Проверка системных зависимостей...${NC}"
+    echo -e "${BLUE}[*] Проверка системных зависимостей...${NC}"
     
     for cmd in curl openssl; do
         if ! command -v "$cmd" &> /dev/null; then
-            echo -e "${YELLOW}Утилита $cmd не найдена, устанавливаем...${NC}"
+            echo -e "${YELLOW}[!] Утилита $cmd не найдена, устанавливаем...${NC}"
             if command -v apt-get &> /dev/null; then
                 apt-get update -y && apt-get install -y "$cmd"
             elif command -v yum &> /dev/null; then
@@ -51,25 +51,25 @@ check_dependencies() {
     done
 
     if ! command -v docker &> /dev/null; then
-        echo -e "${YELLOW}Docker не установлен! Установить официальный Docker автоматически? [Y/n]${NC}"
+        echo -e "${YELLOW}[!] Docker не установлен! Установить официальный Docker автоматически? [Y/n]${NC}"
         read -r -p "> " install_docker
         install_docker=${install_docker:-Y}
         if [[ "$install_docker" =~ ^[YyДд]$ ]]; then
-            echo -e "${BLUE}Установка Docker...${NC}"
+            echo -e "${BLUE}[*] Установка Docker...${NC}"
             curl -fsSL https://get.docker.com | sh
             systemctl enable --now docker || true
         else
-            echo -e "${RED}Для работы сервера необходим Docker. Прерывание установки.${NC}"
+            echo -e "${RED}[!] Для работы сервера необходим Docker. Прерывание установки.${NC}"
             exit 1
         fi
     fi
 
     if ! docker compose version &> /dev/null; then
-        echo -e "${RED}Ошибка: Плагин 'docker compose' не найден. Обновите Docker.${NC}"
+        echo -e "${RED}[!] Ошибка: Плагин 'docker compose' не найден. Обновите Docker.${NC}"
         exit 1
     fi
 
-    echo -e "${GREEN}✓ Все зависимости готовы к работе.${NC}\n"
+    echo -e "${GREEN}[+] Все зависимости готовы к работе.${NC}\n"
 }
 
 # Поиск существующей установки по Docker или конфигурационным файлам
@@ -138,9 +138,9 @@ EOF
 run_sync_now() {
     local target_dir
     target_dir="$(get_install_dir)"
-    echo -e "${BLUE}🔄 Запуск принудительной синхронизации баз...${NC}"
+    echo -e "${BLUE}[*] Запуск принудительной синхронизации баз...${NC}"
     docker exec -it geo-routing-server run-routing-sync || {
-        echo -e "${RED}Ошибка запуска синхронизации. Проверьте запущен ли контейнер: docker compose ps${NC}"
+        echo -e "${RED}[!] Ошибка запуска синхронизации. Проверьте запущен ли контейнер: docker compose ps${NC}"
     }
     echo ""
     read -r -p "Нажмите Enter для продолжения..."
@@ -149,13 +149,13 @@ run_sync_now() {
 show_links() {
     local target_dir
     target_dir="$(get_install_dir)"
-    echo -e "${GREEN}${BOLD}📋 Публичные ссылки и интеграции:${NC}"
+    echo -e "${GREEN}${BOLD}[i] Публичные ссылки и интеграции:${NC}"
     docker exec -it geo-routing-server python3 -c "
 from app.config import Config
 from app.main import print_summary_banner
 print_summary_banner(Config.get_token())
 " || {
-        echo -e "${YELLOW}Не удалось получить ссылки напрямую из контейнера. Проверьте логи: docker compose logs${NC}"
+        echo -e "${YELLOW}[!] Не удалось получить ссылки напрямую из контейнера. Проверьте логи: docker compose logs${NC}"
     }
     echo ""
     read -r -p "Нажмите Enter для продолжения..."
@@ -177,13 +177,13 @@ show_proxy_snippets() {
     fi
 
     if [ "$clients" = "HAPP_DEEPLINK" ] || [ "$clients" = "HAPP_LOCAL" ]; then
-        echo -e "${GREEN}${BOLD}ℹ️ Режим «Только генератор для Remnawave»: сервер работает локально внутри Docker-сети.${NC}"
+        echo -e "${GREEN}${BOLD}[i] Режим «Только генератор для Remnawave»: сервер работает локально внутри Docker-сети.${NC}"
         echo -e "Настройка внешнего реверс-прокси не требуется, если вы не планируете открывать сервер наружу.\n"
         return 0
     fi
 
     echo -e "${CYAN}${BOLD}===============================================================================${NC}"
-    echo -e "${YELLOW}${BOLD}💡 ГОТОВЫЕ КОНФИГУРАЦИИ ДЛЯ ВАШЕГО РЕВЕРС-ПРОКСИ (HTTPS)${NC}"
+    echo -e "${YELLOW}${BOLD}  ГОТОВЫЕ КОНФИГУРАЦИИ ДЛЯ ВАШЕГО РЕВЕРС-ПРОКСИ (HTTPS)${NC}"
     echo -e "${CYAN}${BOLD}===============================================================================${NC}"
     echo -e "Чтобы ссылки стали доступны по безопасному HTTPS, добавьте один из блоков:\n"
 
@@ -223,7 +223,7 @@ configure_remnawave() {
     local env_file="$target_dir/.env"
 
     print_header
-    echo -e "${BOLD}⚡ Прямая интеграция с Remnawave API (без сторонних сервисов)${NC}\n"
+    echo -e "${BOLD}[>] Прямая интеграция с Remnawave API (без сторонних сервисов)${NC}\n"
 
     local current_base=""
     local current_token=""
@@ -260,10 +260,10 @@ REMNAWAVE_BASE_URL=${input_base}
 REMNAWAVE_TOKEN=${input_token}
 ${squads_env}
 EOF
-        echo -e "\n${GREEN}✓ Настройки Remnawave сохранены! Перезапускаем контейнер...${NC}"
+        echo -e "\n${GREEN}[+] Настройки Remnawave сохранены! Перезапускаем контейнер...${NC}"
         cd "$target_dir"
         docker compose up -d
-        echo -e "${GREEN}✓ Готово! Теперь правила будут отправляться в Remnawave автоматически.${NC}\n"
+        echo -e "${GREEN}[+] Готово! Теперь правила будут отправляться в Remnawave автоматически.${NC}\n"
     fi
     read -r -p "Нажмите Enter для продолжения..."
 }
@@ -271,18 +271,18 @@ EOF
 update_project() {
     local target_dir
     target_dir="$(get_install_dir)"
-    echo -e "${BLUE}🚀 Обновление Docker-образа до последней версии...${NC}"
+    echo -e "${BLUE}[*] Обновление Docker-образа до последней версии...${NC}"
     cd "$target_dir"
     docker compose pull
     docker compose up -d
-    echo -e "${GREEN}✓ Сервер успешно обновлён!${NC}\n"
+    echo -e "${GREEN}[+] Сервер успешно обновлён!${NC}\n"
     read -r -p "Нажмите Enter для продолжения..."
 }
 
 view_logs() {
     local target_dir
     target_dir="$(get_install_dir)"
-    echo -e "${BLUE}📜 Просмотр последних логов (Ctrl+C для выхода):${NC}\n"
+    echo -e "${BLUE}[*] Просмотр последних логов (Ctrl+C для выхода):${NC}\n"
     cd "$target_dir"
     docker compose logs -f --tail 100
 }
@@ -291,9 +291,9 @@ restart_server() {
     local target_dir
     target_dir="$(get_install_dir)"
     cd "$target_dir"
-    echo -e "${YELLOW}Перезапуск контейнера...${NC}"
+    echo -e "${YELLOW}[*] Перезапуск контейнера...${NC}"
     docker compose restart
-    echo -e "${GREEN}✓ Контейнер успешно перезапущен.${NC}\n"
+    echo -e "${GREEN}[+] Контейнер успешно перезапущен.${NC}\n"
     read -r -p "Нажмите Enter для продолжения..."
 }
 
@@ -301,9 +301,9 @@ stop_server() {
     local target_dir
     target_dir="$(get_install_dir)"
     cd "$target_dir"
-    echo -e "${YELLOW}Остановка контейнера...${NC}"
+    echo -e "${YELLOW}[*] Остановка контейнера...${NC}"
     docker compose down
-    echo -e "${GREEN}✓ Контейнер остановлен.${NC}\n"
+    echo -e "${GREEN}[+] Контейнер остановлен.${NC}\n"
     read -r -p "Нажмите Enter для продолжения..."
 }
 
@@ -313,14 +313,14 @@ test_telegram() {
     local thread_id="${3:-}"
 
     if [ -z "$bot_token" ] || [ -z "$chat_id" ]; then
-        echo -e "${RED}Ошибка: Токен бота или Chat ID не заданы!${NC}"
+        echo -e "${RED}[!] Ошибка: Токен бота или Chat ID не заданы!${NC}"
         return 1
     fi
 
-    echo -e "${BLUE}Отправка тестового сообщения в Telegram...${NC}"
+    echo -e "${BLUE}[*] Отправка тестового сообщения в Telegram...${NC}"
     local data_params=(
         -d "chat_id=${chat_id}"
-        -d "text=🔔 <b>[Geo Routing Server]</b> Тестовое уведомление успешно доставлено!"
+        -d "text=<b>[Geo Routing Server]</b> Тестовое уведомление успешно доставлено!"
         -d "parse_mode=HTML"
     )
 
@@ -332,10 +332,10 @@ test_telegram() {
     response=$(curl -s -X POST "https://api.telegram.org/bot${bot_token}/sendMessage" "${data_params[@]}" || true)
     
     if echo "$response" | grep -q '"ok":true'; then
-        echo -e "${GREEN}✓ Тестовое сообщение успешно получено в Telegram!${NC}"
+        echo -e "${GREEN}[+] Тестовое сообщение успешно получено в Telegram!${NC}"
         return 0
     else
-        echo -e "${RED}Ошибка отправки: $response${NC}"
+        echo -e "${RED}[!] Ошибка отправки: $response${NC}"
         return 1
     fi
 }
@@ -346,7 +346,7 @@ configure_telegram() {
     local env_file="$target_dir/.env"
 
     print_header
-    echo -e "${BOLD}🔔 Настройка Telegram-уведомлений${NC}\n"
+    echo -e "${BOLD}[>] Настройка Telegram-уведомлений${NC}\n"
 
     local current_token=""
     local current_chat=""
@@ -397,13 +397,13 @@ TELEGRAM_CHAT_ID=${input_chat}
 TELEGRAM_THREAD_ID=${input_thread}
 TELEGRAM_NOTIFY_SUCCESS=${input_notify}
 EOF
-        echo -e "\n${GREEN}✓ Настройки Telegram сохранены в .env!${NC}"
-        echo -e "${YELLOW}Перезапускаем контейнер для применения настроек...${NC}"
+        echo -e "\n${GREEN}[+] Настройки Telegram сохранены в .env!${NC}"
+        echo -e "${YELLOW}[*] Перезапускаем контейнер для применения настроек...${NC}"
         cd "$target_dir"
         docker compose up -d
-        echo -e "${GREEN}✓ Контейнер перезапущен с новыми параметрами.${NC}\n"
+        echo -e "${GREEN}[+] Контейнер перезапущен с новыми параметрами.${NC}\n"
     else
-        echo -e "${RED}Файл .env не найден в $target_dir${NC}"
+        echo -e "${RED}[!] Файл .env не найден в $target_dir${NC}"
     fi
 
     read -r -p "Нажмите Enter для продолжения..."
@@ -412,7 +412,7 @@ EOF
 uninstall_project() {
     local target_dir
     target_dir="$(get_install_dir)"
-    echo -e "${RED}${BOLD}⚠️ ВНИМАНИЕ: Вы действительно хотите удалить Geo Routing Server? [y/N]${NC}"
+    echo -e "${RED}${BOLD}[!] ВНИМАНИЕ: Вы действительно хотите удалить Geo Routing Server? [y/N]${NC}"
     read -r -p "> " confirm
     if [[ "$confirm" =~ ^[YyДд]$ ]]; then
         cd "$target_dir" || true
@@ -420,7 +420,7 @@ uninstall_project() {
         rm -rf "$target_dir"
         rm -f "$CONFIG_FILE_RECORD"
         rm -f /usr/local/bin/geo-server /usr/bin/geo-server /usr/local/bin/geoserver /usr/bin/geoserver
-        echo -e "${GREEN}✓ Проект полностью удалён с сервера.${NC}"
+        echo -e "${GREEN}[+] Проект полностью удалён с сервера.${NC}"
         exit 0
     else
         echo "Удаление отменено."
@@ -446,7 +446,7 @@ install_wizard() {
     # ────────────────────────────────────────────────────────────────────────
     echo -e "${BOLD}--- [Шаг 1] Каталог установки ---${NC}"
     if [ -n "$existing_detected" ]; then
-        echo -e "${YELLOW}Обнаружена существующая установка в: ${BOLD}$existing_detected${NC}"
+        echo -e "${YELLOW}[i] Обнаружена существующая установка в: ${BOLD}$existing_detected${NC}"
         echo -e "Вы можете обновить конфигурацию в этой же папке или выбрать новую."
     else
         echo -e "Укажите папку для проекта. ${DIM}Подходит любая: /opt/, стеки Arcane, Portainer, Dockge, 1Panel и др.${NC}"
@@ -456,7 +456,7 @@ install_wizard() {
     INSTALL_DIR="${input_dir:-$current_suggested_dir}"
     mkdir -p "$INSTALL_DIR"
     save_install_dir "$INSTALL_DIR"
-    echo -e "${GREEN}✓ Каталог: $INSTALL_DIR${NC}\n"
+    echo -e "${GREEN}[+] Каталог: $INSTALL_DIR${NC}\n"
 
     # Считываем текущие настройки из существующего .env, если он есть
     local prev_domain="geo.example.com"
@@ -472,7 +472,7 @@ install_wizard() {
     local prev_public_geo=""
 
     if [ -f "$INSTALL_DIR/.env" ]; then
-        echo -e "${CYAN}ℹ️ Найден существующий файл .env — текущие значения будут предложены по умолчанию.${NC}\n"
+        echo -e "${CYAN}[i] Найден существующий файл .env — текущие значения будут предложены по умолчанию.${NC}\n"
         prev_domain="$(grep "^DOMAIN=" "$INSTALL_DIR/.env" | cut -d'=' -f2- || echo "$prev_domain")"
         prev_token="$(grep "^ROUTING_TOKEN=" "$INSTALL_DIR/.env" | cut -d'=' -f2- || echo "$prev_token")"
         prev_clients="$(grep "^ENABLED_CLIENTS=" "$INSTALL_DIR/.env" | cut -d'=' -f2- || echo "$prev_clients")"
@@ -508,7 +508,7 @@ install_wizard() {
         3) 
             ENABLED_CLIENTS="HAPP_DEEPLINK"
             NEEDS_PUBLIC_DOMAIN=false
-            echo -e "\n${CYAN}Опционально: если geo-базы раздаются с другого вашего сервера, укажите его URL.${NC}"
+            echo -e "\n${CYAN}[i] Опционально: если geo-базы раздаются с другого вашего сервера, укажите его URL.${NC}"
             echo -e "${DIM}Пример: https://geo-node.example.com/secret_token/HAPP${NC}"
             read -r -p "URL к внешним geo-базам [Enter = ${prev_public_geo:-пропустить}]: " input_geo_url
             PUBLIC_GEO_BASE_URL="${input_geo_url:-$prev_public_geo}"
@@ -517,7 +517,7 @@ install_wizard() {
         5) ENABLED_CLIENTS="HAPP" ;;
         *) ENABLED_CLIENTS="HAPP,INCY" ;;
     esac
-    echo -e "${GREEN}✓ Режим: $ENABLED_CLIENTS${NC}\n"
+    echo -e "${GREEN}[+] Режим: $ENABLED_CLIENTS${NC}\n"
 
     # ────────────────────────────────────────────────────────────────────────
     # ШАГ 3: Интеграция с Remnawave (только если выбран HAPP-модуль)
@@ -558,7 +558,7 @@ REMNAWAVE_TOKEN=${r_token}
 REMNAWAVE_SQUAD_${i}_RULE=${s_rule}
 "
             done
-            echo -e "\n${GREEN}✓ Интеграция с Remnawave настроена.${NC}\n"
+            echo -e "\n${GREEN}[+] Интеграция с Remnawave настроена.${NC}\n"
         else
             echo -e "${DIM}Пропущено. Вы сможете настроить это позже через меню: geo-server → пункт 4${NC}\n"
         fi
@@ -576,7 +576,7 @@ REMNAWAVE_SQUAD_${i}_RULE=${s_rule}
         echo -e "${DIM}Домен, на который вы направите реверс-прокси (Caddy / Nginx / NPM).${NC}"
         read -r -p "Введите домен [Enter = ${prev_domain:-geo.example.com}]: " input_domain
         DOMAIN="${input_domain:-${prev_domain:-geo.example.com}}"
-        echo -e "${GREEN}✓ Домен: $DOMAIN${NC}\n"
+        echo -e "${GREEN}[+] Домен: $DOMAIN${NC}\n"
 
         # ШАГ 5: Токен
         echo -e "${BOLD}--- [Шаг 5] Секретный URL-токен ---${NC}"
@@ -594,16 +594,16 @@ REMNAWAVE_SQUAD_${i}_RULE=${s_rule}
         
         read -r -p "Введите свой или нажмите Enter для подтверждения: " input_token
         ROUTING_TOKEN="${input_token:-$auto_token}"
-        echo -e "${GREEN}✓ Токен сохранён.${NC}\n"
+        echo -e "${GREEN}[+] Токен сохранён.${NC}\n"
 
         # ШАГ 6: Порт
         echo -e "${BOLD}--- [Шаг 6] Локальный порт ---${NC}"
         echo -e "${DIM}На этот порт ваш реверс-прокси будет перенаправлять трафик.${NC}"
         read -r -p "Порт [Enter = ${prev_port:-8080}]: " input_port
         HTTP_PORT="${input_port:-${prev_port:-8080}}"
-        echo -e "${GREEN}✓ Порт: $HTTP_PORT${NC}\n"
+        echo -e "${GREEN}[+] Порт: $HTTP_PORT${NC}\n"
     else
-        echo -e "${DIM}ℹ️ Шаги «Домен», «Токен» и «Порт» пропущены — в локальном режиме они не нужны.${NC}\n"
+        echo -e "${DIM}[i] Шаги «Домен», «Токен» и «Порт» пропущены — в локальном режиме они не нужны.${NC}\n"
     fi
 
     # ────────────────────────────────────────────────────────────────────────
@@ -624,10 +624,10 @@ REMNAWAVE_SQUAD_${i}_RULE=${s_rule}
             read -r -p "Имя сети [Enter = remnawave-network]: " input_net
             EXT_NETWORK="${input_net:-remnawave-network}"
             if ! docker network inspect "$EXT_NETWORK" &>/dev/null; then
-                echo -e "${YELLOW}Сеть $EXT_NETWORK не найдена. Создаём...${NC}"
+                echo -e "${YELLOW}[*] Сеть $EXT_NETWORK не найдена. Создаём...${NC}"
                 docker network create "$EXT_NETWORK" || true
             fi
-            echo -e "${GREEN}✓ Сеть: $EXT_NETWORK${NC}\n"
+            echo -e "${GREEN}[+] Сеть: $EXT_NETWORK${NC}\n"
         else
             echo -e "${DIM}Пропущено. Используется стандартная изолированная сеть.${NC}\n"
         fi
@@ -672,12 +672,12 @@ REMNAWAVE_SQUAD_${i}_RULE=${s_rule}
             test_telegram "$TG_BOT_TOKEN" "$TG_CHAT_ID" "$TG_THREAD_ID" || true
         fi
     fi
-    echo -e "${GREEN}✓ Telegram настроен.${NC}\n"
+    echo -e "${GREEN}[+] Telegram настроен.${NC}\n"
 
     # ────────────────────────────────────────────────────────────────────────
     # ГЕНЕРАЦИЯ КОНФИГУРАЦИИ
     # ────────────────────────────────────────────────────────────────────────
-    echo -e "${BLUE}📦 Создание файлов конфигурации...${NC}"
+    echo -e "${BLUE}[*] Создание файлов конфигурации...${NC}"
 
     # Создаём резервную копию старого .env при переконфигурации
     if [ -f "$INSTALL_DIR/.env" ]; then
@@ -770,12 +770,12 @@ EOF
     chmod +x "$INSTALL_DIR/install.sh" 2>/dev/null || true
     create_cli_shortcut "$INSTALL_DIR"
 
-    echo -e "${BLUE}🚀 Запуск контейнера Geo Routing Server...${NC}"
+    echo -e "${BLUE}[*] Запуск контейнера Geo Routing Server...${NC}"
     cd "$INSTALL_DIR"
     docker compose up -d
 
     echo -e "\n${GREEN}${BOLD}===============================================================================${NC}"
-    echo -e "${GREEN}${BOLD}🎉 НАСТРОЙКА УСПЕШНО ЗАВЕРШЕНА!${NC}"
+    echo -e "${GREEN}${BOLD}  НАСТРОЙКА УСПЕШНО ЗАВЕРШЕНА!${NC}"
     echo -e "${GREEN}${BOLD}===============================================================================${NC}"
     echo -e "Каталог проекта: ${CYAN}${INSTALL_DIR}${NC}"
     echo -e "Быстрый вызов меню в терминале: команда ${CYAN}${BOLD}geo-server${NC} (или ${CYAN}${BOLD}geoserver${NC})\n"
@@ -798,24 +798,24 @@ main_menu() {
         echo -e "Каталог проекта: ${CYAN}$target_dir${NC}"
         
         if docker ps --format '{{.Names}}' | grep -q "^geo-routing-server$"; then
-            echo -e "Статус контейнера: ${GREEN}● Запущен и активен${NC}\n"
+            echo -e "Статус контейнера: ${GREEN}[+] Запущен и активен${NC}\n"
         else
-            echo -e "Статус контейнера: ${RED}○ Остановлен или не существует${NC}\n"
+            echo -e "Статус контейнера: ${RED}[-] Остановлен или не существует${NC}\n"
         fi
 
         echo -e "${BOLD}Выберите действие:${NC}"
-        echo "1) 🔄 Синхронизировать базы прямо сейчас"
-        echo "2) 📋 Показать публичные ссылки и заголовок autorouting"
-        echo "3) 🌐 Показать готовые конфиги для Caddy / Nginx / NPM"
-        echo "4) ⚡ Настроить прямую синхронизацию с Remnawave API"
-        echo "5) 🔔 Настроить / Изменить Telegram-уведомления"
-        echo "6) 🛠️ Перенастроить сервер заново (мастер установки)"
-        echo "7) 🚀 Обновить сервер до последней версии"
-        echo "8) 📜 Посмотреть логи контейнера"
-        echo "9) ♻️ Перезапустить сервер"
-        echo "10) 🛑 Остановить сервер"
-        echo "11) 🗑️ Удалить проект с сервера"
-        echo "0) 🚪 Выход"
+        printf " %-4s %s\n" "1)"  "Синхронизировать базы прямо сейчас"
+        printf " %-4s %s\n" "2)"  "Показать публичные ссылки и заголовок autorouting"
+        printf " %-4s %s\n" "3)"  "Показать готовые конфиги для Caddy / Nginx / NPM"
+        printf " %-4s %s\n" "4)"  "Настроить прямую синхронизацию с Remnawave API"
+        printf " %-4s %s\n" "5)"  "Настроить / Изменить Telegram-уведомления"
+        printf " %-4s %s\n" "6)"  "Перенастроить сервер заново (мастер установки)"
+        printf " %-4s %s\n" "7)"  "Обновить сервер до последней версии"
+        printf " %-4s %s\n" "8)"  "Посмотреть логи контейнера"
+        printf " %-4s %s\n" "9)"  "Перезапустить сервер"
+        printf " %-4s %s\n" "10)" "Остановить сервер"
+        printf " %-4s %s\n" "11)" "Удалить проект с сервера"
+        printf " %-4s %s\n" "0)"  "Выход"
         echo ""
         read -r -p "Введите номер [0-11]: " menu_choice
 
@@ -832,7 +832,7 @@ main_menu() {
             10) stop_server ;;
             11) uninstall_project ;;
             0) exit 0 ;;
-            *) echo -e "${RED}Неверный пункт меню${NC}"; sleep 1 ;;
+            *) echo -e "${RED}[!] Неверный пункт меню${NC}"; sleep 1 ;;
         esac
     done
 }
