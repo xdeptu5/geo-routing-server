@@ -36,7 +36,6 @@ check_root() {
 check_dependencies() {
     echo -e "${BLUE}🔍 Проверка системных зависимостей...${NC}"
     
-    # Проверка curl и openssl
     for cmd in curl openssl; do
         if ! command -v "$cmd" &> /dev/null; then
             echo -e "${YELLOW}Утилита $cmd не найдена, устанавливаем...${NC}"
@@ -50,7 +49,6 @@ check_dependencies() {
         fi
     done
 
-    # Проверка Docker
     if ! command -v docker &> /dev/null; then
         echo -e "${YELLOW}Docker не установлен! Установить официальный Docker автоматически? [Y/n]${NC}"
         read -r -p "> " install_docker
@@ -65,7 +63,6 @@ check_dependencies() {
         fi
     fi
 
-    # Проверка Docker Compose
     if ! docker compose version &> /dev/null; then
         echo -e "${RED}Ошибка: Плагин 'docker compose' не найден. Обновите Docker.${NC}"
         exit 1
@@ -96,7 +93,6 @@ bash "$target_dir/install.sh" "\$@"
 EOF
     chmod +x "$wrapper_script"
     
-    # Дополнительные симлинки для гарантированного доступа из любой оболочки
     ln -sf "$wrapper_script" /usr/bin/geo-server 2>/dev/null || true
     ln -sf "$wrapper_script" /usr/local/bin/geoserver 2>/dev/null || true
     ln -sf "$wrapper_script" /usr/bin/geoserver 2>/dev/null || true
@@ -143,7 +139,6 @@ show_proxy_snippets() {
         clients=$(grep "^ENABLED_CLIENTS=" "$env_file" | cut -d'=' -f2- || echo "HAPP,INCY")
     fi
 
-    # Если включен только локальный генератор Remnawave, прокси настраивать не обязательно
     if [ "$clients" = "HAPP_DEEPLINK" ] || [ "$clients" = "HAPP_LOCAL" ]; then
         echo -e "${GREEN}${BOLD}ℹ️ Режим «Только генератор для Remnawave»: сервер работает локально внутри Docker-сети.${NC}"
         echo -e "Настройка внешнего реверс-прокси не требуется, если вы не планируете открывать сервер наружу.\n"
@@ -183,6 +178,57 @@ show_proxy_snippets() {
     echo -e "Forward Port:          ${BOLD}${port}${NC}"
     echo -e "SSL:                   ${BOLD}Request a new SSL Certificate (Force SSL: ON)${NC}"
     echo -e "${CYAN}===============================================================================${NC}\n"
+}
+
+configure_remnawave() {
+    local target_dir
+    target_dir="$(get_install_dir)"
+    local env_file="$target_dir/.env"
+
+    print_header
+    echo -e "${BOLD}⚡ Прямая интеграция с Remnawave API (без сторонних сервисов)${NC}\n"
+
+    local current_base=""
+    local current_token=""
+    if [ -f "$env_file" ]; then
+        current_base=$(grep "^REMNAWAVE_BASE_URL=" "$env_file" | cut -d'=' -f2- || true)
+        current_token=$(grep "^REMNAWAVE_TOKEN=" "$env_file" | cut -d'=' -f2- || true)
+    fi
+
+    read -r -p "REMNAWAVE_BASE_URL [Enter = ${current_base:-http://remnawave:3000/api}]: " input_base
+    input_base="${input_base:-${current_base:-http://remnawave:3000/api}}"
+
+    read -r -p "REMNAWAVE_TOKEN (JWT токен панели) [Enter = оставить]: " input_token
+    input_token="${input_token:-$current_token}"
+
+    read -r -p "Сколько сквадов хотите привязать? [1-5, Enter = 1]: " count_squads
+    count_squads="${count_squads:-1}"
+
+    local squads_env=""
+    for ((i=1; i<=count_squads; i++)); do
+        echo -e "\n${CYAN}--- Настройка Сквада #$i ---${NC}"
+        read -r -p "UUID сквада $i: " sq_uuid
+        read -r -p "Правило для сквада $i [Enter = JSONSUB.JSON]: " sq_rule
+        sq_rule="${sq_rule:-JSONSUB.JSON}"
+        squads_env="${squads_env}REMNAWAVE_SQUAD_${i}_UUID=${sq_uuid}
+REMNAWAVE_SQUAD_${i}_RULE=${sq_rule}
+"
+    done
+
+    # Удаляем старые записи из .env и сохраняем новые
+    if [ -f "$env_file" ]; then
+        sed -i '/^REMNAWAVE_/d' "$env_file"
+        cat >> "$env_file" <<EOF
+REMNAWAVE_BASE_URL=${input_base}
+REMNAWAVE_TOKEN=${input_token}
+${squads_env}
+EOF
+        echo -e "\n${GREEN}✓ Настройки Remnawave сохранены! Перезапускаем контейнер...${NC}"
+        cd "$target_dir"
+        docker compose up -d
+        echo -e "${GREEN}✓ Готово! Теперь правила будут отправляться в Remnawave автоматически.${NC}\n"
+    fi
+    read -r -p "Нажмите Enter для продолжения..."
 }
 
 update_project() {
@@ -302,7 +348,6 @@ configure_telegram() {
         test_telegram "$input_token" "$input_chat" "$input_thread" || true
     fi
 
-    # Обновляем .env файл
     if [ -f "$env_file" ]; then
         sed -i '/^TELEGRAM_BOT_TOKEN=/d' "$env_file"
         sed -i '/^TELEGRAM_CHAT_ID=/d' "$env_file"
@@ -383,6 +428,34 @@ install_wizard() {
     esac
     echo -e "${GREEN}✓ Режим: $ENABLED_CLIENTS${NC}\n"
 
+    # Прямая интеграция с Remnawave
+    REMNA_BLOCK=""
+    if [[ "$ENABLED_CLIENTS" =~ HAPP ]]; then
+        echo -e "${BOLD}--- Настройка интеграции с Remnawave API ---${NC}"
+        read -r -p "Настроить прямую автосинхронизацию с Remnawave API (без сторонних апдейтеров)? [y/N]: " remna_choice
+        if [[ "$remna_choice" =~ ^[YyДд]$ ]]; then
+            read -r -p "REMNAWAVE_BASE_URL [Enter = http://remnawave:3000/api]: " r_base
+            r_base="${r_base:-http://remnawave:3000/api}"
+            read -r -p "REMNAWAVE_TOKEN (JWT токен панели): " r_token
+            read -r -p "Количество сквадов для привязки [1-5, Enter = 1]: " r_count
+            r_count="${r_count:-1}"
+            
+            REMNA_BLOCK="REMNAWAVE_BASE_URL=${r_base}
+REMNAWAVE_TOKEN=${r_token}
+"
+            for ((i=1; i<=r_count; i++)); do
+                echo -e "${CYAN}Сквад #$i:${NC}"
+                read -r -p "  UUID сквада $i: " s_uuid
+                read -r -p "  Правило для сквада $i [Enter = JSONSUB.JSON]: " s_rule
+                s_rule="${s_rule:-JSONSUB.JSON}"
+                REMNA_BLOCK="${REMNA_BLOCK}REMNAWAVE_SQUAD_${i}_UUID=${s_uuid}
+REMNAWAVE_SQUAD_${i}_RULE=${s_rule}
+"
+            done
+            echo -e "${GREEN}✓ Интеграция с Remnawave настроена.${NC}\n"
+        fi
+    fi
+
     echo -e "${BOLD}--- [3/7] Настройка публичного домена ---${NC}"
     read -r -p "Введите домен для HTTPS (например, geo.example.com): " input_domain
     DOMAIN="${input_domain:-geo.example.com}"
@@ -438,12 +511,12 @@ install_wizard() {
 
     echo -e "${BLUE}📦 Создание файлов конфигурации...${NC}"
 
-    # Создание .env
     cat > "$INSTALL_DIR/.env" <<EOF
 DOMAIN=${DOMAIN}
 ROUTING_TOKEN=${ROUTING_TOKEN}
 ENABLED_CLIENTS=${ENABLED_CLIENTS}
 PUBLIC_GEO_BASE_URL=${PUBLIC_GEO_BASE_URL}
+${REMNA_BLOCK}
 HTTP_BIND=127.0.0.1
 HTTP_PORT=${HTTP_PORT}
 SCHEDULE=40 8 * * *
@@ -454,7 +527,6 @@ TELEGRAM_THREAD_ID=${TG_THREAD_ID}
 TELEGRAM_NOTIFY_SUCCESS=${TG_NOTIFY_SUCCESS}
 EOF
 
-    # Формирование compose.yaml с учетом внешней сети
     local networks_block=""
     local top_networks_block=""
 
@@ -488,6 +560,15 @@ services:
       TELEGRAM_CHAT_ID: "\${TELEGRAM_CHAT_ID:-}"
       TELEGRAM_THREAD_ID: "\${TELEGRAM_THREAD_ID:-}"
       TELEGRAM_NOTIFY_SUCCESS: "\${TELEGRAM_NOTIFY_SUCCESS:-false}"
+      REMNAWAVE_BASE_URL: "\${REMNAWAVE_BASE_URL:-}"
+      REMNAWAVE_TOKEN: "\${REMNAWAVE_TOKEN:-}"
+      REMNAWAVE_GLOBAL_RULE: "\${REMNAWAVE_GLOBAL_RULE:-}"
+      REMNAWAVE_SQUAD_1_UUID: "\${REMNAWAVE_SQUAD_1_UUID:-}"
+      REMNAWAVE_SQUAD_1_RULE: "\${REMNAWAVE_SQUAD_1_RULE:-}"
+      REMNAWAVE_SQUAD_2_UUID: "\${REMNAWAVE_SQUAD_2_UUID:-}"
+      REMNAWAVE_SQUAD_2_RULE: "\${REMNAWAVE_SQUAD_2_RULE:-}"
+      REMNAWAVE_SQUAD_3_UUID: "\${REMNAWAVE_SQUAD_3_UUID:-}"
+      REMNAWAVE_SQUAD_3_RULE: "\${REMNAWAVE_SQUAD_3_RULE:-}"
     ports:
       - "\${HTTP_BIND:-127.0.0.1}:\${HTTP_PORT:-${HTTP_PORT}}:80"
     volumes:
@@ -511,7 +592,6 @@ EOF
     mkdir -p "$INSTALL_DIR/custom_geo"
     touch "$INSTALL_DIR/custom_geo/.gitkeep"
 
-    # Копируем сам скрипт в каталог для последующего вызова
     cp "$0" "$INSTALL_DIR/install.sh" 2>/dev/null || true
     chmod +x "$INSTALL_DIR/install.sh" 2>/dev/null || true
     create_cli_shortcut "$INSTALL_DIR"
@@ -537,7 +617,6 @@ main_menu() {
         target_dir="$(get_install_dir)"
         echo -e "Каталог проекта: ${CYAN}$target_dir${NC}"
         
-        # Проверка статуса контейнера
         if docker ps --format '{{.Names}}' | grep -q "^geo-routing-server$"; then
             echo -e "Статус контейнера: ${GREEN}● Запущен и активен${NC}\n"
         else
@@ -548,33 +627,34 @@ main_menu() {
         echo "1) 🔄 Синхронизировать базы прямо сейчас"
         echo "2) 📋 Показать публичные ссылки и заголовок autorouting"
         echo "3) 🌐 Показать готовые конфиги для Caddy / Nginx / NPM"
-        echo "4) 🔔 Настроить / Изменить Telegram-уведомления (с тестом темы/топика)"
-        echo "5) 🚀 Обновить сервер до последней версии"
-        echo "6) 📜 Посмотреть логи контейнера"
-        echo "7) 🔄 Перезапустить сервер"
-        echo "8) 🛑 Остановить сервер"
-        echo "9) 🗑️ Удалить проект с сервера"
+        echo "4) ⚡ Настроить прямую синхронизацию с Remnawave API"
+        echo "5) 🔔 Настроить / Изменить Telegram-уведомления (с тестом темы/топика)"
+        echo "6) 🚀 Обновить сервер до последней версии"
+        echo "7) 📜 Посмотреть логи контейнера"
+        echo "8) 🔄 Перезапустить сервер"
+        echo "9) 🛑 Остановить сервер"
+        echo "10) 🗑️ Удалить проект с сервера"
         echo "0) 🚪 Выход"
         echo ""
-        read -r -p "Введите номер [0-9]: " menu_choice
+        read -r -p "Введите номер [0-10]: " menu_choice
 
         case "$menu_choice" in
             1) run_sync_now ;;
             2) show_links ;;
             3) show_proxy_snippets; read -r -p "Нажмите Enter для возврата в меню..." ;;
-            4) configure_telegram ;;
-            5) update_project ;;
-            6) view_logs ;;
-            7) restart_server ;;
-            8) stop_server ;;
-            9) uninstall_project ;;
+            4) configure_remnawave ;;
+            5) configure_telegram ;;
+            6) update_project ;;
+            7) view_logs ;;
+            8) restart_server ;;
+            9) stop_server ;;
+            10) uninstall_project ;;
             0) exit 0 ;;
             *) echo -e "${RED}Неверный пункт меню${NC}"; sleep 1 ;;
         esac
     done
 }
 
-# Точка входа: если проект уже установлен, открываем меню, иначе мастер установки
 main() {
     local target_dir
     target_dir="$(get_install_dir)"

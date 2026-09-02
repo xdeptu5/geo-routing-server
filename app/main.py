@@ -24,6 +24,7 @@ from app.notifier import TelegramNotifier
 from app.processors.happ import HappProcessor
 from app.processors.incy import IncyProcessor
 from app.publisher import Publisher
+from app.remnawave import RemnawaveSync
 
 def setup_logging():
     logging.basicConfig(
@@ -75,8 +76,10 @@ def print_summary_banner(token: str):
     
     if happ_geo or happ_deeplink:
         happ_lines = ["[HAPP]"]
-        if happ_deeplink:
-            happ_lines.append(f"""  - Локальные ссылки в сети Docker (для remnawave-routing-update):
+        if RemnawaveSync.is_configured():
+            happ_lines.append("  - Прямая интеграция с Remnawave API: АКТИВНА (автопатч сквадов без сторонних сервисов)")
+        elif happ_deeplink:
+            happ_lines.append(f"""  - Локальные ссылки в сети Docker (для прямого скачивания диплинков):
       SQUAD URL: http://geo-routing-server/HAPP/JSONSUB.DEEPLINK
                  http://geo-routing-server/HAPP/WHITELIST.DEEPLINK""")
         if happ_geo:
@@ -161,6 +164,10 @@ def main():
         
     # Создаем симлинки для локальных сервисов в Docker
     ensure_internal_symlinks(Config.STORAGE_DIR, token)
+    
+    # Прямая нативная синхронизация с Remnawave API (если настроена)
+    if RemnawaveSync.is_configured():
+        RemnawaveSync.sync(token)
     
     logger.info("Synchronization completed successfully.")
     print_summary_banner(token)

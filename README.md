@@ -263,18 +263,26 @@ server {
 
 ---
 
-### 2. Для клиентов HAPP / Remnawave Squads (через [Remnawave-Routing-update](https://github.com/lifeindarkside/Remnawave-Routing-update))
-Если на сервере с панелью Remnawave вы используете проект [lifeindarkside/Remnawave-Routing-update](https://github.com/lifeindarkside/Remnawave-Routing-update) для автоматического обновления правил в сквадах Remnawave:
+### 2. Для клиентов HAPP / Remnawave Squads (Нативная интеграция с Remnawave API)
+Вам больше **не нужны сторонние контейнеры-апдейтеры**! `geo-routing-server` умеет напрямую отправлять свежие правила в API Remnawave в ту же секунду, когда они обновляются.
 
-1. Подключите `geo-routing-server` к вашей внешней сети `remnawave-network` (в `compose.yaml`).
-2. В файле `.env` сервиса `remnawave-routing-update` укажите локальные ссылки на сгенерированные `.DEEPLINK` файлы для ваших сквадов:
+1. Подключите `geo-routing-server` к вашей сети `remnawave-network` (в `compose.yaml`).
+2. В файле `.env` укажите URL вашей панели, токен и UUID ваших сквадов:
    ```env
-   # Локальные ссылки внутри сети remnawave-network (без токена):
-   SQUAD_1_URL=http://geo-routing-server/HAPP/JSONSUB.DEEPLINK
-   SQUAD_2_URL=http://geo-routing-server/HAPP/WHITELIST.DEEPLINK
-   SQUAD_3_URL=http://geo-routing-server/HAPP/JSONSUB.DEEPLINK
+   REMNAWAVE_BASE_URL=http://remnawave:3000/api
+   REMNAWAVE_TOKEN=ваш_jwt_токен_из_панели
+
+   # Привязка правил к сквадам Remnawave:
+   REMNAWAVE_SQUAD_1_UUID=23c97b42-289d-490a-ad73-bd17ab426657
+   REMNAWAVE_SQUAD_1_RULE=JSONSUB.JSON
+
+   REMNAWAVE_SQUAD_2_UUID=aae87204-e36a-41cb-8f7c-485742bf556c
+   REMNAWAVE_SQUAD_2_RULE=WHITELIST.JSON
    ```
-*(Сервис `geo-routing-server` автоматически подменяет в этих правилах ссылки на ваши локальные geo-базы и генерирует готовые `happ://routing/onadd/...` диплинки).*
+*(Сервис автоматически генерирует диплинки, подменяет гео-базы и мгновенно патчит заголовки сквадов в Remnawave при выходе обновлений).*
+
+> **Альтернатива:** Если вы по-прежнему используете сторонний проект [lifeindarkside/Remnawave-Routing-update](https://github.com/lifeindarkside/Remnawave-Routing-update), вы можете направлять его на локальные ссылки:
+> `SQUAD_1_URL=http://geo-routing-server/HAPP/JSONSUB.DEEPLINK`
 
 ---
 
