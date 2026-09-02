@@ -1,0 +1,40 @@
+name: Tests
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  test:
+    name: Python unit tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run tests
+        run: python -m pytest tests/ -v --tb=short
+
+      - name: Verify Python syntax (all app modules)
+        run: |
+          python -m py_compile app/config.py
+          python -m py_compile app/downloader.py
+          python -m py_compile app/notifier.py
+          python -m py_compile app/publisher.py
+          python -m py_compile app/remnawave.py
+          python -m py_compile app/main.py
+          python -m py_compile app/processors/base.py
+          python -m py_compile app/processors/happ.py
+          python -m py_compile app/processors/incy.py
+          echo "[+] All Python syntax checks passed."
+
+      - name: Verify Bash syntax (install.sh)
+        run: bash -n install.sh && echo "[+] install.sh syntax OK"
