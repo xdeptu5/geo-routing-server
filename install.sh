@@ -1206,6 +1206,19 @@ main_menu() {
 }
 
 main() {
+    case "${1:-}" in
+        --help|-h|help)
+            echo "Usage: geo-server [command]"
+            echo "Commands:"
+            echo "  menu          Open management menu"
+            echo "  install       Run installer wizard"
+            echo "  uninstall     Uninstall project and remove all data"
+            echo "  logs          View container logs"
+            echo "  sync          Force run routing sync"
+            exit 0
+            ;;
+    esac
+
     detect_or_ask_language "$@"
 
     case "${1:-}" in
@@ -1227,16 +1240,6 @@ main() {
             ;;
         --sync|-s|sync)
             run_sync_now
-            exit 0
-            ;;
-        --help|-h|help)
-            echo "Usage: geo-server [command]"
-            echo "Commands:"
-            echo "  menu          Open management menu"
-            echo "  install       Run installer wizard"
-            echo "  uninstall     Uninstall project and remove all data"
-            echo "  logs          View container logs"
-            echo "  sync          Force run routing sync"
             exit 0
             ;;
     esac
@@ -1277,4 +1280,6 @@ main() {
     fi
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
+fi
