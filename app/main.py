@@ -77,10 +77,27 @@ def print_summary_banner(token: str):
         happ_lines = ["[HAPP]"]
         if RemnawaveSync.is_configured():
             happ_lines.append("  - Прямая интеграция с Remnawave API: АКТИВНА (автопатч сквадов без сторонних сервисов)")
+            try:
+                squads = RemnawaveSync.load_squad_configs()
+                for sq in squads:
+                    happ_lines.append(f"      Сквад {sq.squad_uuid} -> {sq.rule_name}")
+            except Exception:
+                pass
         elif happ_deeplink:
-            happ_lines.append(f"""  - Локальные ссылки в сети Docker (для прямого скачивания диплинков):
-      SQUAD URL: http://geo-routing-server/HAPP/JSONSUB.DEEPLINK
-                 http://geo-routing-server/HAPP/WHITELIST.DEEPLINK""")
+            remna_base = os.getenv("REMNAWAVE_BASE_URL", "").strip()
+            remna_token = os.getenv("REMNAWAVE_TOKEN", "").strip()
+            if remna_base and not remna_token:
+                happ_lines.append("  [!] Remnawave API: указан URL, но отсутствует REMNAWAVE_TOKEN")
+                happ_lines.append("      Автопатч не активен. Введите токен через команду: geoserver -> пункт 4")
+
+            happ_dir = Config.STORAGE_DIR / token / "HAPP"
+            deeplink_files = [f.name for f in sorted(happ_dir.glob("*.DEEPLINK"))] if happ_dir.is_dir() else []
+            if not deeplink_files:
+                deeplink_files = ["JSONSUB.DEEPLINK"]
+
+            happ_lines.append("  - Ссылки на диплинки в сети Docker:")
+            for df in deeplink_files:
+                happ_lines.append(f"      SQUAD URL: http://geo-routing-server/HAPP/{df}")
         if happ_geo:
             happ_lines.append(f"""  - Публичные HTTPS ссылки на базы (для клиентов с токеном):
       GeoIP:     {base_url}/HAPP/geoip.dat
