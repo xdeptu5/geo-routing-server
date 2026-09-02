@@ -72,9 +72,45 @@ check_dependencies() {
     echo -e "${GREEN}✓ Все зависимости готовы к работе.${NC}\n"
 }
 
-get_install_dir() {
+# Поиск существующей установки по Docker или конфигурационным файлам
+detect_existing_dir() {
     if [ -f "$CONFIG_FILE_RECORD" ]; then
-        cat "$CONFIG_FILE_RECORD"
+        local saved_dir
+        saved_dir="$(cat "$CONFIG_FILE_RECORD" | tr -d '[:space:]')"
+        if [ -n "$saved_dir" ] && [ -d "$saved_dir" ] && [ -f "$saved_dir/compose.yaml" ]; then
+            echo "$saved_dir"
+            return
+        fi
+    fi
+
+    # Проверяем, запущен ли контейнер в Docker и где лежит его compose
+    if command -v docker &>/dev/null; then
+        local docker_workdir
+        docker_workdir="$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}' geo-routing-server 2>/dev/null || true)"
+        if [ -n "$docker_workdir" ] && [ -d "$docker_workdir" ] && [ -f "$docker_workdir/compose.yaml" ]; then
+            save_install_dir "$docker_workdir"
+            echo "$docker_workdir"
+            return
+        fi
+    fi
+
+    # Проверяем стандартную папку
+    if [ -f "/opt/geo-routing-server/compose.yaml" ]; then
+        save_install_dir "/opt/geo-routing-server"
+        echo "/opt/geo-routing-server"
+        return
+    fi
+
+    echo ""
+}
+
+get_install_dir() {
+    local detected
+    detected="$(detect_existing_dir)"
+    if [ -n "$detected" ]; then
+        echo "$detected"
+    elif [ -f "$CONFIG_FILE_RECORD" ]; then
+        cat "$CONFIG_FILE_RECORD" | tr -d '[:space:]'
     else
         echo "/opt/geo-routing-server"
     fi
@@ -393,7 +429,7 @@ uninstall_project() {
 }
 
 # ==============================================================================
-# МАСТЕР УСТАНОВКИ
+# МАСТЕР УСТАНОВКИ / ПЕРЕКОНФИГУРАЦИИ
 # ==============================================================================
 
 install_wizard() {
@@ -401,16 +437,54 @@ install_wizard() {
     check_root
     check_dependencies
 
+    local existing_detected
+    existing_detected="$(detect_existing_dir)"
+    local current_suggested_dir="${existing_detected:-/opt/geo-routing-server}"
+
     # ────────────────────────────────────────────────────────────────────────
     # ШАГ 1: Каталог установки
     # ────────────────────────────────────────────────────────────────────────
     echo -e "${BOLD}--- [Шаг 1] Каталог установки ---${NC}"
-    echo -e "Укажите папку для проекта. ${DIM}Подходит любая: /opt/, стеки Arcane, Portainer, Dockge, 1Panel и др.${NC}"
-    read -r -p "Каталог [Enter = /opt/geo-routing-server]: " input_dir
-    INSTALL_DIR="${input_dir:-/opt/geo-routing-server}"
+    if [ -n "$existing_detected" ]; then
+        echo -e "${YELLOW}Обнаружена существующая установка в: ${BOLD}$existing_detected${NC}"
+        echo -e "Вы можете обновить конфигурацию в этой же папке или выбрать новую."
+    else
+        echo -e "Укажите папку для проекта. ${DIM}Подходит любая: /opt/, стеки Arcane, Portainer, Dockge, 1Panel и др.${NC}"
+    fi
+    
+    read -r -p "Каталог [Enter = $current_suggested_dir]: " input_dir
+    INSTALL_DIR="${input_dir:-$current_suggested_dir}"
     mkdir -p "$INSTALL_DIR"
     save_install_dir "$INSTALL_DIR"
     echo -e "${GREEN}✓ Каталог: $INSTALL_DIR${NC}\n"
+
+    # Считываем текущие настройки из существующего .env, если он есть
+    local prev_domain="geo.example.com"
+    local prev_token=""
+    local prev_clients="HAPP,INCY"
+    local prev_port="8080"
+    local prev_remna_base="http://remnawave:3000/api"
+    local prev_remna_token=""
+    local prev_tg_token=""
+    local prev_tg_chat=""
+    local prev_tg_thread=""
+    local prev_tg_notify="false"
+    local prev_public_geo=""
+
+    if [ -f "$INSTALL_DIR/.env" ]; then
+        echo -e "${CYAN}ℹ️ Найден существующий файл .env — текущие значения будут предложены по умолчанию.${NC}\n"
+        prev_domain="$(grep "^DOMAIN=" "$INSTALL_DIR/.env" | cut -d'=' -f2- || echo "$prev_domain")"
+        prev_token="$(grep "^ROUTING_TOKEN=" "$INSTALL_DIR/.env" | cut -d'=' -f2- || echo "$prev_token")"
+        prev_clients="$(grep "^ENABLED_CLIENTS=" "$INSTALL_DIR/.env" | cut -d'=' -f2- || echo "$prev_clients")"
+        prev_port="$(grep "^HTTP_PORT=" "$INSTALL_DIR/.env" | cut -d'=' -f2- || echo "$prev_port")"
+        prev_remna_base="$(grep "^REMNAWAVE_BASE_URL=" "$INSTALL_DIR/.env" | cut -d'=' -f2- || echo "$prev_remna_base")"
+        prev_remna_token="$(grep "^REMNAWAVE_TOKEN=" "$INSTALL_DIR/.env" | cut -d'=' -f2- || echo "$prev_remna_token")"
+        prev_tg_token="$(grep "^TELEGRAM_BOT_TOKEN=" "$INSTALL_DIR/.env" | cut -d'=' -f2- || echo "$prev_tg_token")"
+        prev_tg_chat="$(grep "^TELEGRAM_CHAT_ID=" "$INSTALL_DIR/.env" | cut -d'=' -f2- || echo "$prev_tg_chat")"
+        prev_tg_thread="$(grep "^TELEGRAM_THREAD_ID=" "$INSTALL_DIR/.env" | cut -d'=' -f2- || echo "$prev_tg_thread")"
+        prev_tg_notify="$(grep "^TELEGRAM_NOTIFY_SUCCESS=" "$INSTALL_DIR/.env" | cut -d'=' -f2- || echo "$prev_tg_notify")"
+        prev_public_geo="$(grep "^PUBLIC_GEO_BASE_URL=" "$INSTALL_DIR/.env" | cut -d'=' -f2- || echo "$prev_public_geo")"
+    fi
 
     # ────────────────────────────────────────────────────────────────────────
     # ШАГ 2: Режим работы сервера
@@ -426,8 +500,8 @@ install_wizard() {
     read -r -p "Выберите вариант [1-5, Enter = 1]: " client_choice
     client_choice="${client_choice:-1}"
     
-    PUBLIC_GEO_BASE_URL=""
-    NEEDS_PUBLIC_DOMAIN=true  # нужен ли публичный домен и порт
+    PUBLIC_GEO_BASE_URL="$prev_public_geo"
+    NEEDS_PUBLIC_DOMAIN=true
 
     case "$client_choice" in
         2) ENABLED_CLIENTS="INCY" ;;
@@ -436,8 +510,8 @@ install_wizard() {
             NEEDS_PUBLIC_DOMAIN=false
             echo -e "\n${CYAN}Опционально: если geo-базы раздаются с другого вашего сервера, укажите его URL.${NC}"
             echo -e "${DIM}Пример: https://geo-node.example.com/secret_token/HAPP${NC}"
-            read -r -p "URL к внешним geo-базам [Enter = пропустить]: " input_geo_url
-            PUBLIC_GEO_BASE_URL="${input_geo_url:-}"
+            read -r -p "URL к внешним geo-базам [Enter = ${prev_public_geo:-пропустить}]: " input_geo_url
+            PUBLIC_GEO_BASE_URL="${input_geo_url:-$prev_public_geo}"
             ;;
         4) ENABLED_CLIENTS="HAPP_GEO" ;;
         5) ENABLED_CLIENTS="HAPP" ;;
@@ -453,12 +527,21 @@ install_wizard() {
         echo -e "${BOLD}--- [Шаг 3] Прямая интеграция с Remnawave ---${NC}"
         echo -e "${DIM}Сервер может сам отправлять правила маршрутизации прямо в API вашей панели Remnawave.${NC}"
         echo -e "${DIM}Вам не нужны сторонние контейнеры-апдейтеры — всё работает из коробки.${NC}\n"
-        read -r -p "Настроить интеграцию с Remnawave? [y/N]: " remna_choice
+        
+        local default_remna_prompt="y/N"
+        [ -n "$prev_remna_token" ] && default_remna_prompt="Y/n"
+
+        read -r -p "Настроить интеграцию с Remnawave? [$default_remna_prompt]: " remna_choice
+        if [ -n "$prev_remna_token" ]; then
+            remna_choice="${remna_choice:-Y}"
+        fi
+
         if [[ "$remna_choice" =~ ^[YyДд]$ ]]; then
             echo ""
-            read -r -p "URL API панели Remnawave [Enter = http://remnawave:3000/api]: " r_base
-            r_base="${r_base:-http://remnawave:3000/api}"
-            read -r -p "JWT токен администратора (из панели Remnawave → Настройки → API): " r_token
+            read -r -p "URL API панели Remnawave [Enter = ${prev_remna_base:-http://remnawave:3000/api}]: " r_base
+            r_base="${r_base:-${prev_remna_base:-http://remnawave:3000/api}}"
+            read -r -p "JWT токен администратора [Enter = сохранить текущий]: " r_token
+            r_token="${r_token:-$prev_remna_token}"
             echo ""
             read -r -p "Сколько сквадов (групп пользователей) привязать? [1-5, Enter = 1]: " r_count
             r_count="${r_count:-1}"
@@ -491,25 +574,33 @@ REMNAWAVE_SQUAD_${i}_RULE=${s_rule}
     if [ "$NEEDS_PUBLIC_DOMAIN" = true ]; then
         echo -e "${BOLD}--- [Шаг 4] Публичный домен для HTTPS ---${NC}"
         echo -e "${DIM}Домен, на который вы направите реверс-прокси (Caddy / Nginx / NPM).${NC}"
-        read -r -p "Введите домен (например, geo.example.com): " input_domain
-        DOMAIN="${input_domain:-geo.example.com}"
+        read -r -p "Введите домен [Enter = ${prev_domain:-geo.example.com}]: " input_domain
+        DOMAIN="${input_domain:-${prev_domain:-geo.example.com}}"
         echo -e "${GREEN}✓ Домен: $DOMAIN${NC}\n"
 
         # ШАГ 5: Токен
         echo -e "${BOLD}--- [Шаг 5] Секретный URL-токен ---${NC}"
         echo -e "${DIM}Токен — секретная часть URL, которая защищает ваши файлы от сканеров.${NC}"
         echo -e "${DIM}Пример ссылки: https://${DOMAIN}/${NC}${CYAN}<ТОКЕН>${NC}${DIM}/HAPP/geoip.dat${NC}"
-        auto_token="$(openssl rand -hex 16)"
-        echo -e "Сгенерирован случайный токен: ${CYAN}${BOLD}${auto_token}${NC}"
-        read -r -p "Введите свой или нажмите Enter: " input_token
+        
+        local auto_token
+        if [ -n "$prev_token" ] && [ "$prev_token" != "local" ]; then
+            auto_token="$prev_token"
+            echo -e "Используется сохраненный ранее токен: ${CYAN}${BOLD}${auto_token}${NC}"
+        else
+            auto_token="$(openssl rand -hex 16)"
+            echo -e "Сгенерирован случайный токен: ${CYAN}${BOLD}${auto_token}${NC}"
+        fi
+        
+        read -r -p "Введите свой или нажмите Enter для подтверждения: " input_token
         ROUTING_TOKEN="${input_token:-$auto_token}"
         echo -e "${GREEN}✓ Токен сохранён.${NC}\n"
 
         # ШАГ 6: Порт
         echo -e "${BOLD}--- [Шаг 6] Локальный порт ---${NC}"
         echo -e "${DIM}На этот порт ваш реверс-прокси будет перенаправлять трафик.${NC}"
-        read -r -p "Порт [Enter = 8080]: " input_port
-        HTTP_PORT="${input_port:-8080}"
+        read -r -p "Порт [Enter = ${prev_port:-8080}]: " input_port
+        HTTP_PORT="${input_port:-${prev_port:-8080}}"
         echo -e "${GREEN}✓ Порт: $HTTP_PORT${NC}\n"
     else
         echo -e "${DIM}ℹ️ Шаги «Домен», «Токен» и «Порт» пропущены — в локальном режиме они не нужны.${NC}\n"
@@ -521,7 +612,6 @@ REMNAWAVE_SQUAD_${i}_RULE=${s_rule}
     EXT_NETWORK=""
     NEEDS_NETWORK=false
 
-    # Сеть нужна, если: используется HAPP (для Remnawave) ИЛИ пользователь явно настроил Remnawave
     if [[ "$ENABLED_CLIENTS" =~ HAPP ]] || [ -n "$REMNA_BLOCK" ]; then
         NEEDS_NETWORK=true
     fi
@@ -548,20 +638,36 @@ REMNAWAVE_SQUAD_${i}_RULE=${s_rule}
     # ────────────────────────────────────────────────────────────────────────
     echo -e "${BOLD}--- [Последний шаг] Telegram-уведомления (опционально) ---${NC}"
     echo -e "${DIM}Бот будет присылать алерты при ошибках синхронизации и (по желанию) отчёты о новых базах.${NC}"
-    read -r -p "Настроить Telegram? [y/N]: " tg_choice
+    
+    local default_tg_prompt="y/N"
+    [ -n "$prev_tg_token" ] && default_tg_prompt="Y/n"
+    read -r -p "Настроить Telegram? [$default_tg_prompt]: " tg_choice
+    if [ -n "$prev_tg_token" ]; then
+        tg_choice="${tg_choice:-Y}"
+    fi
+
     TG_BOT_TOKEN=""
     TG_CHAT_ID=""
     TG_THREAD_ID=""
     TG_NOTIFY_SUCCESS="false"
 
     if [[ "$tg_choice" =~ ^[YyДд]$ ]]; then
-        read -r -p "TELEGRAM_BOT_TOKEN: " TG_BOT_TOKEN
-        read -r -p "TELEGRAM_CHAT_ID (например, -1001234567890): " TG_CHAT_ID
-        read -r -p "TELEGRAM_THREAD_ID (ID темы/топика, если чат с темами) [Enter = пропустить]: " TG_THREAD_ID
+        read -r -p "TELEGRAM_BOT_TOKEN [Enter = ${prev_tg_token:-пропустить}]: " TG_BOT_TOKEN
+        TG_BOT_TOKEN="${TG_BOT_TOKEN:-$prev_tg_token}"
+
+        read -r -p "TELEGRAM_CHAT_ID [Enter = ${prev_tg_chat:-пропустить}]: " TG_CHAT_ID
+        TG_CHAT_ID="${TG_CHAT_ID:-$prev_tg_chat}"
+
+        read -r -p "TELEGRAM_THREAD_ID (ID темы) [Enter = ${prev_tg_thread:-нет}]: " TG_THREAD_ID
+        TG_THREAD_ID="${TG_THREAD_ID:-$prev_tg_thread}"
+
         read -r -p "Присылать уведомление при выходе новых баз? [y/N]: " tg_success
         if [[ "$tg_success" =~ ^[YyДд]$ ]]; then
             TG_NOTIFY_SUCCESS="true"
+        else
+            TG_NOTIFY_SUCCESS="false"
         fi
+
         if [ -n "$TG_BOT_TOKEN" ] && [ -n "$TG_CHAT_ID" ]; then
             test_telegram "$TG_BOT_TOKEN" "$TG_CHAT_ID" "$TG_THREAD_ID" || true
         fi
@@ -572,6 +678,11 @@ REMNAWAVE_SQUAD_${i}_RULE=${s_rule}
     # ГЕНЕРАЦИЯ КОНФИГУРАЦИИ
     # ────────────────────────────────────────────────────────────────────────
     echo -e "${BLUE}📦 Создание файлов конфигурации...${NC}"
+
+    # Создаём резервную копию старого .env при переконфигурации
+    if [ -f "$INSTALL_DIR/.env" ]; then
+        cp "$INSTALL_DIR/.env" "$INSTALL_DIR/.env.backup" 2>/dev/null || true
+    fi
 
     # Формируем .env — записываем только заполненные значения
     {
@@ -664,7 +775,7 @@ EOF
     docker compose up -d
 
     echo -e "\n${GREEN}${BOLD}===============================================================================${NC}"
-    echo -e "${GREEN}${BOLD}🎉 УСТАНОВКА УСПЕШНО ЗАВЕРШЕНА!${NC}"
+    echo -e "${GREEN}${BOLD}🎉 НАСТРОЙКА УСПЕШНО ЗАВЕРШЕНА!${NC}"
     echo -e "${GREEN}${BOLD}===============================================================================${NC}"
     echo -e "Каталог проекта: ${CYAN}${INSTALL_DIR}${NC}"
     echo -e "Быстрый вызов меню в терминале: команда ${CYAN}${BOLD}geo-server${NC} (или ${CYAN}${BOLD}geoserver${NC})\n"
@@ -698,14 +809,15 @@ main_menu() {
         echo "3) 🌐 Показать готовые конфиги для Caddy / Nginx / NPM"
         echo "4) ⚡ Настроить прямую синхронизацию с Remnawave API"
         echo "5) 🔔 Настроить / Изменить Telegram-уведомления"
-        echo "6) 🚀 Обновить сервер до последней версии"
-        echo "7) 📜 Посмотреть логи контейнера"
-        echo "8) ♻️ Перезапустить сервер"
-        echo "9) 🛑 Остановить сервер"
-        echo "10) 🗑️ Удалить проект с сервера"
+        echo "6) 🛠️ Перенастроить сервер заново (мастер установки)"
+        echo "7) 🚀 Обновить сервер до последней версии"
+        echo "8) 📜 Посмотреть логи контейнера"
+        echo "9) ♻️ Перезапустить сервер"
+        echo "10) 🛑 Остановить сервер"
+        echo "11) 🗑️ Удалить проект с сервера"
         echo "0) 🚪 Выход"
         echo ""
-        read -r -p "Введите номер [0-10]: " menu_choice
+        read -r -p "Введите номер [0-11]: " menu_choice
 
         case "$menu_choice" in
             1) run_sync_now ;;
@@ -713,11 +825,12 @@ main_menu() {
             3) show_proxy_snippets; read -r -p "Нажмите Enter для возврата в меню..." ;;
             4) configure_remnawave ;;
             5) configure_telegram ;;
-            6) update_project ;;
-            7) view_logs ;;
-            8) restart_server ;;
-            9) stop_server ;;
-            10) uninstall_project ;;
+            6) install_wizard ;;
+            7) update_project ;;
+            8) view_logs ;;
+            9) restart_server ;;
+            10) stop_server ;;
+            11) uninstall_project ;;
             0) exit 0 ;;
             *) echo -e "${RED}Неверный пункт меню${NC}"; sleep 1 ;;
         esac
