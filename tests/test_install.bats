@@ -217,3 +217,16 @@ load_functions() {
     [ "$status" -eq 0 ]
 }
 
+@test "install.sh: функции is_port_in_use и find_free_port объявлены" {
+    run bash -c "grep -q 'is_port_in_use()' '$INSTALL_SH' && grep -q 'find_free_port()' '$INSTALL_SH'"
+    [ "$status" -eq 0 ]
+}
+
+@test "find_free_port: возвращает валидное число порта" {
+    run bash -c "source '$INSTALL_SH' 2>/dev/null; find_free_port 8080"
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ ^[0-9]+$ ]]
+    [ "$output" -ge 8080 ]
+}
+
+

@@ -72,6 +72,26 @@ check_dependencies() {
     echo -e "${GREEN}[+] Все зависимости готовы к работе.${NC}\n"
 }
 
+is_port_in_use() {
+    local port="$1"
+    if command -v ss &>/dev/null; then
+        ss -tuln 2>/dev/null | grep -qE "[:.]${port}[[:space:]]" && return 0
+    elif command -v netstat &>/dev/null; then
+        netstat -tuln 2>/dev/null | grep -qE "[:.]${port}[[:space:]]" && return 0
+    elif command -v lsof &>/dev/null; then
+        lsof -iTCP:"${port}" -sTCP:LISTEN -P -n &>/dev/null && return 0
+    fi
+    return 1
+}
+
+find_free_port() {
+    local p="${1:-8080}"
+    while is_port_in_use "$p"; do
+        p=$((p + 1))
+    done
+    echo "$p"
+}
+
 # Поиск существующей установки по Docker или конфигурационным файлам
 detect_existing_dir() {
     if [ -f "$CONFIG_FILE_RECORD" ]; then
@@ -715,11 +735,31 @@ CLOUDFLARE_ZERO_TRUST_CLIENT_SECRET=${prev_cf_secret}
         # ШАГ 6: Порт
         echo -e "${BOLD}--- [Шаг 6] Локальный порт ---${NC}"
         echo -e "${DIM}На этот порт ваш реверс-прокси будет перенаправлять трафик.${NC}"
-        read -r -p "Порт [Enter = ${prev_port:-8080}]: " input_port
-        HTTP_PORT="${input_port:-${prev_port:-8080}}"
+        local suggested_port="${prev_port:-8080}"
+        if is_port_in_use "$suggested_port"; then
+            local free_p
+            free_p="$(find_free_port 8081)"
+            echo -e "${YELLOW}[!] Порт $suggested_port уже занят на сервере. Предлагаем свободный порт: ${BOLD}${free_p}${NC}"
+            suggested_port="$free_p"
+        fi
+        read -r -p "Порт [Enter = ${suggested_port}]: " input_port
+        HTTP_PORT="${input_port:-$suggested_port}"
+        while is_port_in_use "$HTTP_PORT"; do
+            echo -e "${RED}[!] Порт $HTTP_PORT уже занят другим процессом на сервере!${NC}"
+            local next_free
+            next_free="$(find_free_port $((HTTP_PORT + 1)))"
+            read -r -p "Введите другой порт [Enter = ${next_free}]: " input_port
+            HTTP_PORT="${input_port:-$next_free}"
+        done
         echo -e "${GREEN}[+] Порт: $HTTP_PORT${NC}\n"
     else
-        echo -e "${DIM}[i] Шаги «Домен», «Токен» и «Порт» пропущены — в локальном режиме они не нужны.${NC}\n"
+        local default_local_port="${prev_port:-8080}"
+        if is_port_in_use "$default_local_port"; then
+            default_local_port="$(find_free_port 8081)"
+            echo -e "${YELLOW}[!] Порт 8080 занят на сервере. Автоматически выбран свободный порт: ${default_local_port}${NC}"
+        fi
+        HTTP_PORT="$default_local_port"
+        echo -e "${DIM}[i] Шаги «Домен» и «Токен» пропущены (локальный режим). Порт: $HTTP_PORT${NC}\n"
     fi
 
     # ────────────────────────────────────────────────────────────────────────
@@ -890,7 +930,35 @@ EOF
 
     echo -e "${BLUE}[*] Запуск контейнера Geo Routing Server...${NC}"
     cd "$INSTALL_DIR"
-    docker compose up -d
+    while true; do
+        local up_output=""
+        local up_exit=0
+        set +e
+        up_output=$(docker compose up -d 2>&1)
+        up_exit=$?
+        set -e
+
+        if [ "$up_exit" -eq 0 ]; then
+            echo "$up_output"
+            break
+        fi
+
+        echo "$up_output"
+        if echo "$up_output" | grep -qi "port is already allocated"; then
+            echo -e "\n${YELLOW}[!] Порт $HTTP_PORT уже занят другим процессом на сервере!${NC}"
+            local new_free_port
+            new_free_port="$(find_free_port $((HTTP_PORT + 1)))"
+            read -r -p "Введите другой свободный порт [Enter = $new_free_port]: " new_port
+            new_port="${new_port:-$new_free_port}"
+            HTTP_PORT="$new_port"
+            sed -i "s/^HTTP_PORT=.*/HTTP_PORT=${HTTP_PORT}/" "$INSTALL_DIR/.env"
+            sed -i "s/HTTP_PORT:-[0-9]*/HTTP_PORT:-${HTTP_PORT}/" "$INSTALL_DIR/compose.yaml"
+            echo -e "${BLUE}[*] Повторная попытка запуска на порту $HTTP_PORT...${NC}\n"
+        else
+            echo -e "${RED}[!] Не удалось запустить контейнер. Проверьте вывод ошибки выше.${NC}"
+            exit 1
+        fi
+    done
 
     echo -e "\n${GREEN}${BOLD}===============================================================================${NC}"
     echo -e "${GREEN}${BOLD}  НАСТРОЙКА УСПЕШНО ЗАВЕРШЕНА!${NC}"
