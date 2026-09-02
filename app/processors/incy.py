@@ -5,63 +5,25 @@ import logging
 import os
 import re
 import urllib.request
-from typing import List, Set
+from typing import Set
 from app.processors.base import BaseProcessor
 from app.processors.geo import GeoManager
 from app.config import Config
 from app.publisher import Publisher
 
-logger = logging.getLogger("routing-manager")
+logger = logging.getLogger("geo-routing-server")
 
 class IncyProcessor(BaseProcessor):
     """Обработчик файлов для клиента INCY (geo-базы, модификация JSON, DEEPLINK и автоочистка)."""
     
-    FALLBACK_FILES = ["DEFAULT.JSON", "JSONSUB.JSON", "WHITELIST.JSON"]
+    CLIENT_NAME = "INCY"
     
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.geo_manager = GeoManager(self.downloader, Config.CUSTOM_GEO_DIR)
-        
-    def _discover_config_files(self) -> List[str]:
-        """Получает список JSON файлов из GitHub API репозитория."""
-        api_url = f"{Config.get_github_api_base()}/INCY"
-        try:
-            req = urllib.request.Request(
-                api_url, 
-                headers={"User-Agent": "routing-manager", "Accept": "application/vnd.github.v3+json"}
-            )
-            with urllib.request.urlopen(req, timeout=15) as res:
-                items = json.loads(res.read().decode("utf-8"))
-                discovered = [
-                    item["name"] for item in items 
-                    if item.get("type") == "file" and item["name"].lower().endswith(".json")
-                ]
-                if discovered:
-                    return sorted(discovered)
-        except Exception as e:
-            logger.warning(f"GitHub API discovery failed for INCY ({e}), using fallback file list")
-            
-        return self.FALLBACK_FILES
-
-    def _cleanup_obsolete_files(self, target_dir, valid_filenames: Set[str]) -> None:
-        """Удаляет неактуальные JSON и DEEPLINK файлы, которых больше нет в источниках."""
-        if not target_dir.is_dir():
-            return
-            
-        for path in target_dir.iterdir():
-            if not path.is_file():
-                continue
-            name_lower = path.name.lower()
-            if name_lower.endswith(".json") or name_lower.endswith(".deeplink"):
-                if path.name not in valid_filenames:
-                    try:
-                        path.unlink(missing_ok=True)
-                        logger.info(f"  Removed obsolete file: {path.name}")
-                    except Exception as e:
-                        logger.warning(f"  Could not remove obsolete file {path.name}: {e}")
 
     def process(self) -> bool:
-        client = "INCY"
+        client = self.CLIENT_NAME
         target_dir = self.client_dir / client
         success = True
         

@@ -6,7 +6,7 @@ from app.config import Config
 from app.downloader import Downloader, DownloadError
 from app.publisher import Publisher
 
-logger = logging.getLogger("routing-manager")
+logger = logging.getLogger("geo-routing-server")
 
 class GeoManager:
     """Управление загрузкой и публикацией geo-баз (geoip.dat и geosite.dat)."""

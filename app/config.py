@@ -2,7 +2,7 @@ import os
 import re
 import sys
 from pathlib import Path
-from typing import List, Optional
+from typing import List
 
 class Config:
     """Конфигурация приложения, загружаемая из переменных окружения и файлов."""

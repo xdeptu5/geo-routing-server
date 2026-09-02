@@ -1,7 +1,6 @@
 import logging
 import os
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
 
 # Fix Windows console encoding if needed
@@ -37,7 +36,7 @@ def setup_logging():
 def acquire_lock(lock_path: Path):
     """Блокировка от параллельного запуска нескольких синхронизаций."""
     lock_path.parent.mkdir(parents=True, exist_ok=True)
-    lock_file = open(lock_path, "w")
+    lock_file = open(lock_path, "w", encoding="utf-8")
     if HAS_FCNTL:
         try:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -167,7 +166,9 @@ def main():
     
     # Прямая нативная синхронизация с Remnawave API (если настроена)
     if RemnawaveSync.is_configured():
-        RemnawaveSync.sync(token)
+        if not RemnawaveSync.sync(token):
+            logger.warning("[Remnawave] Synchronization with Remnawave API completed with errors!")
+            TelegramNotifier.alert_failure("Remnawave API sync failed for one or more squads. Check container logs.")
     
     logger.info("Synchronization completed successfully.")
     print_summary_banner(token)

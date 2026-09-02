@@ -179,6 +179,12 @@ docker compose logs
 | `TELEGRAM_THREAD_ID` | *пусто* | ID темы / топика в супергруппе (если включены темы) |
 | `TELEGRAM_NOTIFY_SUCCESS`| `false` | Присылать отчеты в Telegram при выходе новых версий баз |
 | `DOCKER_PROXY_NETWORK` | `proxy_network` | Имя общей Docker-сети при работе прокси в контейнере |
+| **Remnawave API** | | |
+| `REMNAWAVE_BASE_URL` | *пусто* | URL API панели Remnawave (например, `http://remnawave:3000/api`) |
+| `REMNAWAVE_TOKEN` | *пусто* | JWT-токен администратора из панели Remnawave |
+| `REMNAWAVE_SQUAD_N_UUID` | *пусто* | UUID сквада N (N = 1, 2, 3…) для автопатча правил |
+| `REMNAWAVE_SQUAD_N_RULE` | `JSONSUB.JSON` | Имя JSON-правила для сквада N (`JSONSUB.JSON`, `WHITELIST.JSON` и т.д.) |
+| `REMNAWAVE_GLOBAL_RULE` | *пусто* | Глобальное правило для всех подписок (опционально) |
 
 ---
 

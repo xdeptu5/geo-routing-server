@@ -23,7 +23,7 @@ services:
       TELEGRAM_CHAT_ID: "${TELEGRAM_CHAT_ID:-}"
       TELEGRAM_THREAD_ID: "${TELEGRAM_THREAD_ID:-}"
       TELEGRAM_NOTIFY_SUCCESS: "${TELEGRAM_NOTIFY_SUCCESS:-false}"
-      # Прямая интеграция с Remnawave API:
+      # Прямая интеграция с Remnawave API (до 3 сквадов; для 4+ добавьте REMNAWAVE_SQUAD_4_UUID и т.д.):
       REMNAWAVE_BASE_URL: "${REMNAWAVE_BASE_URL:-}"
       REMNAWAVE_TOKEN: "${REMNAWAVE_TOKEN:-}"
       REMNAWAVE_GLOBAL_RULE: "${REMNAWAVE_GLOBAL_RULE:-}"
