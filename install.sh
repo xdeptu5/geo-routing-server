@@ -268,22 +268,39 @@ EOF
     read -r -p "Нажмите Enter для продолжения..."
 }
 
-update_project() {
+update_script_only() {
     local target_dir
     target_dir="$(get_install_dir)"
-    echo -e "${BLUE}[*] Обновление скрипта управления и Docker-образа...${NC}"
+    echo -e "${BLUE}[*] Скачивание последней версии скрипта управления из GitHub...${NC}"
     
-    # Скачиваем свежую версию install.sh
     if curl -fsSL "https://raw.githubusercontent.com/xdeptu5/geo-routing-server/main/install.sh" -o "$target_dir/install.sh.new" 2>/dev/null; then
         mv "$target_dir/install.sh.new" "$target_dir/install.sh"
         chmod +x "$target_dir/install.sh"
-        echo -e "${GREEN}[+] Скрипт управления успешно обновлён!${NC}"
+        create_cli_shortcut "$target_dir"
+        echo -e "${GREEN}[+] Скрипт управления (меню и CLI) успешно обновлён!${NC}\n"
+    else
+        echo -e "${RED}[!] Не удалось загрузить скрипт. Проверьте интернет-соединение.${NC}\n"
+    fi
+    read -r -p "Нажмите Enter для перезапуска меню..."
+    exec bash "$target_dir/install.sh"
+}
+
+update_project() {
+    local target_dir
+    target_dir="$(get_install_dir)"
+    echo -e "${BLUE}[*] Обновление Docker-образа сервера до последней версии...${NC}"
+    
+    # Также обновляем сам скрипт
+    if curl -fsSL "https://raw.githubusercontent.com/xdeptu5/geo-routing-server/main/install.sh" -o "$target_dir/install.sh.new" 2>/dev/null; then
+        mv "$target_dir/install.sh.new" "$target_dir/install.sh"
+        chmod +x "$target_dir/install.sh"
+        create_cli_shortcut "$target_dir"
     fi
 
     cd "$target_dir"
     docker compose pull
     docker compose up -d
-    echo -e "${GREEN}[+] Сервер успешно обновлён до последней версии!${NC}\n"
+    echo -e "${GREEN}[+] Контейнер и скрипт успешно обновлены до последней версии!${NC}\n"
     read -r -p "Нажмите Enter для перезапуска меню..."
     exec bash "$target_dir/install.sh"
 }
@@ -819,14 +836,15 @@ main_menu() {
         printf " %-4s %s\n" "4)"  "Настроить прямую синхронизацию с Remnawave API"
         printf " %-4s %s\n" "5)"  "Настроить / Изменить Telegram-уведомления"
         printf " %-4s %s\n" "6)"  "Перенастроить сервер заново (мастер установки)"
-        printf " %-4s %s\n" "7)"  "Обновить сервер до последней версии"
-        printf " %-4s %s\n" "8)"  "Посмотреть логи контейнера"
-        printf " %-4s %s\n" "9)"  "Перезапустить сервер"
-        printf " %-4s %s\n" "10)" "Остановить сервер"
-        printf " %-4s %s\n" "11)" "Удалить проект с сервера"
+        printf " %-4s %s\n" "7)"  "Обновить Docker-образ сервера (pull & restart)"
+        printf " %-4s %s\n" "8)"  "Обновить скрипт управления (меню и CLI из GitHub)"
+        printf " %-4s %s\n" "9)"  "Посмотреть логи контейнера"
+        printf " %-4s %s\n" "10)" "Перезапустить сервер"
+        printf " %-4s %s\n" "11)" "Остановить сервер"
+        printf " %-4s %s\n" "12)" "Удалить проект с сервера"
         printf " %-4s %s\n" "0)"  "Выход"
         echo ""
-        read -r -p "Введите номер [0-11]: " menu_choice
+        read -r -p "Введите номер [0-12]: " menu_choice
 
         case "$menu_choice" in
             1) run_sync_now ;;
@@ -836,10 +854,11 @@ main_menu() {
             5) configure_telegram ;;
             6) install_wizard ;;
             7) update_project ;;
-            8) view_logs ;;
-            9) restart_server ;;
-            10) stop_server ;;
-            11) uninstall_project ;;
+            8) update_script_only ;;
+            9) view_logs ;;
+            10) restart_server ;;
+            11) stop_server ;;
+            12) uninstall_project ;;
             0) exit 0 ;;
             *) echo -e "${RED}[!] Неверный пункт меню${NC}"; sleep 1 ;;
         esac
