@@ -271,12 +271,21 @@ EOF
 update_project() {
     local target_dir
     target_dir="$(get_install_dir)"
-    echo -e "${BLUE}[*] Обновление Docker-образа до последней версии...${NC}"
+    echo -e "${BLUE}[*] Обновление скрипта управления и Docker-образа...${NC}"
+    
+    # Скачиваем свежую версию install.sh
+    if curl -fsSL "https://raw.githubusercontent.com/xdeptu5/geo-routing-server/main/install.sh" -o "$target_dir/install.sh.new" 2>/dev/null; then
+        mv "$target_dir/install.sh.new" "$target_dir/install.sh"
+        chmod +x "$target_dir/install.sh"
+        echo -e "${GREEN}[+] Скрипт управления успешно обновлён!${NC}"
+    fi
+
     cd "$target_dir"
     docker compose pull
     docker compose up -d
-    echo -e "${GREEN}[+] Сервер успешно обновлён!${NC}\n"
-    read -r -p "Нажмите Enter для продолжения..."
+    echo -e "${GREEN}[+] Сервер успешно обновлён до последней версии!${NC}\n"
+    read -r -p "Нажмите Enter для перезапуска меню..."
+    exec bash "$target_dir/install.sh"
 }
 
 view_logs() {
