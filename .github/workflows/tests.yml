@@ -7,8 +7,11 @@ on:
     branches: [ "main" ]
 
 jobs:
+  # ─────────────────────────────────────────────────────────
+  # JOB 1: Python unit + property tests + coverage
+  # ─────────────────────────────────────────────────────────
   test:
-    name: Unit + Property tests
+    name: Unit + Property + Coverage
     runs-on: ubuntu-latest
 
     steps:
@@ -21,13 +24,27 @@ jobs:
           python-version: "3.11"
 
       - name: Install test dependencies
-        run: pip install pytest hypothesis
+        run: pip install pytest hypothesis pytest-cov
 
-      - name: Run unit tests
-        run: python -m pytest tests/ -v --tb=short --ignore=tests/test_property_based.py
+      - name: Run unit tests with coverage
+        run: |
+          python -m pytest tests/ \
+            --ignore=tests/test_property_based.py \
+            --cov=app \
+            --cov-report=term-missing \
+            --cov-report=xml:coverage.xml \
+            -v --tb=short
 
       - name: Run property-based tests (Hypothesis)
         run: python -m pytest tests/test_property_based.py -v --tb=short
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-report
+          path: coverage.xml
+          retention-days: 14
 
       - name: Verify Python syntax (all app modules)
         run: |
@@ -45,10 +62,114 @@ jobs:
       - name: Verify Bash syntax (install.sh)
         run: bash -n install.sh && echo "[+] install.sh syntax OK"
 
+  # ─────────────────────────────────────────────────────────
+  # JOB 2: Bash тесты (bats-core) для install.sh
+  # ─────────────────────────────────────────────────────────
+  bash-tests:
+    name: Bash tests (bats-core)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install bats-core
+        run: |
+          sudo apt-get install -y bats
+          bats --version
+
+      - name: Run install.sh bats tests
+        run: bats tests/test_install.bats
+
+  # ─────────────────────────────────────────────────────────
+  # JOB 3: E2E Docker — поднимаем контейнер и проверяем HTTP
+  # ─────────────────────────────────────────────────────────
+  e2e:
+    name: E2E Docker
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: docker build -t geo-routing-server:test .
+
+      - name: Start container
+        run: |
+          docker run -d \
+            --name geo-test \
+            -p 8080:80 \
+            -e DOMAIN=localhost \
+            -e ROUTING_TOKEN=testtoken123 \
+            -e ENABLED_CLIENTS=HAPP \
+            -e ROUTING_SOURCE_REPO=https://raw.githubusercontent.com/hydraponique/roscomvpn-routing/main \
+            -e SYNC_ON_START=false \
+            -e SCHEDULE="0 0 31 2 *" \
+            geo-routing-server:test
+
+      - name: Wait for container to be healthy
+        run: |
+          echo "Waiting for /health ..."
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8080/health; then
+              echo ""
+              echo "[+] Container is healthy!"
+              break
+            fi
+            echo "  attempt $i/30 ..."
+            sleep 2
+          done
+          curl -sf http://localhost:8080/health || (docker logs geo-test && exit 1)
+
+      - name: "[E2E] /health возвращает 200 с телом 'healthy'"
+        run: |
+          BODY=$(curl -s http://localhost:8080/health)
+          STATUS=$(curl -o /dev/null -s -w "%{http_code}" http://localhost:8080/health)
+          echo "HTTP $STATUS | Body: $BODY"
+          [ "$STATUS" = "200" ] || (echo "FAIL: /health → $STATUS" && exit 1)
+          echo "$BODY" | grep -qi "healthy" || (echo "FAIL: тело не содержит 'healthy'" && exit 1)
+          echo "[+] /health OK"
+
+      - name: "[E2E] Скрытые файлы (.env, .git) → 404"
+        run: |
+          for path in ".env" ".git" ".cache" ".htaccess"; do
+            STATUS=$(curl -o /dev/null -s -w "%{http_code}" "http://localhost:8080/$path")
+            echo "GET /$path → HTTP $STATUS"
+            [ "$STATUS" = "404" ] || (echo "FAIL: /$path должен быть 404, получили $STATUS" && exit 1)
+          done
+          echo "[+] Все скрытые пути заблокированы (404)"
+
+      - name: "[E2E] Несуществующий токен → 404"
+        run: |
+          STATUS=$(curl -o /dev/null -s -w "%{http_code}" http://localhost:8080/nonexistent_token/HAPP/JSONSUB.JSON)
+          echo "GET /nonexistent_token/... → HTTP $STATUS"
+          [ "$STATUS" = "404" ] || (echo "FAIL: ожидали 404, получили $STATUS" && exit 1)
+          echo "[+] Несуществующий токен → 404"
+
+      - name: "[E2E] Корневой URL / — не раскрывает листинг директорий"
+        run: |
+          BODY=$(curl -s http://localhost:8080/)
+          STATUS=$(curl -o /dev/null -s -w "%{http_code}" http://localhost:8080/)
+          echo "HTTP $STATUS"
+          # Тело не должно содержать HTML-листинг вида "Index of"
+          echo "$BODY" | grep -qi "Index of" && (echo "FAIL: autoindex включён!" && exit 1) || true
+          echo "[+] Автолистинг директорий отключён"
+
+      - name: Show container logs on failure
+        if: failure()
+        run: docker logs geo-test
+
+      - name: Stop container
+        if: always()
+        run: docker rm -f geo-test || true
+
+  # ─────────────────────────────────────────────────────────
+  # JOB 4: Mutation testing (mutmut) — только push в main
+  # ─────────────────────────────────────────────────────────
   mutation:
     name: Mutation testing (mutmut)
     runs-on: ubuntu-latest
-    # Запускаем только на push в main, не на PR (долго — ~5 минут)
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
 
     steps:
@@ -68,7 +189,7 @@ jobs:
           python -m mutmut run \
             --paths-to-mutate app/remnawave.py,app/config.py,app/downloader.py \
             --runner "python -m pytest tests/test_remnawave.py tests/test_config_and_security.py tests/test_downloader.py -x -q" \
-            || true  # не блокируем CI, только показываем результат
+            || true  # не блокируем CI — только информируем
 
       - name: Show mutation test results
         run: |
