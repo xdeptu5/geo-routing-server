@@ -229,4 +229,10 @@ load_functions() {
     [ "$output" -ge 8080 ]
 }
 
+@test "create_cli_shortcut: содержит проверку на непустой файл ! -s" {
+    run bash -c "grep -q '! -s' '$INSTALL_SH'"
+    [ "$status" -eq 0 ]
+}
+
+
 

@@ -146,7 +146,13 @@ create_cli_shortcut() {
     
     cat > "$wrapper_script" <<EOF
 #!/usr/bin/env bash
-bash "$target_dir/install.sh" "\$@"
+TARGET_SCRIPT="$target_dir/install.sh"
+if [ ! -s "\$TARGET_SCRIPT" ]; then
+    mkdir -p "$target_dir"
+    curl -fsSL "https://raw.githubusercontent.com/xdeptu5/geo-routing-server/main/install.sh" -o "\$TARGET_SCRIPT" 2>/dev/null || true
+    chmod +x "\$TARGET_SCRIPT" 2>/dev/null || true
+fi
+bash "\$TARGET_SCRIPT" "\$@"
 EOF
     chmod +x "$wrapper_script"
     
@@ -924,7 +930,12 @@ EOF
     mkdir -p "$INSTALL_DIR/custom_geo"
     touch "$INSTALL_DIR/custom_geo/.gitkeep"
 
-    cp "$0" "$INSTALL_DIR/install.sh" 2>/dev/null || true
+    # Сохраняем скрипт установщика в каталог проекта для работы команды geo-server
+    if [[ "$0" =~ ^/dev/fd/ || "$0" =~ ^/proc/ ]] || [ ! -s "$0" ]; then
+        curl -fsSL "https://raw.githubusercontent.com/xdeptu5/geo-routing-server/main/install.sh" -o "$INSTALL_DIR/install.sh" 2>/dev/null || true
+    else
+        cp "$0" "$INSTALL_DIR/install.sh" 2>/dev/null || true
+    fi
     chmod +x "$INSTALL_DIR/install.sh" 2>/dev/null || true
     create_cli_shortcut "$INSTALL_DIR"
 
