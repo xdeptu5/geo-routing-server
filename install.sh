@@ -354,9 +354,26 @@ configure_remnawave() {
     local squads_env=""
     for ((i=1; i<=count_squads; i++)); do
         echo -e "\n${CYAN}--- Настройка Сквада #$i ---${NC}"
-        read -r -p "UUID сквада $i: " sq_uuid
-        read -r -p "Правило для сквада $i [Enter = JSONSUB.JSON]: " sq_rule
-        sq_rule="${sq_rule:-JSONSUB.JSON}"
+        read -r -p "UUID сквада $i (из панели Remnawave → Группы): " sq_uuid
+        echo -e "  Правило маршрутизации для сквада $i:"
+        echo -e "    ${BOLD}1)${NC} Обход блокировок (JSONSUB.JSON) — РФ напрямую, заблокированное в VPN [Enter]"
+        echo -e "    ${BOLD}2)${NC} Белый список (WHITELIST.JSON)  — весь интернет в VPN, кроме РФ"
+        echo -e "    ${BOLD}3)${NC} Свой файл из репозитория       — указать нестандартный .json"
+        read -r -p "  Выберите [1-3, Enter = 1]: " rule_pick
+        rule_pick="${rule_pick:-1}"
+        local sq_rule="JSONSUB.JSON"
+        case "$rule_pick" in
+            2) sq_rule="WHITELIST.JSON" ;;
+            3)
+                read -r -p "  Введите имя файла [например, DEFAULT.JSON]: " custom_rule
+                custom_rule="${custom_rule:-JSONSUB.JSON}"
+                if [[ ! "$custom_rule" =~ \.[Jj][Ss][Oo][Nn]$ ]]; then
+                    custom_rule="${custom_rule}.JSON"
+                fi
+                sq_rule="$(echo "$custom_rule" | tr '[:lower:]' '[:upper:]')"
+                ;;
+            *) sq_rule="JSONSUB.JSON" ;;
+        esac
         squads_env="${squads_env}REMNAWAVE_SQUAD_${i}_UUID=${sq_uuid}
 REMNAWAVE_SQUAD_${i}_RULE=${sq_rule}
 "
@@ -757,8 +774,25 @@ REMNAWAVE_TOKEN=${r_token}
             for ((i=1; i<=r_count; i++)); do
                 echo -e "\n${CYAN}── Сквад #$i ──${NC}"
                 read -r -p "  UUID сквада (из панели Remnawave → Группы): " s_uuid
-                read -r -p "  Какое правило отправлять? [Enter = JSONSUB.JSON]: " s_rule
-                s_rule="${s_rule:-JSONSUB.JSON}"
+                echo -e "  Правило маршрутизации для сквада $i:"
+                echo -e "    ${BOLD}1)${NC} Обход блокировок (JSONSUB.JSON) — РФ напрямую, заблокированное в VPN [Enter]"
+                echo -e "    ${BOLD}2)${NC} Белый список (WHITELIST.JSON)  — весь интернет в VPN, кроме РФ"
+                echo -e "    ${BOLD}3)${NC} Свой файл из репозитория       — указать нестандартный .json"
+                read -r -p "  Выберите [1-3, Enter = 1]: " s_rule_pick
+                s_rule_pick="${s_rule_pick:-1}"
+                local s_rule="JSONSUB.JSON"
+                case "$s_rule_pick" in
+                    2) s_rule="WHITELIST.JSON" ;;
+                    3)
+                        read -r -p "  Введите имя файла [например, DEFAULT.JSON]: " custom_s_rule
+                        custom_s_rule="${custom_s_rule:-JSONSUB.JSON}"
+                        if [[ ! "$custom_s_rule" =~ \.[Jj][Ss][Oo][Nn]$ ]]; then
+                            custom_s_rule="${custom_s_rule}.JSON"
+                        fi
+                        s_rule="$(echo "$custom_s_rule" | tr '[:lower:]' '[:upper:]')"
+                        ;;
+                    *) s_rule="JSONSUB.JSON" ;;
+                esac
                 REMNA_BLOCK="${REMNA_BLOCK}REMNAWAVE_SQUAD_${i}_UUID=${s_uuid}
 REMNAWAVE_SQUAD_${i}_RULE=${s_rule}
 "
