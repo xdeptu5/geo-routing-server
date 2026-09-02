@@ -1,3 +1,4 @@
+import html
 import json
 import logging
 import urllib.request
@@ -51,12 +52,13 @@ class TelegramNotifier:
     def alert_failure(cls, error_msg: str) -> None:
         """Отправляет алерт при ошибке синхронизации."""
         now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        safe_msg = html.escape(str(error_msg))
         text = (
             f"⚠️ <b>[Geo Routing Server] Ошибка синхронизации!</b>\n\n"
             f"🌐 <b>Домен:</b> <code>{Config.DOMAIN}</code>\n"
             f"⏱ <b>Время:</b> {now_str}\n\n"
             f"❌ <b>Причина ошибки:</b>\n"
-            f"<code>{error_msg}</code>\n\n"
+            f"<code>{safe_msg}</code>\n\n"
             f"🛡 <i>Ранее опубликованные файлы не повреждены и продолжают раздаваться клиентам.</i>"
         )
         cls._send_message(text)

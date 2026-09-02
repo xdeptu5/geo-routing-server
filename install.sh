@@ -24,6 +24,7 @@ handle_error() {
     local code=$?
     local line=$1
     [ "$code" -eq 0 ] && return
+    trap '' ERR
 
     echo -e "\n${RED}${BOLD}===============================================================================${NC}"
     if [ "${UI_LANG:-ru}" = "en" ]; then
@@ -45,13 +46,17 @@ handle_error() {
     fi
     err_choice="${err_choice:-1}"
     case "$err_choice" in
-        1) main_menu ;;
+        1) 
+            trap 'handle_error $LINENO' ERR
+            main_menu 
+            ;;
         2) 
             local target_dir
             target_dir="$(get_install_dir)"
             if [ -n "$target_dir" ] && [ "$target_dir" != "/" ] && [ "$target_dir" != "/root" ] && [ -d "$target_dir" ]; then
                 rm -rf "$target_dir" 2>/dev/null || true
             fi
+            trap 'handle_error $LINENO' ERR
             install_wizard
             ;;
         3) uninstall_project ;;

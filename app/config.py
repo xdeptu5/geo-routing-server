@@ -13,7 +13,7 @@ class Config:
     CUSTOM_GEO_DIR = Path(os.getenv("CUSTOM_GEO_DIR", str(BASE_DIR / "custom_geo")))
     LOCK_FILE = BASE_DIR / ".sync.lock"
     
-    DOMAIN = os.getenv("DOMAIN", "geo.example.com").strip().rstrip("/")
+    DOMAIN = re.sub(r"^https?://", "", os.getenv("DOMAIN", "geo.example.com").strip()).rstrip("/")
     SCHEDULE = os.getenv("SCHEDULE", "40 8 * * *").strip()
     SYNC_ON_START = os.getenv("SYNC_ON_START", "true").lower() in ("true", "1", "yes")
     

@@ -96,7 +96,12 @@ class Downloader:
                         cached_data = cache_body_file.read_bytes()
                         if self._validate_content(cached_data, kind):
                             return cached_data
-                    raise DownloadError(f"HTTP 304 received from {url}, but cache is missing or invalid")
+                    # Кэш поврежден или отсутствует — удаляем битый ETag и пробуем скачать заново без If-None-Match
+                    cache_etag_file.unlink(missing_ok=True)
+                    cache_body_file.unlink(missing_ok=True)
+                    headers.pop("If-None-Match", None)
+                    logger.warning(f"HTTP 304 from {url}, but cache was invalid. Cleared cache, retrying full fetch...")
+                    last_error = f"Cache invalidated on 304 for {url}"
                 else:
                     last_error = f"HTTP {e.code}: {e.reason}"
             except Exception as e:

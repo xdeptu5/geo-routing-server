@@ -15,15 +15,23 @@ class RemnawaveSync:
     ROUTING_HEADER = "routing"
 
     @classmethod
+    def get_api_url(cls) -> str:
+        """Нормализует базовый URL Remnawave, гарантируя наличие суффикса /api."""
+        raw = os.getenv("REMNAWAVE_BASE_URL", "").strip().rstrip("/")
+        if raw and not raw.endswith("/api"):
+            raw = f"{raw}/api"
+        return raw
+
+    @classmethod
     def is_configured(cls) -> bool:
-        base_url = os.getenv("REMNAWAVE_BASE_URL", "").strip()
+        base_url = cls.get_api_url()
         token = os.getenv("REMNAWAVE_TOKEN", "").strip()
         return bool(base_url and token)
 
     @classmethod
     def _get_headers(cls) -> Dict[str, str]:
         token = os.getenv("REMNAWAVE_TOKEN", "").strip()
-        base_url = os.getenv("REMNAWAVE_BASE_URL", "").strip()
+        base_url = cls.get_api_url()
         
         headers = {
             "Accept": "application/json",
@@ -106,7 +114,7 @@ class RemnawaveSync:
         if not cls.is_configured():
             return True
 
-        base_api_url = os.getenv("REMNAWAVE_BASE_URL", "").strip().rstrip("/")
+        base_api_url = cls.get_api_url()
         happ_dir = Config.STORAGE_DIR / token / "HAPP"
         
         logger.info("[Remnawave] Starting direct Remnawave API synchronization...")
