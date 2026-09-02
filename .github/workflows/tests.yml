@@ -8,7 +8,7 @@ on:
 
 jobs:
   test:
-    name: Python unit tests
+    name: Unit + Property tests
     runs-on: ubuntu-latest
 
     steps:
@@ -20,8 +20,14 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Run tests
-        run: python -m pytest tests/ -v --tb=short
+      - name: Install test dependencies
+        run: pip install pytest hypothesis
+
+      - name: Run unit tests
+        run: python -m pytest tests/ -v --tb=short --ignore=tests/test_property_based.py
+
+      - name: Run property-based tests (Hypothesis)
+        run: python -m pytest tests/test_property_based.py -v --tb=short
 
       - name: Verify Python syntax (all app modules)
         run: |
@@ -38,3 +44,33 @@ jobs:
 
       - name: Verify Bash syntax (install.sh)
         run: bash -n install.sh && echo "[+] install.sh syntax OK"
+
+  mutation:
+    name: Mutation testing (mutmut)
+    runs-on: ubuntu-latest
+    # Запускаем только на push в main, не на PR (долго — ~5 минут)
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install pytest mutmut
+
+      - name: Run mutation tests on critical modules
+        run: |
+          python -m mutmut run \
+            --paths-to-mutate app/remnawave.py,app/config.py,app/downloader.py \
+            --runner "python -m pytest tests/test_remnawave.py tests/test_config_and_security.py tests/test_downloader.py -x -q" \
+            || true  # не блокируем CI, только показываем результат
+
+      - name: Show mutation test results
+        run: |
+          python -m mutmut results || true
+          python -m mutmut show || true
