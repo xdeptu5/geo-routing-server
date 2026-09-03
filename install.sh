@@ -749,8 +749,8 @@ install_wizard() {
     # ────────────────────────────────────────────────────────────────────────
     echo -e "${BOLD}--- [Шаг 2] Выберите сценарий работы сервера ---${NC}"
     echo -e "${CYAN}${BOLD}[i] Источник правил:${NC} ${CYAN}https://github.com/hydraponique/roscomvpn-routing${NC}\n"
-    echo -e "  ${BOLD}1)${NC} Всё в одном (раздача баз и правил + автопатч Remnawave API) [Enter — Рекомендуется]"
-    echo -e "     ${DIM}Раздает базы и правила по HTTPS + сам отправляет правила в API сквадов Remnawave.${NC}"
+    echo -e "  ${BOLD}1)${NC} Всё в одном (раздача баз и правил + автопатч Happ в Remnawave) [Enter — Рекомендуется]"
+    echo -e "     ${DIM}Раздает базы и JSON по HTTPS + сам отправляет свежие правила Happ в сквады Remnawave.${NC}"
     echo ""
     echo -e "  ${BOLD}2)${NC} Сервер раздачи баз и правил (Pull-модель для любых панелей и клиентов)"
     echo -e "     ${DIM}Раздает базы geoip/geosite, диплинки Happ и JSON для Incy с вашего домена.${NC}"
