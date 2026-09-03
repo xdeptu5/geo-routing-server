@@ -829,7 +829,9 @@ install_wizard() {
         read -r -p "Введите свой токен или нажмите Enter для подтверждения: " input_token
         ROUTING_TOKEN="${input_token:-$auto_token}"
         echo -e "${GREEN}[+] Токен сохранён.${NC}"
-        echo -e "${DIM}Пример готовой ссылки: https://${DOMAIN}/${ROUTING_TOKEN}/HAPP/geoip.dat${NC}\n"
+        echo -e "${CYAN}${BOLD}[i] Базовый URL сервера:${NC} ${CYAN}https://${DOMAIN}/${ROUTING_TOKEN}${NC}"
+        echo -e "${DIM}    • Путь для Happ: /HAPP/ (geoip.dat, geosite.dat, правила)${NC}"
+        echo -e "${DIM}    • Путь для Incy: /INCY/ (geoip.dat, geosite.dat, JSONSUB.JSON)${NC}\n"
 
         # ШАГ 5: Локальный порт
         echo -e "${BOLD}--- [Шаг 5] Локальный порт веб-сервера ---${NC}"
