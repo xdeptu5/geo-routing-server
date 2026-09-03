@@ -332,9 +332,16 @@ configure_remnawave() {
 
     local current_base=""
     local current_token=""
+    local current_clients=""
     if [ -f "$env_file" ]; then
         current_base=$(grep "^REMNAWAVE_BASE_URL=" "$env_file" | cut -d'=' -f2- || true)
         current_token=$(grep "^REMNAWAVE_TOKEN=" "$env_file" | cut -d'=' -f2- || true)
+        current_clients=$(grep "^ENABLED_CLIENTS=" "$env_file" | cut -d'=' -f2- || echo "HAPP,INCY")
+        if [[ ! "$current_clients" =~ HAPP ]]; then
+            echo -e "${YELLOW}[!] Сервер сейчас настроен только для Incy (ENABLED_CLIENTS=${current_clients}).${NC}"
+            echo -e "${GREEN}[*] Автоматически добавляем Happ в список клиентов для генерации правил...${NC}\n"
+            sed -i "s/^ENABLED_CLIENTS=.*/ENABLED_CLIENTS=${current_clients},HAPP/" "$env_file"
+        fi
     fi
 
     read -r -p "REMNAWAVE_BASE_URL [Enter = ${current_base:-http://remnawave:3000/api}]: " input_base
@@ -432,7 +439,8 @@ EOF
         echo -e "\n${GREEN}[+] Настройки Remnawave сохранены! Перезапускаем контейнер...${NC}"
         cd "$target_dir"
         docker compose up -d
-        echo -e "${GREEN}[+] Готово! Теперь правила будут отправляться в Remnawave автоматически.${NC}\n"
+        docker exec geo-routing-server run-routing-sync 2>/dev/null || true
+        echo -e "${GREEN}[+] Готово! Правила обновлены и отправлены в Remnawave.${NC}\n"
     fi
     read -r -p "Нажмите Enter для продолжения..."
 }

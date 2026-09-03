@@ -80,7 +80,7 @@ def print_summary_banner(token: str):
             try:
                 squads = RemnawaveSync.load_squad_configs()
                 for sq in squads:
-                    happ_lines.append(f"      Сквад {sq.squad_uuid} -> {sq.rule_name}")
+                    happ_lines.append(f"      Сквад {sq.get('uuid')} -> {sq.get('rule')}")
             except Exception:
                 pass
         elif happ_deeplink:
