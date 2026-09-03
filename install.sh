@@ -672,12 +672,14 @@ install_wizard() {
     fi
     
     read -r -p "Каталог [Enter = $current_suggested_dir]: " input_dir
+    input_dir="$(echo "$input_dir" | tr -d '\r' | sed 's/[^a-zA-Z0-9_\/\.-]//g')"
     INSTALL_DIR="${input_dir:-$current_suggested_dir}"
+    INSTALL_DIR="$(echo "$INSTALL_DIR" | tr -d '\r' | sed 's/[^a-zA-Z0-9_\/\.-]//g')"
     mkdir -p "$INSTALL_DIR"
     save_install_dir "$INSTALL_DIR"
     echo -e "${GREEN}[+] Каталог: $INSTALL_DIR${NC}\n"
 
-    # Считываем текущие настройки из существующего .env, если он есть
+    # Считываем текущие настройки из существующего .env (в целевой папке или ранее обнаруженной)
     local prev_domain="geo.example.com"
     local prev_token=""
     local prev_clients="HAPP,INCY"
@@ -694,60 +696,96 @@ install_wizard() {
     local prev_routing_repo="https://raw.githubusercontent.com/hydraponique/roscomvpn-routing/main"
     local prev_schedule="0 10 * * *"
 
+    local scan_env=""
     if [ -f "$INSTALL_DIR/.env" ]; then
-        echo -e "${CYAN}[i] Найден существующий файл .env — текущие значения будут предложены по умолчанию.${NC}\n"
-        prev_domain="$(grep "^DOMAIN=" "$INSTALL_DIR/.env" | cut -d'=' -f2- || echo "$prev_domain")"
-        prev_token="$(grep "^ROUTING_TOKEN=" "$INSTALL_DIR/.env" | cut -d'=' -f2- || echo "$prev_token")"
-        prev_clients="$(grep "^ENABLED_CLIENTS=" "$INSTALL_DIR/.env" | cut -d'=' -f2- || echo "$prev_clients")"
-        prev_port="$(grep "^HTTP_PORT=" "$INSTALL_DIR/.env" | cut -d'=' -f2- || echo "$prev_port")"
-        prev_remna_base="$(grep "^REMNAWAVE_BASE_URL=" "$INSTALL_DIR/.env" | cut -d'=' -f2- || echo "$prev_remna_base")"
-        prev_remna_token="$(grep "^REMNAWAVE_TOKEN=" "$INSTALL_DIR/.env" | cut -d'=' -f2- || echo "$prev_remna_token")"
-        prev_tg_token="$(grep "^TELEGRAM_BOT_TOKEN=" "$INSTALL_DIR/.env" | cut -d'=' -f2- || echo "$prev_tg_token")"
-        prev_tg_chat="$(grep "^TELEGRAM_CHAT_ID=" "$INSTALL_DIR/.env" | cut -d'=' -f2- || echo "$prev_tg_chat")"
-        prev_tg_thread="$(grep "^TELEGRAM_THREAD_ID=" "$INSTALL_DIR/.env" | cut -d'=' -f2- || echo "$prev_tg_thread")"
-        prev_tg_notify="$(grep "^TELEGRAM_NOTIFY_SUCCESS=" "$INSTALL_DIR/.env" | cut -d'=' -f2- || echo "$prev_tg_notify")"
-        prev_public_geo="$(grep "^PUBLIC_GEO_BASE_URL=" "$INSTALL_DIR/.env" | cut -d'=' -f2- || echo "$prev_public_geo")"
-        prev_cf_id="$(grep "^CLOUDFLARE_ZERO_TRUST_CLIENT_ID=" "$INSTALL_DIR/.env" | cut -d'=' -f2- || true)"
-        prev_cf_secret="$(grep "^CLOUDFLARE_ZERO_TRUST_CLIENT_SECRET=" "$INSTALL_DIR/.env" | cut -d'=' -f2- || true)"
-        prev_routing_repo="$(grep "^ROUTING_SOURCE_REPO=" "$INSTALL_DIR/.env" | cut -d'=' -f2- || echo "$prev_routing_repo")"
-        prev_schedule="$(grep "^SCHEDULE=" "$INSTALL_DIR/.env" | cut -d'=' -f2- || echo "$prev_schedule")"
+        scan_env="$INSTALL_DIR/.env"
+    elif [ -n "$existing_detected" ] && [ -f "$existing_detected/.env" ]; then
+        scan_env="$existing_detected/.env"
+    fi
+
+    if [ -n "$scan_env" ]; then
+        echo -e "${CYAN}[i] Найдены существующие настройки ($scan_env) — они будут предложены по умолчанию.${NC}\n"
+        prev_domain="$(grep "^DOMAIN=" "$scan_env" | cut -d'=' -f2- || echo "$prev_domain")"
+        prev_token="$(grep "^ROUTING_TOKEN=" "$scan_env" | cut -d'=' -f2- || echo "$prev_token")"
+        prev_clients="$(grep "^ENABLED_CLIENTS=" "$scan_env" | cut -d'=' -f2- || echo "$prev_clients")"
+        prev_port="$(grep "^HTTP_PORT=" "$scan_env" | cut -d'=' -f2- || echo "$prev_port")"
+        prev_remna_base="$(grep "^REMNAWAVE_BASE_URL=" "$scan_env" | cut -d'=' -f2- || echo "$prev_remna_base")"
+        prev_remna_token="$(grep "^REMNAWAVE_TOKEN=" "$scan_env" | cut -d'=' -f2- || echo "$prev_remna_token")"
+        prev_tg_token="$(grep "^TELEGRAM_BOT_TOKEN=" "$scan_env" | cut -d'=' -f2- || echo "$prev_tg_token")"
+        prev_tg_chat="$(grep "^TELEGRAM_CHAT_ID=" "$scan_env" | cut -d'=' -f2- || echo "$prev_tg_chat")"
+        prev_tg_thread="$(grep "^TELEGRAM_THREAD_ID=" "$scan_env" | cut -d'=' -f2- || echo "$prev_tg_thread")"
+        prev_tg_notify="$(grep "^TELEGRAM_NOTIFY_SUCCESS=" "$scan_env" | cut -d'=' -f2- || echo "$prev_tg_notify")"
+        prev_public_geo="$(grep "^PUBLIC_GEO_BASE_URL=" "$scan_env" | cut -d'=' -f2- || echo "$prev_public_geo")"
+        prev_cf_id="$(grep "^CLOUDFLARE_ZERO_TRUST_CLIENT_ID=" "$scan_env" | cut -d'=' -f2- || true)"
+        prev_cf_secret="$(grep "^CLOUDFLARE_ZERO_TRUST_CLIENT_SECRET=" "$scan_env" | cut -d'=' -f2- || true)"
+        prev_routing_repo="$(grep "^ROUTING_SOURCE_REPO=" "$scan_env" | cut -d'=' -f2- || echo "$prev_routing_repo")"
+        prev_schedule="$(grep "^SCHEDULE=" "$scan_env" | cut -d'=' -f2- || echo "$prev_schedule")"
     fi
 
     # ────────────────────────────────────────────────────────────────────────
-    # ШАГ 2: Роль сервера
+    # ШАГ 2: Выбор сценария работы сервера
     # ────────────────────────────────────────────────────────────────────────
-    echo -e "${BOLD}--- [Шаг 2] Выберите роль этого сервера ---${NC}"
+    echo -e "${BOLD}--- [Шаг 2] Выберите сценарий работы сервера ---${NC}"
     echo -e "${CYAN}${BOLD}[i] Источник правил:${NC} ${CYAN}https://github.com/hydraponique/roscomvpn-routing${NC}\n"
-    echo -e "  ${BOLD}1)${NC} Сервер раздачи баз и правил [Enter — Рекомендуется]"
-    echo -e "     ${DIM}Раздает базы (geoip / geosite) и правила по HTTPS с вашего домена.${NC}"
-    echo -e "     ${DIM}Подходит для Happ и Incy. Можно подключить автообновление Remnawave.${NC}"
+    echo -e "  ${BOLD}1)${NC} Всё в одном (Happ + Incy + Remnawave + свои базы) [Enter — Рекомендуется]"
+    echo -e "     ${DIM}Сервер сам качает базы (geoip / geosite), раздает их по HTTPS с вашего домена,${NC}"
+    echo -e "     ${DIM}раздает JSON для Incy и автоматически обновляет сквады в Remnawave.${NC}"
     echo ""
-    echo -e "  ${BOLD}2)${NC} Только узел раздачи geo-баз"
-    echo -e "     ${DIM}Сервер только раздает файлы geoip.dat и geosite.dat по HTTPS (например, быстрый узел в РФ).${NC}"
-    echo -e "     ${DIM}Без генерации диплинков и без Remnawave.${NC}"
+    echo -e "  ${BOLD}2)${NC} Сервер раздачи баз и правил (Happ + Incy, без Remnawave)"
+    echo -e "     ${DIM}Раздает базы geoip / geosite для Happ и Incy + JSON для Incy с вашего домена.${NC}"
     echo ""
-    echo -e "  ${BOLD}3)${NC} Только апдейтер сквадов Remnawave"
-    echo -e "     ${DIM}Базы УЖЕ раздаются на другом вашем сервере (или GitHub).${NC}"
-    echo -e "     ${DIM}Домен и реверс-прокси на этой машине НЕ нужны.${NC}"
-    echo -e "     ${DIM}Сервер работает скрытно, вшивает ссылку на внешний сервер баз и обновляет Remnawave.${NC}"
+    echo -e "  ${BOLD}3)${NC} Только узел раздачи geo-баз (чистые файлы geoip.dat и geosite.dat)"
+    echo -e "     ${DIM}Сервер только раздает базы по HTTPS (например, быстрый узел в РФ). Без правил и Remnawave.${NC}"
     echo ""
-    read -r -p "Выберите вариант [1-3, Enter = 1]: " server_role
+    echo -e "  ${BOLD}4)${NC} Только апдейтер сквадов Remnawave (домен на этой машине НЕ нужен)"
+    echo -e "     ${DIM}Базы уже на другом сервере (или GitHub). Сервер работает локально в Docker${NC}"
+    echo -e "     ${DIM}и только отправляет правила в API Remnawave.${NC}"
+    echo ""
+    echo -e "  ${BOLD}5)${NC} Раздача JSON для Incy (базы на внешнем сервере)"
+    echo -e "     ${DIM}Сервер раздает только JSON подписки для Incy, а базы скачиваются с внешнего узла.${NC}"
+    echo ""
+    read -r -p "Выберите вариант [1-5, Enter = 1]: " server_role
     server_role="${server_role:-1}"
 
-    PUBLIC_GEO_BASE_URL="$prev_public_geo"
+    PUBLIC_GEO_BASE_URL=""
     ROUTING_SOURCE_REPO="$prev_routing_repo"
     NEEDS_PUBLIC_DOMAIN=true
     local config_remna=false
 
-    if [ "$server_role" = "3" ]; then
-        # ── Роль 3: Только апдейтер Remnawave (без домена) ──
-        ENABLED_CLIENTS="HAPP_DEEPLINK"
-        NEEDS_PUBLIC_DOMAIN=false
-        config_remna=true
+    case "$server_role" in
+        2)
+            ENABLED_CLIENTS="HAPP,INCY"
+            NEEDS_PUBLIC_DOMAIN=true
+            config_remna=false
+            ;;
+        3)
+            ENABLED_CLIENTS="HAPP_GEO,INCY_GEO"
+            NEEDS_PUBLIC_DOMAIN=true
+            config_remna=false
+            ;;
+        4)
+            ENABLED_CLIENTS="HAPP_DEEPLINK"
+            NEEDS_PUBLIC_DOMAIN=false
+            config_remna=true
+            ;;
+        5)
+            ENABLED_CLIENTS="INCY"
+            NEEDS_PUBLIC_DOMAIN=true
+            config_remna=false
+            ;;
+        *)
+            ENABLED_CLIENTS="HAPP,INCY"
+            NEEDS_PUBLIC_DOMAIN=true
+            config_remna=true
+            ;;
+    esac
+    echo -e "${GREEN}[+] Режим: $ENABLED_CLIENTS${NC}\n"
 
-        echo -e "\n${BOLD}Укажите адрес вашего внешнего сервера с базами:${NC}"
+    # Если базы на внешнем сервере (варианты 4 и 5)
+    if [ "$server_role" = "4" ] || [ "$server_role" = "5" ]; then
+        echo -e "${BOLD}--- Адрес внешнего сервера с базами ---${NC}"
         echo -e "${DIM}Пример: https://geo.example.com/секретный_токен${NC}"
-        echo -e "${DIM}Сервер автоматически подставит путь /HAPP/geoip.dat для диплинков.${NC}\n"
+        echo -e "${DIM}Сервер автоматически подставит путь /HAPP/ или /INCY/ для каждого клиента.${NC}\n"
 
         while true; do
             read -r -p "URL к базам [Enter = ${prev_public_geo:-обязательно}]: " input_geo_url
@@ -758,68 +796,79 @@ install_wizard() {
             fi
             echo -e "${RED}[!] URL должен начинаться с https:// (например: https://geo.example.com/секретный_токен)${NC}"
         done
-
         echo -e "${GREEN}[+] Базы берутся с: $PUBLIC_GEO_BASE_URL${NC}\n"
-
-    elif [ "$server_role" = "2" ]; then
-        # ── Роль 2: Только узел раздачи geo-баз ──
-        ENABLED_CLIENTS="HAPP_GEO,INCY_GEO"
-        config_remna=false
-        echo -e "${GREEN}[+] Режим: только раздача geo-баз (без диплинков и Remnawave)${NC}\n"
-
-    else
-        # ── Роль 1: Полный сервер ──
-        echo -e "\n${BOLD}Для каких приложений готовить правила?${NC}"
-        echo -e "  ${BOLD}1)${NC} Happ и Incy (Оба) [Enter]"
-        echo -e "  ${BOLD}2)${NC} Только Happ"
-        echo -e "  ${BOLD}3)${NC} Только Incy"
-        read -r -p "Выберите [1-3, Enter = 1]: " client_pick
-        client_pick="${client_pick:-1}"
-        case "$client_pick" in
-            2) ENABLED_CLIENTS="HAPP"; config_remna=true ;;
-            3) ENABLED_CLIENTS="INCY"; config_remna=false ;;
-            *) ENABLED_CLIENTS="HAPP,INCY"; config_remna=true ;;
-        esac
-        echo -e "${GREEN}[+] Режим: $ENABLED_CLIENTS${NC}\n"
-
-        # Подвопрос: где лежат geo-базы?
-        echo -e "${BOLD}Где хранятся geo-базы (geoip.dat, geosite.dat)?${NC}"
-        echo -e "  ${BOLD}1)${NC} На этом сервере — скачиваем и раздаём локально [Enter]"
-        echo -e "  ${BOLD}2)${NC} На другом сервере — базы уже доступны по HTTPS"
-        read -r -p "Выберите [1-2, Enter = 1]: " geo_location
-        geo_location="${geo_location:-1}"
-
-        if [ "$geo_location" = "2" ]; then
-            echo -e "\n${BOLD}Укажите адрес вашего внешнего сервера с базами:${NC}"
-            echo -e "${DIM}Пример: https://geo.example.com/секретный_токен${NC}"
-            echo -e "${DIM}Сервер автоматически подставит правильный путь /HAPP/ или /INCY/ для каждого клиента.${NC}\n"
-
-            while true; do
-                read -r -p "URL к базам [Enter = ${prev_public_geo:-обязательно}]: " input_geo_url
-                PUBLIC_GEO_BASE_URL="${input_geo_url:-$prev_public_geo}"
-                PUBLIC_GEO_BASE_URL="$(echo "$PUBLIC_GEO_BASE_URL" | sed 's:/*$::')"
-                if [[ "$PUBLIC_GEO_BASE_URL" =~ ^https?:// ]]; then
-                    break
-                fi
-                echo -e "${RED}[!] URL должен начинаться с https:// (например: https://geo.example.com/секретный_токен)${NC}"
-            done
-            echo -e "${GREEN}[+] Geo-базы берутся с: $PUBLIC_GEO_BASE_URL${NC}\n"
-        else
-            echo -e "${DIM}[i] Базы будут скачиваться и раздаваться с этого сервера.${NC}\n"
-        fi
     fi
 
     # ────────────────────────────────────────────────────────────────────────
-    # ШАГ 3: Интеграция с Remnawave (если применима)
+    # ШАГ 3: Публичный домен и токен (если нужен домен)
+    # ────────────────────────────────────────────────────────────────────────
+    DOMAIN="local"
+    ROUTING_TOKEN="local"
+    HTTP_PORT="8080"
+
+    if [ "$NEEDS_PUBLIC_DOMAIN" = true ]; then
+        echo -e "${BOLD}--- [Шаг 3] Публичный домен для HTTPS ---${NC}"
+        echo -e "${DIM}Домен, на который вы направите реверс-прокси (Caddy / Nginx / NPM).${NC}"
+        read -r -p "Введите домен [Enter = ${prev_domain:-geo.example.com}]: " input_domain
+        DOMAIN="${input_domain:-${prev_domain:-geo.example.com}}"
+        echo -e "${GREEN}[+] Домен: $DOMAIN${NC}\n"
+
+        # ШАГ 4: Токен
+        echo -e "${BOLD}--- [Шаг 4] Секретный URL-токен ---${NC}"
+        echo -e "${DIM}Токен — секретная часть URL, которая защищает ваши файлы от сканеров.${NC}"
+        
+        local auto_token
+        if [ -n "$prev_token" ] && [ "$prev_token" != "local" ]; then
+            auto_token="$prev_token"
+            echo -e "Используется токен: ${CYAN}${BOLD}${auto_token}${NC}"
+        else
+            auto_token="$(openssl rand -hex 16)"
+            echo -e "Сгенерирован случайный токен: ${CYAN}${BOLD}${auto_token}${NC}"
+        fi
+        
+        read -r -p "Введите свой токен или нажмите Enter для подтверждения: " input_token
+        ROUTING_TOKEN="${input_token:-$auto_token}"
+        echo -e "${GREEN}[+] Токен сохранён.${NC}"
+        echo -e "${DIM}Пример готовой ссылки: https://${DOMAIN}/${ROUTING_TOKEN}/HAPP/geoip.dat${NC}\n"
+
+        # ШАГ 5: Локальный порт
+        echo -e "${BOLD}--- [Шаг 5] Локальный порт веб-сервера ---${NC}"
+        echo -e "${DIM}На этот порт ваш реверс-прокси будет перенаправлять трафик.${NC}"
+        local suggested_port="${prev_port:-8080}"
+        if is_port_in_use "$suggested_port"; then
+            local free_p
+            free_p="$(find_free_port 8081)"
+            echo -e "${YELLOW}[!] Порт $suggested_port уже занят на сервере. Предлагаем свободный порт: ${BOLD}${free_p}${NC}"
+            suggested_port="$free_p"
+        fi
+        read -r -p "Порт [Enter = ${suggested_port}]: " input_port
+        HTTP_PORT="${input_port:-$suggested_port}"
+        while is_port_in_use "$HTTP_PORT"; do
+            echo -e "${RED}[!] Порт $HTTP_PORT уже занят другим процессом на сервере!${NC}"
+            local next_free
+            next_free="$(find_free_port $((HTTP_PORT + 1)))"
+            read -r -p "Введите другой порт [Enter = ${next_free}]: " input_port
+            HTTP_PORT="${input_port:-$next_free}"
+        done
+        echo -e "${GREEN}[+] Порт: $HTTP_PORT${NC}\n"
+    else
+        local default_local_port="${prev_port:-8080}"
+        if is_port_in_use "$default_local_port"; then
+            default_local_port="$(find_free_port 8081)"
+        fi
+        HTTP_PORT="$default_local_port"
+    fi
+
+    # ────────────────────────────────────────────────────────────────────────
+    # ШАГ 6: Интеграция с Remnawave (если применима)
     # ────────────────────────────────────────────────────────────────────────
     REMNA_BLOCK=""
     if [ "$config_remna" = true ]; then
-        echo -e "${BOLD}--- [Шаг 3] Прямая интеграция с Remnawave ---${NC}"
+        echo -e "${BOLD}--- [Шаг 6] Прямая интеграция с Remnawave ---${NC}"
         echo -e "${DIM}Сервер сам отправляет правила маршрутизации прямо в API вашей панели Remnawave.${NC}\n"
 
         local remna_choice="Y"
-        if [ "$server_role" != "3" ]; then
-            # Для роли 1 (полный сервер) — Remnawave опционален
+        if [ "$server_role" != "1" ] && [ "$server_role" != "4" ]; then
             local default_remna_prompt="y/N"
             [ -n "$prev_remna_token" ] && default_remna_prompt="Y/n"
             read -r -p "Настроить отправку правил Happ в сквады Remnawave? [$default_remna_prompt]: " remna_choice
@@ -909,71 +958,7 @@ CLOUDFLARE_ZERO_TRUST_CLIENT_SECRET=${prev_cf_secret}
             fi
 
             echo -e "\n${GREEN}[+] Интеграция с Remnawave настроена.${NC}\n"
-        else
-            echo -e "${DIM}Пропущено. Вы сможете настроить это позже через меню: geo-server → пункт 4${NC}\n"
         fi
-    fi
-
-    # ────────────────────────────────────────────────────────────────────────
-    # ШАГ 4: Публичный домен (только если нужен)
-    # ────────────────────────────────────────────────────────────────────────
-    DOMAIN="local"
-    ROUTING_TOKEN="local"
-    HTTP_PORT="8080"
-
-    if [ "$NEEDS_PUBLIC_DOMAIN" = true ]; then
-        echo -e "${BOLD}--- [Шаг 4] Публичный домен для HTTPS ---${NC}"
-        echo -e "${DIM}Домен, на который вы направите реверс-прокси (Caddy / Nginx / NPM).${NC}"
-        read -r -p "Введите домен [Enter = ${prev_domain:-geo.example.com}]: " input_domain
-        DOMAIN="${input_domain:-${prev_domain:-geo.example.com}}"
-        echo -e "${GREEN}[+] Домен: $DOMAIN${NC}\n"
-
-        # ШАГ 5: Токен
-        echo -e "${BOLD}--- [Шаг 5] Секретный URL-токен ---${NC}"
-        echo -e "${DIM}Токен — секретная часть URL, которая защищает ваши файлы от сканеров.${NC}"
-        echo -e "${DIM}Пример ссылки: https://${DOMAIN}/${NC}${CYAN}<ТОКЕН>${NC}${DIM}/HAPP/geoip.dat${NC}"
-        
-        local auto_token
-        if [ -n "$prev_token" ] && [ "$prev_token" != "local" ]; then
-            auto_token="$prev_token"
-            echo -e "Используется сохраненный ранее токен: ${CYAN}${BOLD}${auto_token}${NC}"
-        else
-            auto_token="$(openssl rand -hex 16)"
-            echo -e "Сгенерирован случайный токен: ${CYAN}${BOLD}${auto_token}${NC}"
-        fi
-        
-        read -r -p "Введите свой или нажмите Enter для подтверждения: " input_token
-        ROUTING_TOKEN="${input_token:-$auto_token}"
-        echo -e "${GREEN}[+] Токен сохранён.${NC}\n"
-
-        # ШАГ 6: Порт
-        echo -e "${BOLD}--- [Шаг 6] Локальный порт ---${NC}"
-        echo -e "${DIM}На этот порт ваш реверс-прокси будет перенаправлять трафик.${NC}"
-        local suggested_port="${prev_port:-8080}"
-        if is_port_in_use "$suggested_port"; then
-            local free_p
-            free_p="$(find_free_port 8081)"
-            echo -e "${YELLOW}[!] Порт $suggested_port уже занят на сервере. Предлагаем свободный порт: ${BOLD}${free_p}${NC}"
-            suggested_port="$free_p"
-        fi
-        read -r -p "Порт [Enter = ${suggested_port}]: " input_port
-        HTTP_PORT="${input_port:-$suggested_port}"
-        while is_port_in_use "$HTTP_PORT"; do
-            echo -e "${RED}[!] Порт $HTTP_PORT уже занят другим процессом на сервере!${NC}"
-            local next_free
-            next_free="$(find_free_port $((HTTP_PORT + 1)))"
-            read -r -p "Введите другой порт [Enter = ${next_free}]: " input_port
-            HTTP_PORT="${input_port:-$next_free}"
-        done
-        echo -e "${GREEN}[+] Порт: $HTTP_PORT${NC}\n"
-    else
-        local default_local_port="${prev_port:-8080}"
-        if is_port_in_use "$default_local_port"; then
-            default_local_port="$(find_free_port 8081)"
-            echo -e "${YELLOW}[!] Порт 8080 занят на сервере. Автоматически выбран свободный порт: ${default_local_port}${NC}"
-        fi
-        HTTP_PORT="$default_local_port"
-        echo -e "${DIM}[i] Шаги «Домен» и «Токен» пропущены (локальный режим). Порт: $HTTP_PORT${NC}\n"
     fi
 
     # ────────────────────────────────────────────────────────────────────────
