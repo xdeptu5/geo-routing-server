@@ -351,7 +351,7 @@ configure_remnawave() {
     echo -e "\n${CYAN}${BOLD}[i] Источник правил маршрутизации:${NC} ${CYAN}https://github.com/hydraponique/roscomvpn-routing${NC}"
     echo -e "${DIM}Сервер берет готовые правила из папки HAPP этого репозитория.${NC}"
     echo -e "Доступные варианты правил:"
-    echo -e "  ${BOLD}1) JSONSUB.JSON${NC}   — Антизапрет / Обход блокировок ${DIM}(трафик РФ напрямую, заблокированное через VPN)${NC} [Рекомендуется]"
+    echo -e "  ${BOLD}1) JSONSUB.JSON${NC}   — Обход блокировок ${DIM}(сайты из реестра РКН через VPN, остальные напрямую)${NC} [Рекомендуется]"
     echo -e "  ${BOLD}2) WHITELIST.JSON${NC} — Белый список ${DIM}(весь интернет через VPN, кроме незаблокированных сервисов РФ)${NC}"
     echo -e "  ${BOLD}3) DEFAULT.JSON${NC}   — Базовое стандартное правило"
     echo -e "  ${DIM}(или введите имя любого другого .JSON файла из репозитория)${NC}"
@@ -359,10 +359,10 @@ configure_remnawave() {
     local squads_env=""
     for ((i=1; i<=count_squads; i++)); do
         echo -e "\n${CYAN}--- Настройка Сквада #$i ---${NC}"
-        read -r -p "UUID сквада $i (из панели Remnawave → Группы): " sq_uuid
+        read -r -p "UUID сквада $i (из панели Remnawave → Сквады): " sq_uuid
         echo -e "  Правило маршрутизации для сквада $i:"
-        echo -e "    ${BOLD}1)${NC} Обход блокировок (JSONSUB.JSON) — РФ напрямую, заблокированное в VPN [Enter]"
-        echo -e "    ${BOLD}2)${NC} Белый список (WHITELIST.JSON)  — весь интернет в VPN, кроме РФ"
+        echo -e "    ${BOLD}1)${NC} Обход блокировок (JSONSUB.JSON) — сайты из реестра РКН через VPN, остальные напрямую [Enter]"
+        echo -e "    ${BOLD}2)${NC} Белый список (WHITELIST.JSON)  — весь интернет через VPN, кроме РФ"
         echo -e "    ${BOLD}3)${NC} Свой файл из репозитория       — указать нестандартный .json"
         read -r -p "  Выберите [1-3, Enter = 1]: " rule_pick
         rule_pick="${rule_pick:-1}"
@@ -706,51 +706,71 @@ install_wizard() {
     # ────────────────────────────────────────────────────────────────────────
     # ШАГ 2: Режим работы сервера
     # ────────────────────────────────────────────────────────────────────────
-    echo -e "${BOLD}--- [Шаг 2] Что будет делать этот сервер? ---${NC}"
+    echo -e "${BOLD}--- [Шаг 2] Выберите назначение сервера ---${NC}"
     echo ""
-    echo -e "  ${BOLD}1)${NC} Полный сервер ${DIM}— раздаёт geo-базы и правила для HAPP и INCY (всё-в-одном)${NC}"
-    echo -e "  ${BOLD}2)${NC} Только INCY ${DIM}— раздаёт geo-базы и автороутинг только для клиента Incy${NC}"
-    echo -e "  ${BOLD}3)${NC} Для панели Remnawave ${DIM}— только отправка правил маршрутизации (самый лёгкий вариант)${NC}"
-    echo -e "  ${BOLD}4)${NC} Публичный сервер geo-баз ${DIM}— только раздача файлов geoip.dat / geosite.dat${NC}"
-    echo -e "  ${BOLD}5)${NC} HAPP полный ${DIM}— и правила для Remnawave, и раздача geo-баз${NC}"
+    echo -e "  ${BOLD}1)${NC} Только сквады Remnawave (Happ) ${DIM}— обновляет правила в сквадах панели, базы не раздает (домен не нужен)${NC}"
+    echo -e "  ${BOLD}2)${NC} Incy: гео-базы + автороутинг ${DIM}— раздает базы (geoip.dat, geosite.dat), правила и заголовок autorouting${NC}"
+    echo -e "  ${BOLD}3)${NC} Happ: гео-базы + сквады Remnawave ${DIM}— раздает базы (geoip.dat, geosite.dat) и обновляет сквады в панели${NC}"
+    echo -e "  ${BOLD}4)${NC} Все клиенты (Happ и Incy) ${DIM}— полный сервер: раздает базы и правила для Happ и Incy, обновляет сквады${NC}"
+    echo -e "  ${BOLD}5)${NC} Только раздача гео-баз ${DIM}— раздает исключительно файлы geoip.dat и geosite.dat без правил приложений${NC}"
     echo ""
     read -r -p "Выберите вариант [1-5, Enter = 1]: " client_choice
     client_choice="${client_choice:-1}"
     
     PUBLIC_GEO_BASE_URL="$prev_public_geo"
     NEEDS_PUBLIC_DOMAIN=true
+    local config_remna=false
 
     case "$client_choice" in
-        2) ENABLED_CLIENTS="INCY" ;;
-        3) 
+        1) 
             ENABLED_CLIENTS="HAPP_DEEPLINK"
             NEEDS_PUBLIC_DOMAIN=false
+            config_remna=true
             echo -e "\n${CYAN}[i] Опционально: если geo-базы раздаются с другого вашего сервера, укажите его URL.${NC}"
-            echo -e "${DIM}Пример: https://geo-node.example.com/secret_token/HAPP${NC}"
+            echo -e "${DIM}Пример: https://geo.example.com/secret_token/HAPP${NC}"
             read -r -p "URL к внешним geo-базам [Enter = ${prev_public_geo:-пропустить}]: " input_geo_url
             PUBLIC_GEO_BASE_URL="${input_geo_url:-$prev_public_geo}"
             ;;
-        4) ENABLED_CLIENTS="HAPP_GEO" ;;
-        5) ENABLED_CLIENTS="HAPP" ;;
-        *) ENABLED_CLIENTS="HAPP,INCY" ;;
+        2) 
+            ENABLED_CLIENTS="INCY"
+            config_remna=false
+            ;;
+        3) 
+            ENABLED_CLIENTS="HAPP"
+            config_remna=true
+            ;;
+        4) 
+            ENABLED_CLIENTS="HAPP,INCY"
+            config_remna=true
+            ;;
+        5) 
+            ENABLED_CLIENTS="HAPP_GEO"
+            config_remna=false
+            ;;
+        *) 
+            ENABLED_CLIENTS="HAPP_DEEPLINK"
+            NEEDS_PUBLIC_DOMAIN=false
+            config_remna=true
+            ;;
     esac
     echo -e "${GREEN}[+] Режим: $ENABLED_CLIENTS${NC}\n"
 
     # ────────────────────────────────────────────────────────────────────────
-    # ШАГ 3: Интеграция с Remnawave (только если выбран HAPP-модуль)
+    # ШАГ 3: Интеграция с Remnawave (если применима)
     # ────────────────────────────────────────────────────────────────────────
     REMNA_BLOCK=""
-    if [[ "$ENABLED_CLIENTS" =~ HAPP ]]; then
+    if [ "$config_remna" = true ]; then
         echo -e "${BOLD}--- [Шаг 3] Прямая интеграция с Remnawave ---${NC}"
-        echo -e "${DIM}Сервер может сам отправлять правила маршрутизации прямо в API вашей панели Remnawave.${NC}"
-        echo -e "${DIM}Вам не нужны сторонние контейнеры-апдейтеры — всё работает из коробки.${NC}\n"
+        echo -e "${DIM}Сервер сам отправляет правила маршрутизации прямо в API вашей панели Remnawave.${NC}\n"
         
-        local default_remna_prompt="y/N"
-        [ -n "$prev_remna_token" ] && default_remna_prompt="Y/n"
-
-        read -r -p "Настроить интеграцию с Remnawave? [$default_remna_prompt]: " remna_choice
-        if [ -n "$prev_remna_token" ]; then
-            remna_choice="${remna_choice:-Y}"
+        local remna_choice="Y"
+        if [ "$client_choice" != "1" ]; then
+            local default_remna_prompt="y/N"
+            [ -n "$prev_remna_token" ] && default_remna_prompt="Y/n"
+            read -r -p "Настроить интеграцию со сквадами Remnawave? [$default_remna_prompt]: " remna_choice
+            if [ -n "$prev_remna_token" ]; then
+                remna_choice="${remna_choice:-Y}"
+            fi
         fi
 
         if [[ "$remna_choice" =~ ^[YyДд]$ ]]; then
@@ -762,7 +782,7 @@ install_wizard() {
             read -r -p "JWT токен администратора [Enter = $r_token_hint]: " r_token
             r_token="${r_token:-$prev_remna_token}"
             echo ""
-            read -r -p "Сколько сквадов (групп пользователей) привязать? [1-5, Enter = 1]: " r_count
+            read -r -p "Сколько сквадов привязать? [1-5, Enter = 1]: " r_count
             r_count="${r_count:-1}"
             
             REMNA_BLOCK="REMNAWAVE_BASE_URL=${r_base}
@@ -771,17 +791,17 @@ REMNAWAVE_TOKEN=${r_token}
             echo -e "\n${CYAN}${BOLD}[i] Источник правил маршрутизации:${NC} ${CYAN}https://github.com/hydraponique/roscomvpn-routing${NC}"
             echo -e "${DIM}Сервер берет готовые правила из папки HAPP этого репозитория.${NC}"
             echo -e "Доступные варианты правил:"
-            echo -e "  ${BOLD}1) JSONSUB.JSON${NC}   — Антизапрет / Обход блокировок ${DIM}(трафик РФ напрямую, заблокированное через VPN)${NC} [Рекомендуется]"
+            echo -e "  ${BOLD}1) JSONSUB.JSON${NC}   — Обход блокировок ${DIM}(сайты из реестра РКН через VPN, остальные напрямую)${NC} [Рекомендуется]"
             echo -e "  ${BOLD}2) WHITELIST.JSON${NC} — Белый список ${DIM}(весь интернет через VPN, кроме незаблокированных сервисов РФ)${NC}"
             echo -e "  ${BOLD}3) DEFAULT.JSON${NC}   — Базовое стандартное правило"
             echo -e "  ${DIM}(или введите имя любого другого .JSON файла из репозитория)${NC}"
 
             for ((i=1; i<=r_count; i++)); do
                 echo -e "\n${CYAN}── Сквад #$i ──${NC}"
-                read -r -p "  UUID сквада (из панели Remnawave → Группы): " s_uuid
+                read -r -p "  UUID сквада (из панели Remnawave → Сквады): " s_uuid
                 echo -e "  Правило маршрутизации для сквада $i:"
-                echo -e "    ${BOLD}1)${NC} Обход блокировок (JSONSUB.JSON) — РФ напрямую, заблокированное в VPN [Enter]"
-                echo -e "    ${BOLD}2)${NC} Белый список (WHITELIST.JSON)  — весь интернет в VPN, кроме РФ"
+                echo -e "    ${BOLD}1)${NC} Обход блокировок (JSONSUB.JSON) — сайты из реестра РКН через VPN, остальные напрямую [Enter]"
+                echo -e "    ${BOLD}2)${NC} Белый список (WHITELIST.JSON)  — весь интернет через VPN, кроме РФ"
                 echo -e "    ${BOLD}3)${NC} Свой файл из репозитория       — указать нестандартный .json"
                 read -r -p "  Выберите [1-3, Enter = 1]: " s_rule_pick
                 s_rule_pick="${s_rule_pick:-1}"
