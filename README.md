@@ -240,8 +240,19 @@ Happ принимает правила маршрутизации в виде з
 
 ## 🗺️ Популярные топологии развертывания
 
-### Сценарий А. Всё в одном (Geo Hub + Incy + Remnawave)
-Один сервер раздает базы по HTTPS, отдает JSON для Incy и сам отправляет правила в Remnawave по расписанию.
+### Сценарий 1. Автономный сервер баз и правил Happ + Incy (БЕЗ Remnawave)
+Классический независимый сервер для Marzban, 3x-ui или ручной выдачи:
+* Раздает по HTTPS базы `geoip.dat` и `geosite.dat` для обоих клиентов.
+* Раздает готовые диплинки для Happ (`happ://routing/onadd/...`).
+* Раздает JSON-правила автороутинга для Incy (`.../INCY/JSONSUB.JSON`).
+```env
+DOMAIN=geo.example.com
+ROUTING_TOKEN=секретный_токен
+ENABLED_CLIENTS=HAPP,INCY
+```
+
+### Сценарий 2. Всё в одном: Happ + Incy + базы + автопатч Remnawave
+Сервер раздает базы по HTTPS, отдает JSON для Incy и сам отправляет диплинки для Happ напрямую в сквады Remnawave:
 ```env
 DOMAIN=geo.example.com
 ROUTING_TOKEN=секретный_токен
@@ -252,16 +263,16 @@ REMNAWAVE_SQUAD_1_UUID=uuid_сквада
 REMNAWAVE_SQUAD_1_RULE=JSONSUB.JSON
 ```
 
-### Сценарий Б. Быстрый узел раздачи geo-баз (например, VPS в РФ)
-Сервер только раздает тяжелые файлы `geoip.dat` и `geosite.dat` на максимальной скорости без блокировок. Домен и HTTPS настроены, но Remnawave на этой машине нет.
+### Сценарий 3. Быстрый узел раздачи geo-баз (например, VPS в РФ)
+Сервер только раздает тяжелые файлы `geoip.dat` и `geosite.dat` на максимальной скорости без блокировок. Правила и Remnawave на этой машине не нужны:
 ```env
 DOMAIN=ru-node.example.com
 ROUTING_TOKEN=секретный_токен
 ENABLED_CLIENTS=HAPP_GEO,INCY_GEO
 ```
 
-### Сценарий В. Апдейтер Remnawave со скрытой работой (базы на внешнем узле)
-Работает на зарубежном VPS рядом с Remnawave. **Свой домен и веб-сервер не требуются!** Сервер забирает базы с быстрого узла (Сценарий Б), вшивает ссылки на них в диплинки и обновляет сквады Remnawave через API:
+### Сценарий 4. Скрытый апдейтер Remnawave (базы на внешнем узле)
+Работает на сервере рядом с Remnawave. **Свой домен, реверс-прокси и открытые порты не требуются!** Контейнер берет базы с быстрого узла (Сценарий 3), собирает диплинки со ссылками на него и обновляет сквады Remnawave через API:
 ```env
 ENABLED_CLIENTS=HAPP_DEEPLINK
 PUBLIC_GEO_BASE_URL=https://ru-node.example.com/секретный_токен
@@ -270,7 +281,15 @@ REMNAWAVE_TOKEN=jwt_токен
 REMNAWAVE_SQUAD_1_UUID=uuid_сквада
 REMNAWAVE_SQUAD_1_RULE=JSONSUB.JSON
 ```
-*(В этом режиме входящие порты можно вообще не публиковать, веб-сервер не используется).*
+
+### Сценарий 5. Сервер правил Incy (с базами на внешнем узле)
+Сервер раздает по HTTPS только файл подписки `JSONSUB.JSON` для Incy. Тяжелые базы скачиваются клиентами напрямую с быстрого гео-узла:
+```env
+DOMAIN=geo.example.com
+ROUTING_TOKEN=секретный_токен
+ENABLED_CLIENTS=INCY
+PUBLIC_GEO_BASE_URL=https://ru-node.example.com/секретный_токен
+```
 
 ---
 
