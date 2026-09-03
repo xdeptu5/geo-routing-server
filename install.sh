@@ -929,8 +929,10 @@ CLOUDFLARE_ZERO_TRUST_CLIENT_SECRET=${prev_cf_secret}
 
     if [ "$NEEDS_NETWORK" = true ]; then
         echo -e "${BOLD}--- [Шаг 7] Подключение к Docker-сети ---${NC}"
-        echo -e "${DIM}Если Remnawave или ваш реверс-прокси работает в Docker, подключите контейнер к их общей сети.${NC}"
-        read -r -p "Подключить к внешней Docker-сети? [y/N]: " net_choice
+        echo -e "${DIM}Нужно, если Remnawave и этот сервер запущены на одной машине через Docker.${NC}"
+        echo -e "${DIM}Объединение в общую сеть позволяет им общаться напрямую без открытия портов наружу.${NC}"
+        echo -e "${DIM}Если не уверены — нажмите Enter (пропустить).${NC}"
+        read -r -p "Подключить к Docker-сети? [y/N]: " net_choice
         if [[ "$net_choice" =~ ^[YyДд]$ ]]; then
             read -r -p "Имя сети [Enter = remnawave-network]: " input_net
             EXT_NETWORK="${input_net:-remnawave-network}"
