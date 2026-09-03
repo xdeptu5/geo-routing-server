@@ -684,6 +684,7 @@ install_wizard() {
     local prev_cf_id=""
     local prev_cf_secret=""
     local prev_routing_repo="https://raw.githubusercontent.com/hydraponique/roscomvpn-routing/main"
+    local prev_schedule="0 10 * * *"
 
     if [ -f "$INSTALL_DIR/.env" ]; then
         echo -e "${CYAN}[i] Найден существующий файл .env — текущие значения будут предложены по умолчанию.${NC}\n"
@@ -701,6 +702,7 @@ install_wizard() {
         prev_cf_id="$(grep "^CLOUDFLARE_ZERO_TRUST_CLIENT_ID=" "$INSTALL_DIR/.env" | cut -d'=' -f2- || true)"
         prev_cf_secret="$(grep "^CLOUDFLARE_ZERO_TRUST_CLIENT_SECRET=" "$INSTALL_DIR/.env" | cut -d'=' -f2- || true)"
         prev_routing_repo="$(grep "^ROUTING_SOURCE_REPO=" "$INSTALL_DIR/.env" | cut -d'=' -f2- || echo "$prev_routing_repo")"
+        prev_schedule="$(grep "^SCHEDULE=" "$INSTALL_DIR/.env" | cut -d'=' -f2- || echo "$prev_schedule")"
     fi
 
     # ────────────────────────────────────────────────────────────────────────
@@ -949,7 +951,33 @@ CLOUDFLARE_ZERO_TRUST_CLIENT_SECRET=${prev_cf_secret}
     fi
 
     # ────────────────────────────────────────────────────────────────────────
-    # ШАГ 8: Telegram (всегда опционален)
+    # ШАГ 8: Расписание обновления (Cron)
+    # ────────────────────────────────────────────────────────────────────────
+    echo -e "${BOLD}--- [Шаг 8] Расписание автоматического обновления ---${NC}"
+    echo -e "${DIM}Как часто обновлять базы и отправлять правила в сквады?${NC}\n"
+    echo -e "  ${BOLD}1)${NC} Раз в сутки в 10:00 UTC / 13:00 МСК [Enter — Рекомендуется]"
+    echo -e "     ${DIM}(Гарантированно после утреннего обновления репозитория roscomvpn-routing)${NC}"
+    echo -e "  ${BOLD}2)${NC} Каждые 6 часов (4 раза в день)"
+    echo -e "  ${BOLD}3)${NC} Каждые 12 часов (2 раза в день)"
+    echo -e "  ${BOLD}4)${NC} Указать свое cron-расписание"
+    echo ""
+    read -r -p "Выберите вариант [1-4, Enter = 1]: " sched_choice
+    sched_choice="${sched_choice:-1}"
+
+    SCHEDULE="0 10 * * *"
+    case "$sched_choice" in
+        2) SCHEDULE="0 */6 * * *" ;;
+        3) SCHEDULE="0 */12 * * *" ;;
+        4)
+            read -r -p "Введите cron-выражение [Enter = ${prev_schedule:-0 10 * * *}]: " custom_sched
+            SCHEDULE="${custom_sched:-${prev_schedule:-0 10 * * *}}"
+            ;;
+        *) SCHEDULE="0 10 * * *" ;;
+    esac
+    echo -e "${GREEN}[+] Расписание: $SCHEDULE${NC}\n"
+
+    # ────────────────────────────────────────────────────────────────────────
+    # ШАГ 9: Telegram (всегда опционален)
     # ────────────────────────────────────────────────────────────────────────
     echo -e "${BOLD}--- [Последний шаг] Telegram-уведомления (опционально) ---${NC}"
     echo -e "${DIM}Бот будет присылать алерты при ошибках синхронизации и (по желанию) отчёты о новых базах.${NC}"
@@ -1009,7 +1037,7 @@ CLOUDFLARE_ZERO_TRUST_CLIENT_SECRET=${prev_cf_secret}
         [ -n "$REMNA_BLOCK" ] && printf '%s' "$REMNA_BLOCK"
         echo "HTTP_BIND=127.0.0.1"
         echo "HTTP_PORT=${HTTP_PORT}"
-        echo "SCHEDULE=40 8 * * *"
+        echo "SCHEDULE=${SCHEDULE}"
         echo "SYNC_ON_START=true"
         [ -n "$TG_BOT_TOKEN" ] && echo "TELEGRAM_BOT_TOKEN=${TG_BOT_TOKEN}"
         [ -n "$TG_CHAT_ID" ] && echo "TELEGRAM_CHAT_ID=${TG_CHAT_ID}"
@@ -1041,7 +1069,7 @@ services:
       ROUTING_TOKEN: "\${ROUTING_TOKEN:-${ROUTING_TOKEN}}"
       ENABLED_CLIENTS: "\${ENABLED_CLIENTS:-${ENABLED_CLIENTS}}"
       PUBLIC_GEO_BASE_URL: "\${PUBLIC_GEO_BASE_URL:-}"
-      SCHEDULE: "\${SCHEDULE:-40 8 * * *}"
+      SCHEDULE: "\${SCHEDULE:-0 10 * * *}"
       SYNC_ON_START: "\${SYNC_ON_START:-true}"
       GEOIP_SOURCE_URL: "\${GEOIP_SOURCE_URL:-}"
       GEOSITE_SOURCE_URL: "\${GEOSITE_SOURCE_URL:-}"
