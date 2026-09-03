@@ -10,35 +10,6 @@ services:
     env_file:
       - .env
 
-    # Настройки сервиса (значения берутся из файла .env или можно вписать прямо сюда):
-    environment:
-      DOMAIN: "${DOMAIN:-geo.example.com}"
-      ROUTING_TOKEN: "${ROUTING_TOKEN:-}"
-      ENABLED_CLIENTS: "${ENABLED_CLIENTS:-HAPP,INCY}"
-      PUBLIC_GEO_BASE_URL: "${PUBLIC_GEO_BASE_URL:-}"
-      SCHEDULE: "${SCHEDULE:-0 10 * * *}"
-      SYNC_ON_START: "${SYNC_ON_START:-true}"
-      GEOIP_SOURCE_URL: "${GEOIP_SOURCE_URL:-}"
-      GEOSITE_SOURCE_URL: "${GEOSITE_SOURCE_URL:-}"
-      ROUTING_SOURCE_REPO: "${ROUTING_SOURCE_REPO:-https://raw.githubusercontent.com/hydraponique/roscomvpn-routing/main}"
-      TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN:-}"
-      TELEGRAM_CHAT_ID: "${TELEGRAM_CHAT_ID:-}"
-      TELEGRAM_THREAD_ID: "${TELEGRAM_THREAD_ID:-}"
-      TELEGRAM_NOTIFY_SUCCESS: "${TELEGRAM_NOTIFY_SUCCESS:-false}"
-      # Прямая интеграция с Remnawave API (до 3 сквадов; для 4+ добавьте REMNAWAVE_SQUAD_4_UUID и т.д.):
-      REMNAWAVE_BASE_URL: "${REMNAWAVE_BASE_URL:-}"
-      REMNAWAVE_TOKEN: "${REMNAWAVE_TOKEN:-}"
-      REMNAWAVE_GLOBAL_RULE: "${REMNAWAVE_GLOBAL_RULE:-}"
-      REMNAWAVE_SQUAD_1_UUID: "${REMNAWAVE_SQUAD_1_UUID:-}"
-      REMNAWAVE_SQUAD_1_RULE: "${REMNAWAVE_SQUAD_1_RULE:-}"
-      REMNAWAVE_SQUAD_2_UUID: "${REMNAWAVE_SQUAD_2_UUID:-}"
-      REMNAWAVE_SQUAD_2_RULE: "${REMNAWAVE_SQUAD_2_RULE:-}"
-      REMNAWAVE_SQUAD_3_UUID: "${REMNAWAVE_SQUAD_3_UUID:-}"
-      REMNAWAVE_SQUAD_3_RULE: "${REMNAWAVE_SQUAD_3_RULE:-}"
-      # Если Remnawave защищена Cloudflare Zero Trust (Service Token):
-      CLOUDFLARE_ZERO_TRUST_CLIENT_ID: "${CLOUDFLARE_ZERO_TRUST_CLIENT_ID:-}"
-      CLOUDFLARE_ZERO_TRUST_CLIENT_SECRET: "${CLOUDFLARE_ZERO_TRUST_CLIENT_SECRET:-}"
-
     # Локальный порт для подключения вашего реверс-прокси (Caddy или Nginx):
     ports:
       - "${HTTP_BIND:-127.0.0.1}:${HTTP_PORT:-8080}:80"
