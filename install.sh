@@ -1090,8 +1090,9 @@ EOF
     chmod +x "$INSTALL_DIR/install.sh" 2>/dev/null || true
     create_cli_shortcut "$INSTALL_DIR"
 
-    echo -e "${BLUE}[*] Запуск контейнера Geo Routing Server...${NC}"
+    echo -e "${BLUE}[*] Загрузка и запуск контейнера Geo Routing Server...${NC}"
     cd "$INSTALL_DIR"
+    docker compose pull 2>/dev/null || true
     while true; do
         local up_output=""
         local up_exit=0
