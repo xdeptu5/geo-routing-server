@@ -288,6 +288,27 @@ server {
 
 ---
 
+## 💎 Поддержать проект (Donations)
+
+Если проект оказался для вас полезным, вы можете поддержать его дальнейшую разработку:
+
+### 🪙 USDT / TRX (Tron — TRC20)
+```text
+TKw6b3ZszCM2983sLuFAvqxtt2M8hpNW51
+```
+
+### 💎 TON (The Open Network)
+```text
+UQB19xcTuQ1jFEq0Pi3xaABnN8JaGEXAeuGa2rXFRUUdi8Nk
+```
+
+### 🟡 USDT / BNB (BNB Smart Chain — BEP20)
+```text
+0xFdc848534deA4f010c95df92045ABDa5f6a1559b
+```
+
+---
+
 ## 📄 Лицензия
 
 Проект распространяется под свободной лицензией [MIT](./LICENSE).
