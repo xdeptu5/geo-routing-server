@@ -218,11 +218,11 @@ Happ принимает правила маршрутизации в виде з
   ```
 
 * **Если у вас нет Remnawave (Ручной импорт в Happ):**  
-  Сервер генерирует готовые диплинки в текстовые файлы `.DEEPLINK`. Откройте в браузере или скопируйте содержимое:
-  ```text
-  https://geo.example.com/<ROUTING_TOKEN>/HAPP/JSONSUB.DEEPLINK
-  ```
-  При клике по ссылке приложение Happ автоматически импортирует правила и пропишет адреса баз с вашего сервера.
+  Сервер генерирует готовые диплинки в текстовые файлы `.DEEPLINK`. Откройте в браузере или скопируйте ссылку:
+  * **Обход блокировок (JSONSUB):** `https://geo.example.com/<ROUTING_TOKEN>/HAPP/JSONSUB.DEEPLINK`
+  * **Белый список (WHITELIST):**   `https://geo.example.com/<ROUTING_TOKEN>/HAPP/WHITELIST.DEEPLINK`
+
+  При переходе по ссылке приложение Happ автоматически импортирует правила и настроит адреса баз с вашего сервера.
 
 ---
 
@@ -231,20 +231,24 @@ Happ принимает правила маршрутизации в виде з
 В отличие от Happ, клиент Incy поддерживает динамическое обновление правил по HTTPS-ссылке. В настройках вашей панели (Remnawave, Marzban, 3x-ui) добавьте заголовок профиля:
 
 * **Header Name:** `autorouting`
-* **Header Value:**
+* **Header Value (Обход блокировок — JSONSUB):**
   ```text
   incy://autorouting/onadd/https://geo.example.com/<ROUTING_TOKEN>/INCY/JSONSUB.JSON
+  ```
+* **Header Value (Белый список — WHITELIST):**
+  ```text
+  incy://autorouting/onadd/https://geo.example.com/<ROUTING_TOKEN>/INCY/WHITELIST.JSON
   ```
 
 ---
 
 ## 🗺️ Популярные топологии развертывания
 
-### Сценарий 1. Универсальный сервер раздачи баз и правил (Pull-модель)
+### Сценарий 1. Универсальный сервер баз и правил (Pull-модель)
 Сервер автономно раздает всё необходимое по HTTPS. Подходит для любых VPN-панелей (**Remnawave**, Marzban, 3x-ui) и клиентов (**Happ**, **Incy**), забирающих данные по ссылкам. API-токены панелей серверу не требуются:
 * Раздает по HTTPS свежие базы `geoip.dat` и `geosite.dat` для клиентов Happ и Incy.
-* Раздает готовые диплинки правил для Happ (`happ://routing/onadd/...`).
-* Раздает JSON-файлы подписки автороутинга для Incy (`.../INCY/JSONSUB.JSON`) — панели (Remnawave, Marzban и др.) транслируют эту ссылку в заголовке `autorouting`.
+* Раздает готовые диплинки правил для Happ (`JSONSUB.DEEPLINK`, `WHITELIST.DEEPLINK`).
+* Раздает JSON-файлы автороутинга для Incy (`JSONSUB.JSON`, `WHITELIST.JSON`) — панели транслируют выбранную ссылку в заголовке `autorouting`.
 ```env
 DOMAIN=geo.example.com
 ROUTING_TOKEN=секретный_токен
@@ -253,16 +257,18 @@ ENABLED_CLIENTS=HAPP,INCY
 
 ### Сценарий 2. Сервер раздачи + автопатч Remnawave API для Happ
 Сервер раздает базы и JSON по HTTPS, а также **автоматически обновляет правила Happ в сквадах Remnawave через API**:
-* **Happ:** сервер сам кодирует свежие правила в base64 и пушит в заголовок `routing` нужных сквадов панели Remnawave (полный автомат).
-* **Incy:** автороутинг настраивается один раз в заголовках подписки Remnawave (`autorouting: incy://autorouting/onadd/https://<DOMAIN>/<ROUTING_TOKEN>/INCY/JSONSUB.JSON`). При каждом обновлении подписки клиент Incy сам забирает свежий JSON с вашего сервера.
+* **Happ:** сервер сам кодирует выбранное правило (`JSONSUB.JSON`, `WHITELIST.JSON` или своё) в base64 и пушит в заголовок `routing` нужных сквадов Remnawave.
+* **Incy:** автороутинг настраивается один раз в заголовках подписки Remnawave (ссылка на `JSONSUB.JSON` или `WHITELIST.JSON`). При каждом обновлении подписки клиент Incy сам забирает свежий JSON с вашего сервера.
 ```env
 DOMAIN=geo.example.com
 ROUTING_TOKEN=секретный_токен
 ENABLED_CLIENTS=HAPP,INCY
 REMNAWAVE_BASE_URL=http://remnawave:3000/api
 REMNAWAVE_TOKEN=jwt_токен
-REMNAWAVE_SQUAD_1_UUID=uuid_сквада
+REMNAWAVE_SQUAD_1_UUID=uuid_сквада_обход_блокировок
 REMNAWAVE_SQUAD_1_RULE=JSONSUB.JSON
+REMNAWAVE_SQUAD_2_UUID=uuid_сквада_белый_список
+REMNAWAVE_SQUAD_2_RULE=WHITELIST.JSON
 ```
 
 ### Сценарий 3. Быстрый узел раздачи geo-баз (например, VPS в РФ)
@@ -285,7 +291,7 @@ REMNAWAVE_SQUAD_1_RULE=JSONSUB.JSON
 ```
 
 ### Сценарий 5. Сервер правил Incy (с базами на внешнем узле)
-Сервер раздает по HTTPS только файл подписки `JSONSUB.JSON` для Incy. Тяжелые базы скачиваются клиентами напрямую с быстрого гео-узла:
+Сервер раздает по HTTPS файлы правил подписки (`JSONSUB.JSON` / `WHITELIST.JSON`) для Incy. Тяжелые базы скачиваются клиентами напрямую с быстрого гео-узла:
 ```env
 DOMAIN=geo.example.com
 ROUTING_TOKEN=секретный_токен

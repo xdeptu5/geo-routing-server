@@ -890,8 +890,8 @@ install_wizard() {
         done
         echo -e "${GREEN}[+] Токен сохранён.${NC}"
         echo -e "${CYAN}${BOLD}[i] Базовый URL сервера:${NC} ${CYAN}https://${DOMAIN}/${ROUTING_TOKEN}${NC}"
-        echo -e "${DIM}    • Путь для Happ: /HAPP/ (geoip.dat, geosite.dat)${NC}"
-        echo -e "${DIM}    • Путь для Incy: /INCY/ (geoip.dat, geosite.dat, JSONSUB.JSON)${NC}\n"
+        echo -e "${DIM}    • Путь для Happ: /HAPP/ (geoip.dat, geosite.dat, JSONSUB.DEEPLINK, WHITELIST.DEEPLINK)${NC}"
+        echo -e "${DIM}    • Путь для Incy: /INCY/ (geoip.dat, geosite.dat, JSONSUB.JSON, WHITELIST.JSON)${NC}\n"
 
         # ШАГ 5: Локальный порт
         echo -e "${BOLD}--- [Шаг 5] Локальный порт веб-сервера ---${NC}"
