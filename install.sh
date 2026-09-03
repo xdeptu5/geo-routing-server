@@ -781,6 +781,32 @@ install_wizard() {
             *) ENABLED_CLIENTS="HAPP,INCY"; config_remna=true ;;
         esac
         echo -e "${GREEN}[+] Режим: $ENABLED_CLIENTS${NC}\n"
+
+        # Подвопрос: где лежат geo-базы?
+        echo -e "${BOLD}Где хранятся geo-базы (geoip.dat, geosite.dat)?${NC}"
+        echo -e "  ${BOLD}1)${NC} На этом сервере — скачиваем и раздаём локально [Enter]"
+        echo -e "  ${BOLD}2)${NC} На другом сервере — базы уже доступны по HTTPS"
+        read -r -p "Выберите [1-2, Enter = 1]: " geo_location
+        geo_location="${geo_location:-1}"
+
+        if [ "$geo_location" = "2" ]; then
+            echo -e "\n${BOLD}Укажите полный публичный URL к базам на внешнем сервере:${NC}"
+            echo -e "${DIM}Пример: https://geo.example.com/секретный_токен/HAPP${NC}"
+            echo -e "${DIM}Этот адрес будет вшит в JSON — именно оттуда приложения скачают geoip.dat и geosite.dat.${NC}\n"
+
+            while true; do
+                read -r -p "URL к базам [Enter = ${prev_public_geo:-обязательно}]: " input_geo_url
+                PUBLIC_GEO_BASE_URL="${input_geo_url:-$prev_public_geo}"
+                PUBLIC_GEO_BASE_URL="$(echo "$PUBLIC_GEO_BASE_URL" | sed 's:/*$::')"
+                if [[ "$PUBLIC_GEO_BASE_URL" =~ ^https?:// ]]; then
+                    break
+                fi
+                echo -e "${RED}[!] URL должен начинаться с https:// (например: https://geo.example.com/токен/HAPP)${NC}"
+            done
+            echo -e "${GREEN}[+] Geo-базы берутся с: $PUBLIC_GEO_BASE_URL${NC}\n"
+        else
+            echo -e "${DIM}[i] Базы будут скачиваться и раздаваться с этого сервера.${NC}\n"
+        fi
     fi
 
     # ────────────────────────────────────────────────────────────────────────
