@@ -44,9 +44,10 @@ class IncyProcessor(BaseProcessor):
         logger.info(f"Processing {client} configuration files...")
         config_files = self._discover_config_files()
         
-        if Config.PUBLIC_GEO_BASE_URL and Config.PUBLIC_GEO_BASE_URL.startswith(("http://", "https://")):
-            geoip_public_url = f"{Config.PUBLIC_GEO_BASE_URL}/geoip.dat"
-            geosite_public_url = f"{Config.PUBLIC_GEO_BASE_URL}/geosite.dat"
+        ext_geo_url = Config.get_external_geo_url(client)
+        if ext_geo_url:
+            geoip_public_url = f"{ext_geo_url}/geoip.dat"
+            geosite_public_url = f"{ext_geo_url}/geosite.dat"
         else:
             base_public_url = Config.get_base_url(self.token)
             geoip_public_url = f"{base_public_url}/{client}/geoip.dat"

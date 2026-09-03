@@ -745,9 +745,9 @@ install_wizard() {
         NEEDS_PUBLIC_DOMAIN=false
         config_remna=true
 
-        echo -e "\n${BOLD}Укажите полный публичный URL к базам на вашем внешнем сервере:${NC}"
-        echo -e "${DIM}Пример: https://geo.example.com/секретный_токен/HAPP${NC}"
-        echo -e "${DIM}Этот адрес будет вшит в правила — именно оттуда Happ скачает geoip.dat и geosite.dat.${NC}\n"
+        echo -e "\n${BOLD}Укажите адрес вашего внешнего сервера с базами:${NC}"
+        echo -e "${DIM}Пример: https://geo.example.com/секретный_токен${NC}"
+        echo -e "${DIM}Сервер автоматически подставит путь /HAPP/geoip.dat для диплинков.${NC}\n"
 
         while true; do
             read -r -p "URL к базам [Enter = ${prev_public_geo:-обязательно}]: " input_geo_url
@@ -756,7 +756,7 @@ install_wizard() {
             if [[ "$PUBLIC_GEO_BASE_URL" =~ ^https?:// ]]; then
                 break
             fi
-            echo -e "${RED}[!] URL должен начинаться с https:// (например: https://geo.example.com/токен/HAPP)${NC}"
+            echo -e "${RED}[!] URL должен начинаться с https:// (например: https://geo.example.com/секретный_токен)${NC}"
         done
 
         echo -e "${GREEN}[+] Базы берутся с: $PUBLIC_GEO_BASE_URL${NC}\n"
@@ -790,9 +790,9 @@ install_wizard() {
         geo_location="${geo_location:-1}"
 
         if [ "$geo_location" = "2" ]; then
-            echo -e "\n${BOLD}Укажите полный публичный URL к базам на внешнем сервере:${NC}"
-            echo -e "${DIM}Пример: https://geo.example.com/секретный_токен/HAPP${NC}"
-            echo -e "${DIM}Этот адрес будет вшит в JSON — именно оттуда приложения скачают geoip.dat и geosite.dat.${NC}\n"
+            echo -e "\n${BOLD}Укажите адрес вашего внешнего сервера с базами:${NC}"
+            echo -e "${DIM}Пример: https://geo.example.com/секретный_токен${NC}"
+            echo -e "${DIM}Сервер автоматически подставит правильный путь /HAPP/ или /INCY/ для каждого клиента.${NC}\n"
 
             while true; do
                 read -r -p "URL к базам [Enter = ${prev_public_geo:-обязательно}]: " input_geo_url
@@ -801,7 +801,7 @@ install_wizard() {
                 if [[ "$PUBLIC_GEO_BASE_URL" =~ ^https?:// ]]; then
                     break
                 fi
-                echo -e "${RED}[!] URL должен начинаться с https:// (например: https://geo.example.com/токен/HAPP)${NC}"
+                echo -e "${RED}[!] URL должен начинаться с https:// (например: https://geo.example.com/секретный_токен)${NC}"
             done
             echo -e "${GREEN}[+] Geo-базы берутся с: $PUBLIC_GEO_BASE_URL${NC}\n"
         else

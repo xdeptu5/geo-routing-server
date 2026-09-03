@@ -28,6 +28,21 @@ class Config:
     _raw_public_geo = os.getenv("PUBLIC_GEO_BASE_URL", "").strip().rstrip("/")
     PUBLIC_GEO_BASE_URL = _raw_public_geo if _raw_public_geo.startswith(("http://", "https://")) else ""
     
+    @classmethod
+    def get_external_geo_url(cls, client: str) -> str:
+        """
+        Возвращает публичный URL к внешним базам для конкретного клиента.
+        Если указан корень (https://domain/token) -> добавит /{client}
+        Если указан путь с /HAPP или /INCY -> заменит на нужного клиента.
+        """
+        raw = cls.PUBLIC_GEO_BASE_URL.rstrip("/")
+        if not raw:
+            return ""
+        if raw.upper().endswith("/HAPP") or raw.upper().endswith("/INCY"):
+            root = raw.rsplit("/", 1)[0]
+            return f"{root}/{client.upper()}"
+        return f"{raw}/{client.upper()}"
+    
     GEOIP_SOURCE_URL = os.getenv("GEOIP_SOURCE_URL", "").strip()
     GEOSITE_SOURCE_URL = os.getenv("GEOSITE_SOURCE_URL", "").strip()
     ROUTING_SOURCE_REPO = os.getenv(

@@ -72,10 +72,11 @@ class HappProcessor(BaseProcessor):
             
             # Определяем ссылки на geo-базы, которые нужно зашить в правила
             base_public_url = Config.get_base_url(self.token)
-            if Config.PUBLIC_GEO_BASE_URL and Config.PUBLIC_GEO_BASE_URL.startswith(("http://", "https://")):
+            ext_geo_url = Config.get_external_geo_url(client)
+            if ext_geo_url:
                 # Указан валидный внешний сервер geo-баз
-                geoip_url = f"{Config.PUBLIC_GEO_BASE_URL}/geoip.dat"
-                geosite_url = f"{Config.PUBLIC_GEO_BASE_URL}/geosite.dat"
+                geoip_url = f"{ext_geo_url}/geoip.dat"
+                geosite_url = f"{ext_geo_url}/geosite.dat"
             elif needs_geo:
                 # Базы раздаются с этого же локального сервера
                 geoip_url = f"{base_public_url}/{client}/geoip.dat"
