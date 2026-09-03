@@ -218,9 +218,13 @@ Happ принимает правила маршрутизации в виде з
   ```
 
 * **Если у вас нет Remnawave (Ручной импорт в Happ):**  
-  Сервер генерирует готовые диплинки в текстовые файлы `.DEEPLINK`. Откройте в браузере или скопируйте ссылку:
-  * **Обход блокировок (JSONSUB):** `https://geo.example.com/<ROUTING_TOKEN>/HAPP/JSONSUB.DEEPLINK`
-  * **Белый список (WHITELIST):**   `https://geo.example.com/<ROUTING_TOKEN>/HAPP/WHITELIST.DEEPLINK`
+  Сервер генерирует готовые диплинки в текстовые файлы `.DEEPLINK`:
+  ```text
+  https://geo.example.com/<ROUTING_TOKEN>/HAPP/<RULE>.DEEPLINK
+  ```
+  Примеры ссылок для стандартных правил:
+  * **JSONSUB:**   `https://geo.example.com/<ROUTING_TOKEN>/HAPP/JSONSUB.DEEPLINK`
+  * **WHITELIST:** `https://geo.example.com/<ROUTING_TOKEN>/HAPP/WHITELIST.DEEPLINK`
 
   При переходе по ссылке приложение Happ автоматически импортирует правила и настроит адреса баз с вашего сервера.
 
@@ -231,14 +235,14 @@ Happ принимает правила маршрутизации в виде з
 В отличие от Happ, клиент Incy поддерживает динамическое обновление правил по HTTPS-ссылке. В настройках вашей панели (Remnawave, Marzban, 3x-ui) добавьте заголовок профиля:
 
 * **Header Name:** `autorouting`
-* **Header Value (Обход блокировок — JSONSUB):**
+* **Header Value:**
   ```text
-  incy://autorouting/onadd/https://geo.example.com/<ROUTING_TOKEN>/INCY/JSONSUB.JSON
+  incy://autorouting/onadd/https://geo.example.com/<ROUTING_TOKEN>/INCY/<RULE>.JSON
   ```
-* **Header Value (Белый список — WHITELIST):**
-  ```text
-  incy://autorouting/onadd/https://geo.example.com/<ROUTING_TOKEN>/INCY/WHITELIST.JSON
-  ```
+
+  Примеры значений:
+  * **JSONSUB:** `incy://autorouting/onadd/https://geo.example.com/<ROUTING_TOKEN>/INCY/JSONSUB.JSON`
+  * **WHITELIST:** `incy://autorouting/onadd/https://geo.example.com/<ROUTING_TOKEN>/INCY/WHITELIST.JSON`
 
 ---
 

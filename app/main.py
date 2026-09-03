@@ -91,8 +91,8 @@ def print_summary_banner(token: str):
                 happ_lines.append("      Автопатч не активен. Введите токен через команду: geoserver -> пункт 4")
             else:
                 happ_lines.append("  - Правила Happ (диплинки happ://routing/onadd/...):")
-                happ_lines.append(f"      • Обход блокировок (JSONSUB):   {base_url}/HAPP/JSONSUB.DEEPLINK")
-                happ_lines.append(f"      • Белый список (WHITELIST):     {base_url}/HAPP/WHITELIST.DEEPLINK")
+                happ_lines.append(f"      • JSONSUB:   {base_url}/HAPP/JSONSUB.DEEPLINK")
+                happ_lines.append(f"      • WHITELIST: {base_url}/HAPP/WHITELIST.DEEPLINK")
         if happ_geo:
             ext_geo = Config.get_external_geo_url("HAPP")
             if ext_geo:
@@ -120,10 +120,11 @@ def print_summary_banner(token: str):
         if "INCY" in clients_set:
             incy_lines.append(f"""  - Заголовок подписки (Remnawave / Marzban Autorouting):
       Header Name:  autorouting
-      • Обход блокировок (JSONSUB.JSON):
-        Header Value: incy://autorouting/onadd/{base_url}/INCY/JSONSUB.JSON
-      • Белый список (WHITELIST.JSON):
-        Header Value: incy://autorouting/onadd/{base_url}/INCY/WHITELIST.JSON""")
+      Header Value: incy://autorouting/onadd/{base_url}/INCY/<RULE>.JSON
+
+      Примеры:
+      • JSONSUB:   incy://autorouting/onadd/{base_url}/INCY/JSONSUB.JSON
+      • WHITELIST: incy://autorouting/onadd/{base_url}/INCY/WHITELIST.JSON""")
         sections.append("\n".join(incy_lines))
 
     body = "\n\n".join(sections) if sections else "No active clients configured in ENABLED_CLIENTS."

@@ -364,9 +364,9 @@ configure_remnawave() {
     echo -e "\n${CYAN}${BOLD}[i] Источник правил маршрутизации:${NC} ${CYAN}https://github.com/hydraponique/roscomvpn-routing${NC}"
     echo -e "${DIM}Сервер берет готовые правила из папки HAPP этого репозитория.${NC}"
     echo -e "Доступные варианты правил:"
-    echo -e "  ${BOLD}1) JSONSUB.JSON${NC}   — Обход блокировок ${DIM}(сайты из реестра РКН через VPN, остальные напрямую)${NC} [Рекомендуется]"
-    echo -e "  ${BOLD}2) WHITELIST.JSON${NC} — Белый список ${DIM}(весь интернет через VPN, кроме незаблокированных сервисов РФ)${NC}"
-    echo -e "  ${BOLD}3) DEFAULT.JSON${NC}   — Базовое стандартное правило"
+    echo -e "  ${BOLD}1) JSONSUB.JSON${NC}   [Рекомендуется]"
+    echo -e "  ${BOLD}2) WHITELIST.JSON${NC}"
+    echo -e "  ${BOLD}3) DEFAULT.JSON${NC}"
     echo -e "  ${DIM}(или введите имя любого другого .JSON файла из репозитория)${NC}"
 
     local squads_env=""
@@ -384,9 +384,9 @@ configure_remnawave() {
         sq_uuid="${sq_uuid:-$prev_sq_uuid}"
 
         echo -e "  Правило маршрутизации для сквада $i:"
-        echo -e "    ${BOLD}1)${NC} Обход блокировок (JSONSUB.JSON) — сайты из реестра РКН через VPN, остальные напрямую [Enter]"
-        echo -e "    ${BOLD}2)${NC} Белый список (WHITELIST.JSON)  — весь интернет через VPN, кроме РФ"
-        echo -e "    ${BOLD}3)${NC} Свой файл из репозитория       — указать нестандартный .json"
+        echo -e "    ${BOLD}1)${NC} JSONSUB.JSON [Enter]"
+        echo -e "    ${BOLD}2)${NC} WHITELIST.JSON"
+        echo -e "    ${BOLD}3)${NC} Свой файл из репозитория"
         read -r -p "  Выберите [1-3, Enter = 1]: " rule_pick
         rule_pick="${rule_pick:-1}"
         local sq_rule="${prev_sq_rule:-JSONSUB.JSON}"
@@ -966,9 +966,9 @@ REMNAWAVE_TOKEN=${r_token}
             echo -e "\n${CYAN}${BOLD}[i] Источник правил маршрутизации:${NC} ${CYAN}https://github.com/hydraponique/roscomvpn-routing${NC}"
             echo -e "${DIM}Сервер берет готовые правила из папки HAPP этого репозитория.${NC}"
             echo -e "Доступные варианты правил:"
-            echo -e "  ${BOLD}1) JSONSUB.JSON${NC}   — Обход блокировок ${DIM}(сайты из реестра РКН через VPN, остальные напрямую)${NC} [Рекомендуется]"
-            echo -e "  ${BOLD}2) WHITELIST.JSON${NC} — Белый список ${DIM}(весь интернет через VPN, кроме незаблокированных сервисов РФ)${NC}"
-            echo -e "  ${BOLD}3) DEFAULT.JSON${NC}   — Базовое стандартное правило"
+            echo -e "  ${BOLD}1) JSONSUB.JSON${NC}   [Рекомендуется]"
+            echo -e "  ${BOLD}2) WHITELIST.JSON${NC}"
+            echo -e "  ${BOLD}3) DEFAULT.JSON${NC}"
             echo -e "  ${DIM}(или введите имя любого другого .JSON файла из репозитория)${NC}"
 
             for ((i=1; i<=r_count; i++)); do
@@ -985,9 +985,9 @@ REMNAWAVE_TOKEN=${r_token}
                 s_uuid="${s_uuid:-$prev_s_uuid}"
 
                 echo -e "  Правило маршрутизации для сквада $i:"
-                echo -e "    ${BOLD}1)${NC} Обход блокировок (JSONSUB.JSON) — сайты из реестра РКН через VPN, остальные напрямую [Enter]"
-                echo -e "    ${BOLD}2)${NC} Белый список (WHITELIST.JSON)  — весь интернет через VPN, кроме РФ"
-                echo -e "    ${BOLD}3)${NC} Свой файл из репозитория       — указать нестандартный .json"
+                echo -e "    ${BOLD}1)${NC} JSONSUB.JSON [Enter]"
+                echo -e "    ${BOLD}2)${NC} WHITELIST.JSON"
+                echo -e "    ${BOLD}3)${NC} Свой файл из репозитория"
                 read -r -p "  Выберите [1-3, Enter = 1]: " s_rule_pick
                 s_rule_pick="${s_rule_pick:-1}"
                 local s_rule="${prev_s_rule:-JSONSUB.JSON}"
