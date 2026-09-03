@@ -244,7 +244,7 @@ run_sync_now() {
     local target_dir
     target_dir="$(get_install_dir)"
     echo -e "${BLUE}[*] Запуск принудительной синхронизации баз...${NC}"
-    docker exec -it geo-routing-server run-routing-sync || {
+    docker exec geo-routing-server run-routing-sync || {
         echo -e "${RED}[!] Ошибка запуска синхронизации. Проверьте запущен ли контейнер: docker compose ps${NC}"
     }
     echo ""
@@ -255,7 +255,7 @@ show_links() {
     local target_dir
     target_dir="$(get_install_dir)"
     echo -e "${GREEN}${BOLD}[i] Публичные ссылки и интеграции:${NC}"
-    docker exec -it geo-routing-server python3 -c "
+    docker exec geo-routing-server python3 -c "
 from app.config import Config
 from app.main import print_summary_banner
 print_summary_banner(Config.get_token())
@@ -352,8 +352,14 @@ configure_remnawave() {
     read -r -p "REMNAWAVE_TOKEN (JWT токен панели) [Enter = $r_token_hint]: " input_token
     input_token="${input_token:-$current_token}"
 
-    read -r -p "Сколько сквадов хотите привязать? [1-5, Enter = 1]: " count_squads
-    count_squads="${count_squads:-1}"
+    local existing_squads=0
+    if [ -f "$env_file" ]; then
+        existing_squads=$(grep -c "^REMNAWAVE_SQUAD_.*_UUID=" "$env_file" || true)
+    fi
+    local default_squads="${existing_squads:-1}"
+    [ "$default_squads" -le 0 ] && default_squads=1
+    read -r -p "Сколько сквадов хотите привязать? [1-10, Enter = $default_squads]: " count_squads
+    count_squads="${count_squads:-$default_squads}"
 
     echo -e "\n${CYAN}${BOLD}[i] Источник правил маршрутизации:${NC} ${CYAN}https://github.com/hydraponique/roscomvpn-routing${NC}"
     echo -e "${DIM}Сервер берет готовые правила из папки HAPP этого репозитория.${NC}"
@@ -365,15 +371,25 @@ configure_remnawave() {
 
     local squads_env=""
     for ((i=1; i<=count_squads; i++)); do
+        local prev_sq_uuid=""
+        local prev_sq_rule=""
+        if [ -f "$env_file" ]; then
+            prev_sq_uuid=$(grep "^REMNAWAVE_SQUAD_${i}_UUID=" "$env_file" | cut -d'=' -f2- || true)
+            prev_sq_rule=$(grep "^REMNAWAVE_SQUAD_${i}_RULE=" "$env_file" | cut -d'=' -f2- || true)
+        fi
         echo -e "\n${CYAN}--- Настройка Сквада #$i ---${NC}"
-        read -r -p "UUID сквада $i (из панели Remnawave → Сквады): " sq_uuid
+        local sq_hint="из панели Remnawave → Сквады"
+        [ -n "$prev_sq_uuid" ] && sq_hint="Enter = оставить $prev_sq_uuid"
+        read -r -p "UUID сквада $i [$sq_hint]: " sq_uuid
+        sq_uuid="${sq_uuid:-$prev_sq_uuid}"
+
         echo -e "  Правило маршрутизации для сквада $i:"
         echo -e "    ${BOLD}1)${NC} Обход блокировок (JSONSUB.JSON) — сайты из реестра РКН через VPN, остальные напрямую [Enter]"
         echo -e "    ${BOLD}2)${NC} Белый список (WHITELIST.JSON)  — весь интернет через VPN, кроме РФ"
         echo -e "    ${BOLD}3)${NC} Свой файл из репозитория       — указать нестандартный .json"
         read -r -p "  Выберите [1-3, Enter = 1]: " rule_pick
         rule_pick="${rule_pick:-1}"
-        local sq_rule="JSONSUB.JSON"
+        local sq_rule="${prev_sq_rule:-JSONSUB.JSON}"
         case "$rule_pick" in
             2) sq_rule="WHITELIST.JSON" ;;
             3)
@@ -384,7 +400,7 @@ configure_remnawave() {
                 fi
                 sq_rule="$(echo "$custom_rule" | tr '[:lower:]' '[:upper:]')"
                 ;;
-            *) sq_rule="JSONSUB.JSON" ;;
+            *) sq_rule="${prev_sq_rule:-JSONSUB.JSON}" ;;
         esac
         squads_env="${squads_env}REMNAWAVE_SQUAD_${i}_UUID=${sq_uuid}
 REMNAWAVE_SQUAD_${i}_RULE=${sq_rule}
@@ -439,6 +455,12 @@ EOF
         echo -e "\n${GREEN}[+] Настройки Remnawave сохранены! Перезапускаем контейнер...${NC}"
         cd "$target_dir"
         docker compose up -d
+        local remna_net="remnawave-network"
+        if docker network inspect "$remna_net" &>/dev/null; then
+            if ! docker inspect geo-routing-server --format '{{json .NetworkSettings.Networks}}' 2>/dev/null | grep -q "$remna_net"; then
+                docker network connect "$remna_net" geo-routing-server 2>/dev/null || true
+            fi
+        fi
         docker exec geo-routing-server run-routing-sync 2>/dev/null || true
         echo -e "${GREEN}[+] Готово! Правила обновлены и отправлены в Remnawave.${NC}\n"
     fi
@@ -754,12 +776,32 @@ install_wizard() {
 
     case "$server_role" in
         2)
-            ENABLED_CLIENTS="HAPP,INCY"
+            echo -e "\n${BOLD}Для каких приложений готовить правила?${NC}"
+            echo -e "  ${BOLD}1)${NC} Happ и Incy (Оба) [Enter]"
+            echo -e "  ${BOLD}2)${NC} Только Happ"
+            echo -e "  ${BOLD}3)${NC} Только Incy"
+            read -r -p "Выберите [1-3, Enter = 1]: " app_pick
+            app_pick="${app_pick:-1}"
+            case "$app_pick" in
+                2) ENABLED_CLIENTS="HAPP" ;;
+                3) ENABLED_CLIENTS="INCY" ;;
+                *) ENABLED_CLIENTS="HAPP,INCY" ;;
+            esac
             NEEDS_PUBLIC_DOMAIN=true
             config_remna=false
             ;;
         3)
-            ENABLED_CLIENTS="HAPP_GEO,INCY_GEO"
+            echo -e "\n${BOLD}Для каких приложений раздавать базы?${NC}"
+            echo -e "  ${BOLD}1)${NC} Happ и Incy (Оба) [Enter]"
+            echo -e "  ${BOLD}2)${NC} Только Happ"
+            echo -e "  ${BOLD}3)${NC} Только Incy"
+            read -r -p "Выберите [1-3, Enter = 1]: " app_pick
+            app_pick="${app_pick:-1}"
+            case "$app_pick" in
+                2) ENABLED_CLIENTS="HAPP_GEO" ;;
+                3) ENABLED_CLIENTS="INCY_GEO" ;;
+                *) ENABLED_CLIENTS="HAPP_GEO,INCY_GEO" ;;
+            esac
             NEEDS_PUBLIC_DOMAIN=true
             config_remna=false
             ;;
@@ -774,7 +816,17 @@ install_wizard() {
             config_remna=false
             ;;
         *)
-            ENABLED_CLIENTS="HAPP,INCY"
+            echo -e "\n${BOLD}Для каких приложений готовить правила?${NC}"
+            echo -e "  ${BOLD}1)${NC} Happ и Incy (Оба) [Enter]"
+            echo -e "  ${BOLD}2)${NC} Только Happ"
+            echo -e "  ${BOLD}3)${NC} Только Incy"
+            read -r -p "Выберите [1-3, Enter = 1]: " app_pick
+            app_pick="${app_pick:-1}"
+            case "$app_pick" in
+                2) ENABLED_CLIENTS="HAPP" ;;
+                3) ENABLED_CLIENTS="INCY" ;;
+                *) ENABLED_CLIENTS="HAPP,INCY" ;;
+            esac
             NEEDS_PUBLIC_DOMAIN=true
             config_remna=true
             ;;
@@ -811,6 +863,7 @@ install_wizard() {
         echo -e "${DIM}Домен, на который вы направите реверс-прокси (Caddy / Nginx / NPM).${NC}"
         read -r -p "Введите домен [Enter = ${prev_domain:-geo.example.com}]: " input_domain
         DOMAIN="${input_domain:-${prev_domain:-geo.example.com}}"
+        DOMAIN="$(echo "$DOMAIN" | tr -d '[:space:]' | sed -e 's~^https\?://~~' -e 's~/*$~~')"
         echo -e "${GREEN}[+] Домен: $DOMAIN${NC}\n"
 
         # ШАГ 4: Токен
@@ -828,9 +881,16 @@ install_wizard() {
         
         read -r -p "Введите свой токен или нажмите Enter для подтверждения: " input_token
         ROUTING_TOKEN="${input_token:-$auto_token}"
+        ROUTING_TOKEN="$(echo "$ROUTING_TOKEN" | tr -d '[:space:]/\\')"
+        while [[ ! "$ROUTING_TOKEN" =~ ^[A-Za-z0-9._-]+$ ]]; do
+            echo -e "${RED}[!] Токен может содержать только латинские буквы, цифры, точку, дефис и подчеркивание!${NC}"
+            read -r -p "Введите корректный токен [Enter = ${auto_token}]: " input_token
+            ROUTING_TOKEN="${input_token:-$auto_token}"
+            ROUTING_TOKEN="$(echo "$ROUTING_TOKEN" | tr -d '[:space:]/\\')"
+        done
         echo -e "${GREEN}[+] Токен сохранён.${NC}"
         echo -e "${CYAN}${BOLD}[i] Базовый URL сервера:${NC} ${CYAN}https://${DOMAIN}/${ROUTING_TOKEN}${NC}"
-        echo -e "${DIM}    • Путь для Happ: /HAPP/ (geoip.dat, geosite.dat, правила)${NC}"
+        echo -e "${DIM}    • Путь для Happ: /HAPP/ (geoip.dat, geosite.dat)${NC}"
         echo -e "${DIM}    • Путь для Incy: /INCY/ (geoip.dat, geosite.dat, JSONSUB.JSON)${NC}\n"
 
         # ШАГ 5: Локальный порт
@@ -890,8 +950,15 @@ install_wizard() {
             read -r -p "JWT токен администратора [Enter = $r_token_hint]: " r_token
             r_token="${r_token:-$prev_remna_token}"
             echo ""
-            read -r -p "Сколько сквадов привязать? [1-5, Enter = 1]: " r_count
-            r_count="${r_count:-1}"
+
+            local existing_squads=0
+            if [ -n "$scan_env" ] && [ -f "$scan_env" ]; then
+                existing_squads=$(grep -c "^REMNAWAVE_SQUAD_.*_UUID=" "$scan_env" || true)
+            fi
+            local default_sq_count="${existing_squads:-1}"
+            [ "$default_sq_count" -le 0 ] && default_sq_count=1
+            read -r -p "Сколько сквадов привязать? [1-10, Enter = $default_sq_count]: " r_count
+            r_count="${r_count:-$default_sq_count}"
             
             REMNA_BLOCK="REMNAWAVE_BASE_URL=${r_base}
 REMNAWAVE_TOKEN=${r_token}
@@ -905,15 +972,25 @@ REMNAWAVE_TOKEN=${r_token}
             echo -e "  ${DIM}(или введите имя любого другого .JSON файла из репозитория)${NC}"
 
             for ((i=1; i<=r_count; i++)); do
+                local prev_s_uuid=""
+                local prev_s_rule=""
+                if [ -n "$scan_env" ] && [ -f "$scan_env" ]; then
+                    prev_s_uuid=$(grep "^REMNAWAVE_SQUAD_${i}_UUID=" "$scan_env" | cut -d'=' -f2- || true)
+                    prev_s_rule=$(grep "^REMNAWAVE_SQUAD_${i}_RULE=" "$scan_env" | cut -d'=' -f2- || true)
+                fi
                 echo -e "\n${CYAN}── Сквад #$i ──${NC}"
-                read -r -p "  UUID сквада (из панели Remnawave → Сквады): " s_uuid
+                local s_hint="из панели Remnawave → Сквады"
+                [ -n "$prev_s_uuid" ] && s_hint="Enter = оставить $prev_s_uuid"
+                read -r -p "  UUID сквада [$s_hint]: " s_uuid
+                s_uuid="${s_uuid:-$prev_s_uuid}"
+
                 echo -e "  Правило маршрутизации для сквада $i:"
                 echo -e "    ${BOLD}1)${NC} Обход блокировок (JSONSUB.JSON) — сайты из реестра РКН через VPN, остальные напрямую [Enter]"
                 echo -e "    ${BOLD}2)${NC} Белый список (WHITELIST.JSON)  — весь интернет через VPN, кроме РФ"
                 echo -e "    ${BOLD}3)${NC} Свой файл из репозитория       — указать нестандартный .json"
                 read -r -p "  Выберите [1-3, Enter = 1]: " s_rule_pick
                 s_rule_pick="${s_rule_pick:-1}"
-                local s_rule="JSONSUB.JSON"
+                local s_rule="${prev_s_rule:-JSONSUB.JSON}"
                 case "$s_rule_pick" in
                     2) s_rule="WHITELIST.JSON" ;;
                     3)
@@ -969,7 +1046,7 @@ CLOUDFLARE_ZERO_TRUST_CLIENT_SECRET=${prev_cf_secret}
     EXT_NETWORK=""
     NEEDS_NETWORK=false
 
-    if [[ "$ENABLED_CLIENTS" =~ HAPP ]] || [ -n "$REMNA_BLOCK" ]; then
+    if [ -n "$REMNA_BLOCK" ]; then
         NEEDS_NETWORK=true
     fi
 
@@ -1106,6 +1183,8 @@ services:
     image: ghcr.io/xdeptu5/geo-routing-server:latest
     container_name: geo-routing-server
     restart: unless-stopped
+    env_file:
+      - .env
     environment:
       DOMAIN: "\${DOMAIN:-${DOMAIN}}"
       ROUTING_TOKEN: "\${ROUTING_TOKEN:-${ROUTING_TOKEN}}"

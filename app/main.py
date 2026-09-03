@@ -89,17 +89,17 @@ def print_summary_banner(token: str):
             if remna_base and not remna_token:
                 happ_lines.append("  [!] Remnawave API: указан URL, но отсутствует REMNAWAVE_TOKEN")
                 happ_lines.append("      Автопатч не активен. Введите токен через команду: geoserver -> пункт 4")
-
-            happ_dir = Config.STORAGE_DIR / token / "HAPP"
-            deeplink_files = [f.name for f in sorted(happ_dir.glob("*.DEEPLINK"))] if happ_dir.is_dir() else []
-            if not deeplink_files:
-                deeplink_files = ["JSONSUB.DEEPLINK"]
-
-            happ_lines.append("  - Ссылки на диплинки в сети Docker:")
-            for df in deeplink_files:
-                happ_lines.append(f"      SQUAD URL: http://geo-routing-server/HAPP/{df}")
+            else:
+                happ_lines.append("  - Правила Happ (диплинки happ://routing/onadd/...):")
+                happ_lines.append(f"      Файлы диплинков доступны в каталоге: {base_url}/HAPP/")
         if happ_geo:
-            happ_lines.append(f"""  - Публичные HTTPS ссылки на базы (для клиентов с токеном):
+            ext_geo = Config.get_external_geo_url("HAPP")
+            if ext_geo:
+                happ_lines.append(f"""  - Внешние ссылки на базы:
+      GeoIP:     {ext_geo}/geoip.dat
+      GeoSite:   {ext_geo}/geosite.dat""")
+            else:
+                happ_lines.append(f"""  - Публичные HTTPS ссылки на базы (для клиентов с токеном):
       GeoIP:     {base_url}/HAPP/geoip.dat
       GeoSite:   {base_url}/HAPP/geosite.dat""")
         sections.append("\n".join(happ_lines))
@@ -107,7 +107,13 @@ def print_summary_banner(token: str):
     # INCY блок
     if "INCY" in clients_set or "INCY_GEO" in clients_set:
         incy_lines = ["[INCY]"]
-        incy_lines.append(f"""  - Публичные HTTPS ссылки (для клиентов с токеном):
+        ext_geo = Config.get_external_geo_url("INCY")
+        if ext_geo:
+            incy_lines.append(f"""  - Внешние ссылки на базы:
+      GeoIP:     {ext_geo}/geoip.dat
+      GeoSite:   {ext_geo}/geosite.dat""")
+        else:
+            incy_lines.append(f"""  - Публичные HTTPS ссылки на базы (для клиентов с токеном):
       GeoIP:     {base_url}/INCY/geoip.dat
       GeoSite:   {base_url}/INCY/geosite.dat""")
         if "INCY" in clients_set:

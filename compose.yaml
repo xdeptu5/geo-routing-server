@@ -7,6 +7,8 @@ services:
 
     container_name: geo-routing-server
     restart: unless-stopped
+    env_file:
+      - .env
 
     # Настройки сервиса (значения берутся из файла .env или можно вписать прямо сюда):
     environment:
