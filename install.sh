@@ -707,7 +707,8 @@ install_wizard() {
     # ШАГ 2: Режим работы сервера
     # ────────────────────────────────────────────────────────────────────────
     echo -e "${BOLD}--- [Шаг 2] Что вы хотите настроить? ---${NC}"
-    echo ""
+    echo -e "${CYAN}${BOLD}[i] Источник правил по умолчанию:${NC} ${CYAN}https://github.com/hydraponique/roscomvpn-routing${NC}"
+    echo -e "${DIM}Сервер автоматически скачивает и обновляет готовые правила (JSONSUB, WHITELIST) из этого репозитория.${NC}\n"
     echo -e "  ${BOLD}1)${NC} Свой сервер маршрутизации ${DIM}(нужен домен)${NC}"
     echo -e "     ${DIM}Раздает базы (geoip / geosite) и правила для приложений Happ и Incy.${NC}"
     echo ""
@@ -718,6 +719,7 @@ install_wizard() {
     server_mode="${server_mode:-1}"
 
     PUBLIC_GEO_BASE_URL="$prev_public_geo"
+    ROUTING_SOURCE_REPO="$prev_routing_repo"
     NEEDS_PUBLIC_DOMAIN=true
     local config_remna=false
 
@@ -1003,6 +1005,7 @@ CLOUDFLARE_ZERO_TRUST_CLIENT_SECRET=${prev_cf_secret}
         echo "ROUTING_TOKEN=${ROUTING_TOKEN}"
         echo "ENABLED_CLIENTS=${ENABLED_CLIENTS}"
         [ -n "$PUBLIC_GEO_BASE_URL" ] && echo "PUBLIC_GEO_BASE_URL=${PUBLIC_GEO_BASE_URL}"
+        [ -n "$ROUTING_SOURCE_REPO" ] && echo "ROUTING_SOURCE_REPO=${ROUTING_SOURCE_REPO}"
         [ -n "$REMNA_BLOCK" ] && printf '%s' "$REMNA_BLOCK"
         echo "HTTP_BIND=127.0.0.1"
         echo "HTTP_PORT=${HTTP_PORT}"
