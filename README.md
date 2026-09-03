@@ -92,31 +92,61 @@ bash <(curl -fsSL https://raw.githubusercontent.com/xdeptu5/geo-routing-server/m
 
 ---
 
-### Способ 2. Запуск через Docker Compose (Arcane / Portainer / Dockge / 1Panel)
+### Способ 2. Автономный запуск через Docker Compose (Dockge / Portainer / 1Panel / Ручная установка)
 
-1. Создайте `compose.yaml`:
+Для опытных пользователей и панелей управления (Dockge, Portainer, 1Panel, Arcane):
+
+1. Скопируйте готовый `compose.yaml` из репозитория:
    ```yaml
    services:
      geo-routing-server:
        image: ghcr.io/xdeptu5/geo-routing-server:latest
        container_name: geo-routing-server
        restart: unless-stopped
-       environment:
-         DOMAIN: "geo.example.com"
-         ROUTING_TOKEN: "ВАШ_СЕКРЕТНЫЙ_ТОКЕН"
-         ENABLED_CLIENTS: "HAPP,INCY"
-         SYNC_ON_START: "true"
+       env_file:
+         - .env
        ports:
          - "127.0.0.1:8080:80"
        volumes:
          - routing_data:/app/www
          - ./.cache:/app/.cache
          - ./custom_geo:/app/custom_geo:ro
+       healthcheck:
+         test: ["CMD", "curl", "-f", "http://127.0.0.1:80/health"]
+         interval: 30s
+         timeout: 5s
+         retries: 3
+         start_period: 10s
 
    volumes:
      routing_data:
    ```
-2. Запустите: `docker compose up -d`
+
+2. Рядом создайте файл `.env` на основе [`.env.example`](./.env.example):
+   ```env
+   DOMAIN=geo.example.com
+   ROUTING_TOKEN=change_me_to_random_secret_token
+   ENABLED_CLIENTS=HAPP,INCY
+   HTTP_PORT=8080
+   SCHEDULE=0 10 * * *
+   SYNC_ON_START=true
+
+   # Если нужна интеграция со сквадами Remnawave:
+   # REMNAWAVE_BASE_URL=http://remnawave:3000/api
+   # REMNAWAVE_TOKEN=ваш_jwt_токен
+   # REMNAWAVE_SQUAD_1_UUID=uuid_сквада
+   # REMNAWAVE_SQUAD_1_RULE=JSONSUB.JSON
+   ```
+
+3. Запустите:
+   ```bash
+   docker compose up -d
+   ```
+
+Посмотреть статус и сформированные ссылки:
+```bash
+docker compose logs
+```
 
 ---
 
@@ -128,8 +158,6 @@ cd geo-routing-server
 cp .env.example .env   # отредактируйте домен и токен
 docker compose up -d --build
 ```
-
-После запуска посмотрите готовые ссылки и статус: `docker compose logs`
 
 ---
 
