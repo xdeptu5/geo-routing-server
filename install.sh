@@ -714,43 +714,74 @@ install_wizard() {
     fi
 
     # ────────────────────────────────────────────────────────────────────────
-    # ШАГ 2: Выбор приложений
+    # ШАГ 2: Роль сервера
     # ────────────────────────────────────────────────────────────────────────
-    echo -e "${BOLD}--- [Шаг 2] Для каких приложений настраиваем сервер? ---${NC}"
-    echo -e "${CYAN}${BOLD}[i] Источник правил по умолчанию:${NC} ${CYAN}https://github.com/hydraponique/roscomvpn-routing${NC}"
-    echo -e "${DIM}Сервер автоматически скачивает и обновляет готовые правила (JSONSUB, WHITELIST) из этого репозитория.${NC}\n"
-    echo -e "  ${BOLD}1)${NC} Happ и Incy (Оба приложения) [Enter — Рекомендуется]"
-    echo -e "     ${DIM}Раздает базы (geoip / geosite) и правила с вашего домена для Happ и Incy.${NC}"
+    echo -e "${BOLD}--- [Шаг 2] Выберите роль этого сервера ---${NC}"
+    echo -e "${CYAN}${BOLD}[i] Источник правил:${NC} ${CYAN}https://github.com/hydraponique/roscomvpn-routing${NC}\n"
+    echo -e "  ${BOLD}1)${NC} Сервер раздачи баз и правил [Enter — Рекомендуется]"
+    echo -e "     ${DIM}Раздает базы (geoip / geosite) и правила по HTTPS с вашего домена.${NC}"
+    echo -e "     ${DIM}Подходит для Happ и Incy. Можно подключить автообновление Remnawave.${NC}"
     echo ""
-    echo -e "  ${BOLD}2)${NC} Только Happ"
-    echo -e "     ${DIM}Раздает базы с вашего домена + отправляет правила в сквады Remnawave.${NC}"
+    echo -e "  ${BOLD}2)${NC} Только узел раздачи geo-баз"
+    echo -e "     ${DIM}Сервер только раздает файлы geoip.dat и geosite.dat по HTTPS (например, быстрый узел в РФ).${NC}"
+    echo -e "     ${DIM}Без генерации диплинков и без Remnawave.${NC}"
     echo ""
-    echo -e "  ${BOLD}3)${NC} Только Incy"
-    echo -e "     ${DIM}Раздает базы и правила для Incy с вашего домена.${NC}"
+    echo -e "  ${BOLD}3)${NC} Только апдейтер сквадов Remnawave"
+    echo -e "     ${DIM}Базы УЖЕ раздаются на другом вашем сервере (или GitHub).${NC}"
+    echo -e "     ${DIM}Домен и реверс-прокси на этой машине НЕ нужны.${NC}"
+    echo -e "     ${DIM}Сервер работает скрытно, вшивает ссылку на внешний сервер баз и обновляет Remnawave.${NC}"
     echo ""
-    read -r -p "Выберите вариант [1-3, Enter = 1]: " client_pick
-    client_pick="${client_pick:-1}"
+    read -r -p "Выберите вариант [1-3, Enter = 1]: " server_role
+    server_role="${server_role:-1}"
 
     PUBLIC_GEO_BASE_URL="$prev_public_geo"
     ROUTING_SOURCE_REPO="$prev_routing_repo"
     NEEDS_PUBLIC_DOMAIN=true
     local config_remna=false
 
-    case "$client_pick" in
-        2) 
-            ENABLED_CLIENTS="HAPP"
-            config_remna=true
-            ;;
-        3) 
-            ENABLED_CLIENTS="INCY"
-            config_remna=false
-            ;;
-        *) 
-            ENABLED_CLIENTS="HAPP,INCY"
-            config_remna=true
-            ;;
-    esac
-    echo -e "${GREEN}[+] Режим: $ENABLED_CLIENTS${NC}\n"
+    if [ "$server_role" = "3" ]; then
+        # ── Роль 3: Только апдейтер Remnawave (без домена) ──
+        ENABLED_CLIENTS="HAPP_DEEPLINK"
+        NEEDS_PUBLIC_DOMAIN=false
+        config_remna=true
+
+        echo -e "\n${BOLD}Укажите полный публичный URL к базам на вашем внешнем сервере:${NC}"
+        echo -e "${DIM}Пример: https://geo.example.com/секретный_токен/HAPP${NC}"
+        echo -e "${DIM}Этот адрес будет вшит в правила — именно оттуда Happ скачает geoip.dat и geosite.dat.${NC}\n"
+
+        while true; do
+            read -r -p "URL к базам [Enter = ${prev_public_geo:-обязательно}]: " input_geo_url
+            PUBLIC_GEO_BASE_URL="${input_geo_url:-$prev_public_geo}"
+            PUBLIC_GEO_BASE_URL="$(echo "$PUBLIC_GEO_BASE_URL" | sed 's:/*$::')"
+            if [[ "$PUBLIC_GEO_BASE_URL" =~ ^https?:// ]]; then
+                break
+            fi
+            echo -e "${RED}[!] URL должен начинаться с https:// (например: https://geo.example.com/токен/HAPP)${NC}"
+        done
+
+        echo -e "${GREEN}[+] Базы берутся с: $PUBLIC_GEO_BASE_URL${NC}\n"
+
+    elif [ "$server_role" = "2" ]; then
+        # ── Роль 2: Только узел раздачи geo-баз ──
+        ENABLED_CLIENTS="HAPP_GEO,INCY_GEO"
+        config_remna=false
+        echo -e "${GREEN}[+] Режим: только раздача geo-баз (без диплинков и Remnawave)${NC}\n"
+
+    else
+        # ── Роль 1: Полный сервер ──
+        echo -e "\n${BOLD}Для каких приложений готовить правила?${NC}"
+        echo -e "  ${BOLD}1)${NC} Happ и Incy (Оба) [Enter]"
+        echo -e "  ${BOLD}2)${NC} Только Happ"
+        echo -e "  ${BOLD}3)${NC} Только Incy"
+        read -r -p "Выберите [1-3, Enter = 1]: " client_pick
+        client_pick="${client_pick:-1}"
+        case "$client_pick" in
+            2) ENABLED_CLIENTS="HAPP"; config_remna=true ;;
+            3) ENABLED_CLIENTS="INCY"; config_remna=false ;;
+            *) ENABLED_CLIENTS="HAPP,INCY"; config_remna=true ;;
+        esac
+        echo -e "${GREEN}[+] Режим: $ENABLED_CLIENTS${NC}\n"
+    fi
 
     # ────────────────────────────────────────────────────────────────────────
     # ШАГ 3: Интеграция с Remnawave (если применима)
@@ -759,14 +790,18 @@ install_wizard() {
     if [ "$config_remna" = true ]; then
         echo -e "${BOLD}--- [Шаг 3] Прямая интеграция с Remnawave ---${NC}"
         echo -e "${DIM}Сервер сам отправляет правила маршрутизации прямо в API вашей панели Remnawave.${NC}\n"
-        
-        local default_remna_prompt="y/N"
-        [ -n "$prev_remna_token" ] && default_remna_prompt="Y/n"
-        read -r -p "Настроить отправку правил Happ в сквады Remnawave? [$default_remna_prompt]: " remna_choice
-        if [ -n "$prev_remna_token" ]; then
-            remna_choice="${remna_choice:-Y}"
-        else
-            remna_choice="${remna_choice:-N}"
+
+        local remna_choice="Y"
+        if [ "$server_role" != "3" ]; then
+            # Для роли 1 (полный сервер) — Remnawave опционален
+            local default_remna_prompt="y/N"
+            [ -n "$prev_remna_token" ] && default_remna_prompt="Y/n"
+            read -r -p "Настроить отправку правил Happ в сквады Remnawave? [$default_remna_prompt]: " remna_choice
+            if [ -n "$prev_remna_token" ]; then
+                remna_choice="${remna_choice:-Y}"
+            else
+                remna_choice="${remna_choice:-N}"
+            fi
         fi
 
         if [[ "$remna_choice" =~ ^[YyДд]$ ]]; then
