@@ -706,53 +706,51 @@ install_wizard() {
     # ────────────────────────────────────────────────────────────────────────
     # ШАГ 2: Режим работы сервера
     # ────────────────────────────────────────────────────────────────────────
-    echo -e "${BOLD}--- [Шаг 2] Выберите назначение сервера ---${NC}"
+    echo -e "${BOLD}--- [Шаг 2] Что вы хотите настроить? ---${NC}"
     echo ""
-    echo -e "  ${BOLD}1)${NC} Только сквады Remnawave (Happ) ${DIM}— обновляет правила в сквадах панели, базы не раздает (домен не нужен)${NC}"
-    echo -e "  ${BOLD}2)${NC} Incy: гео-базы + автороутинг ${DIM}— раздает базы (geoip.dat, geosite.dat), правила и заголовок autorouting${NC}"
-    echo -e "  ${BOLD}3)${NC} Happ: гео-базы + сквады Remnawave ${DIM}— раздает базы (geoip.dat, geosite.dat) и обновляет сквады в панели${NC}"
-    echo -e "  ${BOLD}4)${NC} Все клиенты (Happ и Incy) ${DIM}— полный сервер: раздает базы и правила для Happ и Incy, обновляет сквады${NC}"
-    echo -e "  ${BOLD}5)${NC} Только раздача гео-баз ${DIM}— раздает исключительно файлы geoip.dat и geosite.dat без правил приложений${NC}"
+    echo -e "  ${BOLD}1)${NC} Свой сервер маршрутизации ${DIM}(нужен домен)${NC}"
+    echo -e "     ${DIM}Раздает базы (geoip / geosite) и правила для приложений Happ и Incy.${NC}"
     echo ""
-    read -r -p "Выберите вариант [1-5, Enter = 1]: " client_choice
-    client_choice="${client_choice:-1}"
-    
+    echo -e "  ${BOLD}2)${NC} Автообновление правил в Remnawave для Happ ${DIM}(домен не нужен)${NC}"
+    echo -e "     ${DIM}Каждый день отправляет свежие правила обхода блокировок для Happ в сквады панели Remnawave.${NC}"
+    echo ""
+    read -r -p "Выберите вариант [1-2, Enter = 1]: " server_mode
+    server_mode="${server_mode:-1}"
+
     PUBLIC_GEO_BASE_URL="$prev_public_geo"
     NEEDS_PUBLIC_DOMAIN=true
     local config_remna=false
 
-    case "$client_choice" in
-        1) 
-            ENABLED_CLIENTS="HAPP_DEEPLINK"
-            NEEDS_PUBLIC_DOMAIN=false
-            config_remna=true
-            echo -e "\n${CYAN}[i] Опционально: если geo-базы раздаются с другого вашего сервера, укажите его URL.${NC}"
-            echo -e "${DIM}Пример: https://geo.example.com/secret_token/HAPP${NC}"
-            read -r -p "URL к внешним geo-базам [Enter = ${prev_public_geo:-пропустить}]: " input_geo_url
-            PUBLIC_GEO_BASE_URL="${input_geo_url:-$prev_public_geo}"
-            ;;
-        2) 
-            ENABLED_CLIENTS="INCY"
-            config_remna=false
-            ;;
-        3) 
-            ENABLED_CLIENTS="HAPP"
-            config_remna=true
-            ;;
-        4) 
-            ENABLED_CLIENTS="HAPP,INCY"
-            config_remna=true
-            ;;
-        5) 
-            ENABLED_CLIENTS="HAPP_GEO"
-            config_remna=false
-            ;;
-        *) 
-            ENABLED_CLIENTS="HAPP_DEEPLINK"
-            NEEDS_PUBLIC_DOMAIN=false
-            config_remna=true
-            ;;
-    esac
+    if [ "$server_mode" = "2" ]; then
+        ENABLED_CLIENTS="HAPP_DEEPLINK"
+        NEEDS_PUBLIC_DOMAIN=false
+        config_remna=true
+        echo -e "\n${CYAN}[i] Опционально: если geo-базы раздаются с другого вашего сервера, укажите его URL.${NC}"
+        echo -e "${DIM}Пример: https://geo.example.com/secret_token/HAPP${NC}"
+        read -r -p "URL к внешним geo-базам [Enter = ${prev_public_geo:-пропустить}]: " input_geo_url
+        PUBLIC_GEO_BASE_URL="${input_geo_url:-$prev_public_geo}"
+    else
+        echo -e "\n${BOLD}Для каких приложений готовить базы и правила?${NC}"
+        echo -e "  ${BOLD}1)${NC} Happ и Incy (Оба приложения) [Enter]"
+        echo -e "  ${BOLD}2)${NC} Только Happ"
+        echo -e "  ${BOLD}3)${NC} Только Incy"
+        read -r -p "Выберите [1-3, Enter = 1]: " client_pick
+        client_pick="${client_pick:-1}"
+        case "$client_pick" in
+            2) 
+                ENABLED_CLIENTS="HAPP"
+                config_remna=true
+                ;;
+            3) 
+                ENABLED_CLIENTS="INCY"
+                config_remna=false
+                ;;
+            *) 
+                ENABLED_CLIENTS="HAPP,INCY"
+                config_remna=true
+                ;;
+        esac
+    fi
     echo -e "${GREEN}[+] Режим: $ENABLED_CLIENTS${NC}\n"
 
     # ────────────────────────────────────────────────────────────────────────
@@ -764,10 +762,10 @@ install_wizard() {
         echo -e "${DIM}Сервер сам отправляет правила маршрутизации прямо в API вашей панели Remnawave.${NC}\n"
         
         local remna_choice="Y"
-        if [ "$client_choice" != "1" ]; then
+        if [ "$server_mode" != "2" ]; then
             local default_remna_prompt="y/N"
             [ -n "$prev_remna_token" ] && default_remna_prompt="Y/n"
-            read -r -p "Настроить интеграцию со сквадами Remnawave? [$default_remna_prompt]: " remna_choice
+            read -r -p "Настроить отправку правил Happ в сквады Remnawave? [$default_remna_prompt]: " remna_choice
             if [ -n "$prev_remna_token" ]; then
                 remna_choice="${remna_choice:-Y}"
             fi
