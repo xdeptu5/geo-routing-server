@@ -1,8 +1,8 @@
-<div align="center">
+﻿<div align="center">
 
 # 🚀 Geo Routing Server
 
-**Self-Hosted сервер для независимой раздачи, автообновления и публикации geo-баз и правил маршрутизации (`HAPP`, `INCY`) с вашего собственного сервера.**
+**Self-Hosted сервер для независимой раздачи geo-баз (`geoip.dat`, `geosite.dat`) и правил маршрутизации (`HAPP`, `INCY`) с защитой от блокировок CDN и GitHub.**
 
 [![Docker Multi-Arch](https://img.shields.io/badge/docker-amd64%20%7C%20arm64-blue?logo=docker)](https://github.com/xdeptu5/geo-routing-server)
 [![GitHub Container Registry](https://img.shields.io/badge/image-ghcr.io%2Fxdeptu5%2Fgeo--routing--server-blue?logo=github)](https://github.com/xdeptu5/geo-routing-server/pkgs/container/geo-routing-server)
@@ -15,14 +15,16 @@
 
 ---
 
-## 🎯 Зачем нужен этот проект?
+## 📌 Возможности
 
-Когда мобильные клиенты (Happ, Incy) или VPN-панели скачивают гео-базы и конфиги маршрутизации напрямую из публичных репозиториев GitHub или CDN, они регулярно сталкиваются с **блокировками провайдеров, замедлениями и сбоями доступности**.
-
-**Geo Routing Server** превращает ваш VPS в **собственный независимый сервер раздачи geo-файлов (Self-Hosted Geo Hub)**:
-* 🛡️ **Полная независимость**: Все базы `geoip.dat`, `geosite.dat`, правила и диплинки раздаются напрямую с **вашего собственного сервера и домена**.
-* ⚡ **Стабильность 24/7**: Клиенты пользователей получают обновления напрямую от вас — без риска блокировок CDN или публичного GitHub.
-* 🔒 **Контроль и безопасность**: Доступ к раздаче защищён персональным URL-токеном, а внутренние сервисы (например, Remnawave) могут забирать диплинки локально через Docker-сеть.
+* 🛡️ **Полная автономность:** базы `geoip.dat`, `geosite.dat` и правила раздаются напрямую с вашего VPS — клиенты не зависят от доступности GitHub или сторонних CDN.
+* 📱 **Поддержка Happ и Incy:** генерация Base64-диплинков для Happ (`.DEEPLINK`) и динамических JSON-правил подписки для Incy (`.JSON`).
+* ⚡ **Нативная интеграция с Remnawave API:** прямое автообновление правил сквадов без сторонних скриптов (поддерживается до 10+ сквадов и Cloudflare Zero Trust).
+* 🔒 **Безопасность:** закрытый доступ по секретному URL-токену (`/<ROUTING_TOKEN>/...`). Без токена сервер не отвечает сканерам.
+* 🚀 **ETag-кэширование (304 Not Modified):** базы загружаются только при реальных изменениях у источника.
+* 📁 **Гибкость источников:** официальный репозиторий [roscomvpn-routing](https://github.com/hydraponique/roscomvpn-routing), кастомные URL или локальные базы в `./custom_geo/`.
+* 🤖 **Telegram-уведомления:** мгновенные алерты об ошибках и отчёты о новых базах (с поддержкой топиков).
+* 📦 **Zero Dependencies:** один контейнер (Alpine + Python 3 + Nginx), архитектуры `amd64` и `arm64`.
 
 ---
 
@@ -30,73 +32,46 @@
 
 ```text
  ┌───────────────────────────────────────────────────────────┐
- │   Источники данных:                                       │
- │   • Правила маршрутизации: hydraponique/roscomvpn-routing │
- │   • jsDelivr / GitHub Releases / Custom URLs              │
- │   • Локальные базы (директория ./custom_geo/)             │
+ │   Источники: roscomvpn-routing / Custom URLs / ./custom_geo/│
  └─────────────────────────────┬─────────────────────────────┘
-                               │  (ETag 304, SHA-256, atomic write)
+                               │ (ETag 304, SHA-256, atomic write)
                                ▼
  ┌───────────────────────────────────────────────────────────┐
- │   Docker Контейнер [ geo-routing-server ]                 │
- │   • Планировщик crond (автообновление по расписанию)      │
- │   • Python-ядро (валидация JSON, подмена URL, DEEPLINK)   │
- │   • Внутренний Nginx (быстрая отдача статики и кэш)       │
- │   • Нативная интеграция с Remnawave API (автопатч сквадов)│
+ │   Docker [ geo-routing-server ]                           │
+ │   • Планировщик crond (обновление по расписанию)          │
+ │   • Python-ядро (подмена URL на локальные, генерация)     │
+ │   • Nginx (отдача статики с поддержкой ETag)              │
+ │   • Нативная отправка правил в Remnawave API              │
  └─────────────────────────────┬─────────────────────────────┘
-                               │  (Локальный HTTP: 127.0.0.1:8080)
-                               ▼
- ┌───────────────────────────────────────────────────────────┐
- │   Внешний Реверс-Прокси с SSL (HTTPS)                     │
- │   • Caddy / Nginx / Traefik / Cloudflare Tunnel           │
- └─────────────────────────────┬─────────────────────────────┘
-                               │  (Защищённый HTTPS-трафик с токеном)
+                               │ (127.0.0.1:8080 -> HTTPS Прокси)
                                ▼
  ┌───────────────────────────────────────────────────────────┐
  │   Клиенты и Панели:                                       │
- │   • HAPP, INCY (мобильные клиенты)                        │
- │   • Remnawave / Marzban / 3x-ui (автороутинг в подписках) │
+ │   • Incy: заголовок подписки autorouting (pull JSON)      │
+ │   • Happ: импорт диплинка или автопатч сквада Remnawave   │
+ │   • Базы: скачивание geoip.dat / geosite.dat по HTTPS     │
  └───────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## ✨ Ключевые возможности
-
-* 📦 **All-in-One**: веб-сервер и планировщик внутри одного образа — никаких проблем с правами доступа `chmod`/`chown`.
-* 🔒 **Безопасность по умолчанию**: доступ защищён секретным URL-токеном (`/<ROUTING_TOKEN>/...`), трафик через HTTPS.
-* ⚡ **Нативная интеграция с Remnawave**: автоматическое обновление правил сквадов напрямую в API панели без сторонних скриптов и прослоек.
-* 🚀 **ETag-кэширование (304 Not Modified)**: базы скачиваются только при реальном обновлении на стороне источников.
-* 📁 **Гибкость источников**: официальные репозитории, произвольные URL или локальные базы (`./custom_geo/`).
-* 🤖 **Telegram-уведомления**: мгновенные алерты при сбоях и отчёты о новых базах (с поддержкой тем/топиков в супергруппах).
-* 🛡️ **Zero Dependencies**: написан исключительно на стандартной библиотеке Python 3.
-* 🐳 **Multi-arch образ**: `ghcr.io/xdeptu5/geo-routing-server:latest` (`linux/amd64` + `linux/arm64`).
-
----
-
 ## 🚀 Быстрый запуск
 
-### Способ 1. Автоматическая установка и менеджер (Интерактивный мастер)
+### Способ 1. Автоматический мастер установки (Рекомендуется)
 
-Универсальный скрипт установки и управления. Проверит Docker, спросит режим работы, домен, токен, Telegram, настроит прямую интеграцию с Remnawave и выдаст готовые конфиги прокси:
+Скрипт настроит Docker, запросит сценарий, домен, токен и выведет готовые конфиги:
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/xdeptu5/geo-routing-server/main/install.sh)
 ```
 
-> **Совет:** После установки вы в любой момент можете вызвать удобное интерактивное меню управления сервером командой:
-> ```bash
-> geo-server
-> ```
-> *(или `geoserver`). Повторный запуск скрипта установки также откроет меню управления и никогда не перезапишет ваши данные без подтверждения.*
+> **Управление:** После установки доступно меню управления командой `geo-server` (или `geoserver`). Повторный запуск скрипта открывает то же меню и никогда не перезаписывает данные без подтверждения.
 
 ---
 
-### Способ 2. Автономный запуск через Docker Compose (Dockge / Portainer / 1Panel / Ручная установка)
+### Способ 2. Запуск через Docker Compose (Ручной / Dockge / Portainer / 1Panel)
 
-Для опытных пользователей и панелей управления (Dockge, Portainer, 1Panel, Arcane):
-
-1. Скопируйте готовый `compose.yaml` из репозитория:
+1. Создайте `compose.yaml`:
    ```yaml
    services:
      geo-routing-server:
@@ -122,7 +97,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/xdeptu5/geo-routing-server/m
      routing_data:
    ```
 
-2. Рядом создайте файл `.env` на основе [`.env.example`](./.env.example):
+2. Создайте файл `.env` на основе [`.env.example`](./.env.example):
    ```env
    DOMAIN=geo.example.com
    ROUTING_TOKEN=change_me_to_random_secret_token
@@ -130,12 +105,6 @@ bash <(curl -fsSL https://raw.githubusercontent.com/xdeptu5/geo-routing-server/m
    HTTP_PORT=8080
    SCHEDULE=0 10 * * *
    SYNC_ON_START=true
-
-   # Если нужна интеграция со сквадами Remnawave:
-   # REMNAWAVE_BASE_URL=http://remnawave:3000/api
-   # REMNAWAVE_TOKEN=ваш_jwt_токен
-   # REMNAWAVE_SQUAD_1_UUID=uuid_сквада
-   # REMNAWAVE_SQUAD_1_RULE=JSONSUB.JSON
    ```
 
 3. Запустите:
@@ -143,159 +112,57 @@ bash <(curl -fsSL https://raw.githubusercontent.com/xdeptu5/geo-routing-server/m
    docker compose up -d
    ```
 
-Посмотреть статус и сформированные ссылки:
-```bash
-docker compose logs
-```
+Ссылки и статус отображаются в логах: `docker compose logs`.
 
 ---
 
-### Способ 3. Локальная сборка из исходников (Для разработчиков)
+## 🗺️ Сценарии развертывания
 
-```bash
-git clone https://github.com/xdeptu5/geo-routing-server.git
-cd geo-routing-server
-cp .env.example .env   # отредактируйте домен и токен
-docker compose up -d --build
-```
+Вся настройка задаётся через переменные в файле `.env`:
 
----
-
-## ⚙️ Сводная таблица параметров (`.env`)
-
-| Переменная | По умолчанию | Описание |
-| :--- | :--- | :--- |
-| `DOMAIN` | `geo.example.com` | Публичный домен для HTTPS-прокси (не нужен в режиме фоновой синхронизации `HAPP_DEEPLINK`) |
-| `ROUTING_TOKEN` | — | **Обязательно** для раздачи файлов (`[A-Za-z0-9._-]+`). Не требуется в режиме `HAPP_DEEPLINK` |
-| `ENABLED_CLIENTS` | `HAPP,INCY` | Активные модули: `HAPP,INCY`, `HAPP`, `INCY`. Также доступно: `HAPP_GEO`, `INCY_GEO` (только базы), `HAPP_DEEPLINK` (только генерация диплинков и синхронизация с Remnawave) |
-| `PUBLIC_GEO_BASE_URL` | *пусто* | Внешний URL к гео-базам, если базы берутся с другого сервера (например, `https://geo-node.example.com/<token>`). Суффиксы `/HAPP` и `/INCY` добавятся автоматически |
-| `HTTP_BIND` | `127.0.0.1` | Локальный интерфейс привязки внутреннего веб-сервера |
-| `HTTP_PORT` | `8080` | Локальный порт для проксирования с хоста |
-| `SCHEDULE` | `0 10 * * *` | Расписание автообновления в формате cron (UTC) |
-| `SYNC_ON_START` | `true` | Выполнять ли синхронизацию сразу при старте контейнера |
-| `GEOIP_SOURCE_URL` | *пусто* | Кастомная ссылка на `geoip.dat` (переопределяет источник) |
-| `GEOSITE_SOURCE_URL` | *пусто* | Кастомная ссылка на `geosite.dat` (переопределяет источник) |
-| `ROUTING_SOURCE_REPO` | *официальный* | URL репозитория с исходными JSON-шаблонами правил |
-| **Telegram** | | |
-| `TELEGRAM_BOT_TOKEN` | *пусто* | Токен бота Telegram для алертов (опционально) |
-| `TELEGRAM_CHAT_ID` | *пусто* | ID чата / группы для получения уведомлений |
-| `TELEGRAM_THREAD_ID` | *пусто* | ID темы / топика в супергруппе с включёнными темами |
-| `TELEGRAM_NOTIFY_SUCCESS`| `false` | Присылать отчёт в Telegram при выходе обновлённых баз |
-| **Remnawave API** | | |
-| `REMNAWAVE_BASE_URL` | *пусто* | URL API панели Remnawave (например, `http://remnawave:3000/api`) |
-| `REMNAWAVE_TOKEN` | *пусто* | JWT-токен администратора из настроек панели Remnawave |
-| `REMNAWAVE_SQUAD_N_UUID` | *пусто* | UUID сквада N (N = 1..10+) для автоматического обновления правил |
-| `REMNAWAVE_SQUAD_N_RULE` | `JSONSUB.JSON` | Имя JSON-правила для сквада N (`JSONSUB.JSON`, `WHITELIST.JSON`) |
-| `REMNAWAVE_GLOBAL_RULE` | *пусто* | Глобальное правило для всех подписок панели (опционально) |
-| `CLOUDFLARE_ZERO_TRUST_CLIENT_ID` | *пусто* | Client ID сервисного токена Cloudflare Zero Trust (если панель за туннелем) |
-| `CLOUDFLARE_ZERO_TRUST_CLIENT_SECRET` | *пусто* | Client Secret сервисного токена Cloudflare Zero Trust |
-
----
-
-## 📱 Интеграция с клиентами и VPN-панелями
-
-### 1. HAPP
-
-Happ принимает правила маршрутизации в виде закодированного Base64-диплинка `happ://routing/onadd/<base64>`. Внутри диплинка содержатся все правила, а ссылки на базы `geoip.dat` и `geosite.dat` заменены на ваш сервер.
-
-* **Если у вас есть Remnawave (Рекомендуется):**  
-  Сервер **напрямую отправляет** правила в API сквадов Remnawave. Пользователи сквада получают правила автоматически вместе со своей подпиской.  
-  В `.env` укажите:
-  ```env
-  REMNAWAVE_BASE_URL=https://remna.example.com/api
-  REMNAWAVE_TOKEN=ваш_jwt_токен_из_панели
-
-  # Привязка правил к сквадам (группам пользователей):
-  REMNAWAVE_SQUAD_1_UUID=23c97b42-289d-490a-ad73-bd17ab426657
-  REMNAWAVE_SQUAD_1_RULE=JSONSUB.JSON
-
-  REMNAWAVE_SQUAD_2_UUID=aae87204-e36a-41cb-8f7c-485742bf556c
-  REMNAWAVE_SQUAD_2_RULE=WHITELIST.JSON
-
-  # (Опционально) Если панель защищена Cloudflare Zero Trust:
-  # CLOUDFLARE_ZERO_TRUST_CLIENT_ID=ef901e38...access
-  # CLOUDFLARE_ZERO_TRUST_CLIENT_SECRET=73ad85...
-  ```
-
-* **Если у вас нет Remnawave (Ручной импорт в Happ):**  
-  Сервер генерирует готовые диплинки в текстовые файлы `.DEEPLINK`:
-  ```text
-  https://geo.example.com/<ROUTING_TOKEN>/HAPP/<RULE>.DEEPLINK
-  ```
-  Примеры ссылок для стандартных правил:
-  * **JSONSUB:**   `https://geo.example.com/<ROUTING_TOKEN>/HAPP/JSONSUB.DEEPLINK`
-  * **WHITELIST:** `https://geo.example.com/<ROUTING_TOKEN>/HAPP/WHITELIST.DEEPLINK`
-
-  При переходе по ссылке приложение Happ автоматически импортирует правила и настроит адреса баз с вашего сервера.
-
----
-
-### 2. INCY (Автороутинг в заголовке подписки)
-
-В отличие от Happ, клиент Incy поддерживает динамическое обновление правил по HTTPS-ссылке. В настройках вашей панели (Remnawave, Marzban, 3x-ui) добавьте заголовок профиля:
-
-* **Header Name:** `autorouting`
-* **Header Value:**
-  ```text
-  incy://autorouting/onadd/https://geo.example.com/<ROUTING_TOKEN>/INCY/<RULE>.JSON
-  ```
-
-  Примеры значений:
-  * **JSONSUB:** `incy://autorouting/onadd/https://geo.example.com/<ROUTING_TOKEN>/INCY/JSONSUB.JSON`
-  * **WHITELIST:** `incy://autorouting/onadd/https://geo.example.com/<ROUTING_TOKEN>/INCY/WHITELIST.JSON`
-
----
-
-## 🗺️ Популярные топологии развертывания
-
-### Сценарий 1. Универсальный сервер баз и правил (Pull-модель)
-Сервер автономно раздает всё необходимое по HTTPS. Подходит для любых VPN-панелей (**Remnawave**, Marzban, 3x-ui) и клиентов (**Happ**, **Incy**), забирающих данные по ссылкам. API-токены панелей серверу не требуются:
-* Раздает по HTTPS свежие базы `geoip.dat` и `geosite.dat` для клиентов Happ и Incy.
-* Раздает готовые диплинки правил для Happ (`JSONSUB.DEEPLINK`, `WHITELIST.DEEPLINK`).
-* Раздает JSON-файлы автороутинга для Incy (`JSONSUB.JSON`, `WHITELIST.JSON`) — панели транслируют выбранную ссылку в заголовке `autorouting`.
+### 1. Универсальный сервер раздачи (Pull-модель)
+Сервер раздает базы, диплинки Happ и JSON Incy по HTTPS. Панели (Remnawave, Marzban, 3x-ui) и клиенты забирают файлы по ссылкам:
 ```env
 DOMAIN=geo.example.com
 ROUTING_TOKEN=секретный_токен
 ENABLED_CLIENTS=HAPP,INCY
 ```
 
-### Сценарий 2. Сервер раздачи + автопатч Remnawave API для Happ
-Сервер раздает базы и JSON по HTTPS, а также **автоматически обновляет правила Happ в сквадах Remnawave через API**:
-* **Happ:** сервер сам кодирует выбранное правило (`JSONSUB.JSON`, `WHITELIST.JSON` или своё) в base64 и пушит в заголовок `routing` нужных сквадов Remnawave.
-* **Incy:** автороутинг настраивается один раз в заголовках подписки Remnawave (ссылка на `JSONSUB.JSON` или `WHITELIST.JSON`). При каждом обновлении подписки клиент Incy сам забирает свежий JSON с вашего сервера.
+### 2. Сервер раздачи + синхронизация с Remnawave API для Happ
+Всё из Сценария 1 + сервер сам отправляет правила Happ в сквады Remnawave:
 ```env
 DOMAIN=geo.example.com
 ROUTING_TOKEN=секретный_токен
 ENABLED_CLIENTS=HAPP,INCY
 REMNAWAVE_BASE_URL=http://remnawave:3000/api
-REMNAWAVE_TOKEN=jwt_токен
-REMNAWAVE_SQUAD_1_UUID=uuid_сквада_обход_блокировок
+REMNAWAVE_TOKEN=jwt_токен_администратора
+REMNAWAVE_SQUAD_1_UUID=uuid_первого_сквада
 REMNAWAVE_SQUAD_1_RULE=JSONSUB.JSON
-REMNAWAVE_SQUAD_2_UUID=uuid_сквада_белый_список
+REMNAWAVE_SQUAD_2_UUID=uuid_второго_сквада
 REMNAWAVE_SQUAD_2_RULE=WHITELIST.JSON
 ```
 
-### Сценарий 3. Быстрый узел раздачи geo-баз (например, VPS в РФ)
-Сервер только раздает тяжелые файлы `geoip.dat` и `geosite.dat` на максимальной скорости без блокировок. Правила и Remnawave на этой машине не нужны:
+### 3. Быстрый узел раздачи geo-баз (например, VPS в РФ)
+Сервер только раздает файлы `geoip.dat` и `geosite.dat` на максимальной скорости:
 ```env
 DOMAIN=ru-node.example.com
 ROUTING_TOKEN=секретный_токен
 ENABLED_CLIENTS=HAPP_GEO,INCY_GEO
 ```
 
-### Сценарий 4. Контейнер синхронизации Remnawave (базы на внешнем узле)
-Контейнер работает в Docker на сервере с Remnawave. **Свой публичный домен, реверс-прокси и открытые порты не требуются.** Контейнер загружает правила, подставляет адреса внешнего гео-узла (Сценарий 3), кодирует диплинки и передаёт их напрямую в API сквадов Remnawave:
+### 4. Контейнер синхронизации Remnawave (базы на внешнем узле)
+Работает в Docker на сервере с Remnawave. **Публичный домен и открытые порты не требуются.** Сервер берет базы с гео-узла (Сценарий 3) и передаёт диплинки в сквады Remnawave через API:
 ```env
 ENABLED_CLIENTS=HAPP_DEEPLINK
 PUBLIC_GEO_BASE_URL=https://ru-node.example.com/секретный_токен
 REMNAWAVE_BASE_URL=http://remnawave:3000/api
-REMNAWAVE_TOKEN=jwt_токен
+REMNAWAVE_TOKEN=jwt_токен_администратора
 REMNAWAVE_SQUAD_1_UUID=uuid_сквада
 REMNAWAVE_SQUAD_1_RULE=JSONSUB.JSON
 ```
 
-### Сценарий 5. Сервер правил Incy (с базами на внешнем узле)
-Сервер раздает по HTTPS файлы правил подписки (`JSONSUB.JSON` / `WHITELIST.JSON`) для Incy. Тяжелые базы скачиваются клиентами напрямую с быстрого гео-узла:
+### 5. Сервер правил Incy (с базами на внешнем узле)
+Раздает по HTTPS JSON-правила для Incy, а адреса баз внутри правил ведут на внешний гео-узел:
 ```env
 DOMAIN=geo.example.com
 ROUTING_TOKEN=секретный_токен
@@ -305,28 +172,78 @@ PUBLIC_GEO_BASE_URL=https://ru-node.example.com/секретный_токен
 
 ---
 
+## 📱 Подключение клиентов
+
+### HAPP
+Happ принимает правила через Base64-диплинк `happ://routing/onadd/<base64>`.
+* **С Remnawave:** правила обновляются в сквадах автоматически через API (Сценарии 2 и 4).
+* **Вручную / другие панели:** скопируйте ссылку на сгенерированный файл:
+  ```text
+  https://<DOMAIN>/<ROUTING_TOKEN>/HAPP/<RULE>.DEEPLINK
+  ```
+  Примеры:
+  * `https://geo.example.com/<ROUTING_TOKEN>/HAPP/JSONSUB.DEEPLINK`
+  * `https://geo.example.com/<ROUTING_TOKEN>/HAPP/WHITELIST.DEEPLINK`
+
+### INCY
+Клиент Incy динамически скачивает JSON-правила по HTTPS. В панели (Remnawave, Marzban, 3x-ui) добавьте заголовок профиля подписки:
+* **Header Name:** `autorouting`
+* **Header Value:**
+  ```text
+  incy://autorouting/onadd/https://<DOMAIN>/<ROUTING_TOKEN>/INCY/<RULE>.JSON
+  ```
+  Примеры:
+  * `incy://autorouting/onadd/https://geo.example.com/<ROUTING_TOKEN>/INCY/JSONSUB.JSON`
+  * `incy://autorouting/onadd/https://geo.example.com/<ROUTING_TOKEN>/INCY/WHITELIST.JSON`
+
+---
+
+## ⚙️ Сводная таблица параметров (`.env`)
+
+| Переменная | По умолчанию | Описание |
+| :--- | :--- | :--- |
+| `DOMAIN` | `geo.example.com` | Домен для HTTPS-прокси (не нужен в режиме `HAPP_DEEPLINK`) |
+| `ROUTING_TOKEN` | — | **Обязательно** для раздачи файлов (`[A-Za-z0-9._-]+`) |
+| `ENABLED_CLIENTS` | `HAPP,INCY` | Модули: `HAPP,INCY`, `HAPP`, `INCY`, `HAPP_GEO`, `INCY_GEO`, `HAPP_DEEPLINK` |
+| `PUBLIC_GEO_BASE_URL` | *пусто* | Внешний URL баз (`https://geo-node.example.com/<token>`) |
+| `HTTP_BIND` | `127.0.0.1` | IP привязки внутреннего веб-сервера |
+| `HTTP_PORT` | `8080` | Порт для реверс-прокси |
+| `SCHEDULE` | `0 10 * * *` | Расписание автообновления (cron UTC, дефолт 10:00 UTC) |
+| `SYNC_ON_START` | `true` | Выполнять синхронизацию при запуске контейнера |
+| `GEOIP_SOURCE_URL` | *пусто* | Кастомный источник `geoip.dat` |
+| `GEOSITE_SOURCE_URL` | *пусто* | Кастомный источник `geosite.dat` |
+| `ROUTING_SOURCE_REPO` | *roscomvpn* | Репозиторий правил GitHub |
+| **Telegram** | | |
+| `TELEGRAM_BOT_TOKEN` | *пусто* | Токен бота Telegram для алертов |
+| `TELEGRAM_CHAT_ID` | *пусто* | ID чата / группы |
+| `TELEGRAM_THREAD_ID` | *пусто* | ID темы/топика в супергруппе |
+| `TELEGRAM_NOTIFY_SUCCESS`| `false` | Уведомлять при каждом успешном обновлении |
+| **Remnawave API** | | |
+| `REMNAWAVE_BASE_URL` | *пусто* | URL API панели (например, `http://remnawave:3000/api`) |
+| `REMNAWAVE_TOKEN` | *пусто* | JWT-токен администратора панели |
+| `REMNAWAVE_SQUAD_N_UUID` | *пусто* | UUID сквада N (N = 1..10+) |
+| `REMNAWAVE_SQUAD_N_RULE` | `JSONSUB.JSON` | Имя правила для сквада N (`JSONSUB.JSON`, `WHITELIST.JSON`) |
+| `REMNAWAVE_GLOBAL_RULE` | *пусто* | Глобальное правило для всех подписок |
+| `CLOUDFLARE_ZERO_TRUST_CLIENT_ID` | *пусто* | Client ID сервисного токена Cloudflare Zero Trust |
+| `CLOUDFLARE_ZERO_TRUST_CLIENT_SECRET` | *пусто* | Client Secret сервисного токена Cloudflare Zero Trust |
+
+---
+
 ## 🌐 Настройка HTTPS Реверс-Прокси
 
-Рекомендуется выделить **отдельный поддомен** (например, `geo.example.com`). После установки команда `geo-server` (пункт 3) сгенерирует готовые блоки конфигураций.
+Выделите поддомен (например, `geo.example.com`). При установке через скрипт готовый блок генерируется автоматически (пункт меню 3).
 
-<details>
-<summary><b>Caddy на хосте</b></summary>
-
+**Caddy:**
 ```caddy
 geo.example.com {
     reverse_proxy 127.0.0.1:8080
 }
 ```
-Примените изменения: `sudo systemctl reload caddy`
-</details>
 
-<details>
-<summary><b>Nginx на хосте</b></summary>
-
+**Nginx:**
 ```nginx
 server {
     server_name geo.example.com;
-
     location / {
         proxy_pass http://127.0.0.1:8080;
         proxy_set_header Host $host;
@@ -336,83 +253,45 @@ server {
     }
 }
 ```
-Примените изменения: `sudo nginx -t && sudo nginx -s reload`
-</details>
-
-<details>
-<summary><b>Nginx Proxy Manager / Контейнерный прокси</b></summary>
-
-* **NPM (GUI):** Forward Host `127.0.0.1`, Forward Port `8080`, SSL → Force SSL: ON.
-* **Caddy в Docker:** `reverse_proxy geo-routing-server:80` (подключите оба контейнера к одной Docker-сети).
-* **Nginx в Docker:** `proxy_pass http://geo-routing-server:80;`
-</details>
 
 ---
 
-## 🛠️ Управление и полезные команды
+## 🛠️ Управление и команды
 
 | Действие | Команда | Описание |
 |---|---|---|
-| **Главное меню управления** | `geo-server` *(или `geoserver`)* | Интерактивное меню настройки, логов и синхронизации |
-| **Синхронизация баз вручную** | `docker exec geo-routing-server run-routing-sync` | Принудительное немедленное обновление |
-| **Просмотр логов** | `docker compose logs -f` | Мониторинг работы в реальном времени |
-| **Обновление образа** | `docker compose pull && docker compose up -d` | Скачивание и запуск свежей версии контейнера |
-| **Статус контейнера** | `docker compose ps` | Проверка здоровья (healthcheck) |
+| **Главное меню** | `geo-server` *(или `geoserver`)* | Интерактивное управление, смена параметров, логи |
+| **Принудительная синхронизация** | `docker exec geo-routing-server run-routing-sync` | Запуск немедленного обновления |
+| **Просмотр логов** | `docker compose logs -f` | Мониторинг в реальном времени |
+| **Обновление образа** | `docker compose pull && docker compose up -d` | Загрузка свежей версии контейнера |
+| **Статус** | `docker compose ps` | Проверка работы контейнера |
 
-> 📁 **Кастомные базы:** Собственные локальные файлы можно положить в папку `./custom_geo/` (`geoip.dat`, `geosite.dat`) — сервер автоматически подхватит их и рассчитает SHA-256 вместо загрузки из сети.
+> 📁 **Кастомные базы:** Локальные файлы `geoip.dat` и `geosite.dat` можно положить в папку `./custom_geo/` — сервер подхватит их автоматически вместо загрузки из сети.
 
 ---
 
-## ❓ Часто задаваемые вопросы (FAQ)
+## ❓ FAQ
 
 <details>
-<summary><b>Безопасно ли хранить токен в .env?</b></summary>
-Да. Файл <code>.env</code> добавлен в <code>.gitignore</code> и никогда не попадёт в git. Токен работает как закрытый Capability URL и передаётся по защищённому HTTPS.
+<summary><b>Почему при переходе на https://geo.example.com/ возвращается 404?</b></summary>
+Это защита от автоматических сканеров: без секретного токена сервер скрывает дерево файлов. Доступ работает только по полному пути: <code>https://geo.example.com/&lt;ROUTING_TOKEN&gt;/...</code>
 </details>
 
 <details>
-<summary><b>Что произойдёт при повторном запуске install.sh?</b></summary>
-Скрипт автоматически определит существующую установку, откроет интерактивное меню <code>geo-server</code> и <b>никогда не перезапишет конфигурации</b>. Если вы захотите изменить параметры (домен, порт, сквады Remnawave), выберите пункт <i>«6) Перенастроить сервер заново»</i> — скрипт сохранит текущие значения как подсказки по умолчанию.
-</details>
-
-<details>
-<summary><b>Как связать сервер с Remnawave?</b></summary>
-Укажите <code>REMNAWAVE_BASE_URL</code> и <code>REMNAWAVE_TOKEN</code> в <code>.env</code> — сервер будет автоматически отправлять свежие диплинки в сквады сразу после обновления баз (см. раздел «Интеграция с VPN-панелями»).
-</details>
-
-<details>
-<summary><b>Как запустить без клонирования репозитория?</b></summary>
-Используйте официальный образ <code>ghcr.io/xdeptu5/geo-routing-server:latest</code> (см. Способ 2 в разделе «Быстрый запуск»).
-</details>
-
-<details>
-<summary><b>Почему при открытии https://geo.example.com/ возвращается 404?</b></summary>
-Это сделано намеренно для безопасности: без указания секретного URL-токена сервер скрывает список файлов от автоматических сканеров.
+<summary><b>Что будет при повторном запуске install.sh?</b></summary>
+Скрипт определит существующую установку и откроет меню <code>geo-server</code>. Конфигурация и данные никогда не перезаписываются без явного подтверждения.
 </details>
 
 ---
 
 ## 💎 Поддержать проект (Donations)
 
-Если проект оказался для вас полезным, вы можете поддержать его дальнейшую разработку:
-
-### 🪙 USDT / TRX (Tron — TRC20)
-```text
-TKw6b3ZszCM2983sLuFAvqxtt2M8hpNW51
-```
-
-### 💎 TON (The Open Network)
-```text
-UQB19xcTuQ1jFEq0Pi3xaABnN8JaGEXAeuGa2rXFRUUdi8Nk
-```
-
-### 🟡 USDT / BNB (BNB Smart Chain — BEP20)
-```text
-0xFdc848534deA4f010c95df92045ABDa5f6a1559b
-```
+* **USDT / TRX (TRC20):** `TKw6b3ZszCM2983sLuFAvqxtt2M8hpNW51`
+* **TON:** `UQB19xcTuQ1jFEq0Pi3xaABnN8JaGEXAeuGa2rXFRUUdi8Nk`
+* **USDT / BNB (BEP20):** `0xFdc848534deA4f010c95df92045ABDa5f6a1559b`
 
 ---
 
 ## 📄 Лицензия
 
-Проект распространяется под свободной лицензией [MIT](./LICENSE).
+Распространяется под свободной лицензией [MIT](./LICENSE).
