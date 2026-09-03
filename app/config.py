@@ -25,7 +25,8 @@ class Config:
     ]
     
     # Внешний URL к гео-базам (если базы отдаются с другого сервера)
-    PUBLIC_GEO_BASE_URL = os.getenv("PUBLIC_GEO_BASE_URL", "").strip().rstrip("/")
+    _raw_public_geo = os.getenv("PUBLIC_GEO_BASE_URL", "").strip().rstrip("/")
+    PUBLIC_GEO_BASE_URL = _raw_public_geo if _raw_public_geo.startswith(("http://", "https://")) else ""
     
     GEOIP_SOURCE_URL = os.getenv("GEOIP_SOURCE_URL", "").strip()
     GEOSITE_SOURCE_URL = os.getenv("GEOSITE_SOURCE_URL", "").strip()

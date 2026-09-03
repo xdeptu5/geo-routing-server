@@ -706,55 +706,42 @@ install_wizard() {
     fi
 
     # ────────────────────────────────────────────────────────────────────────
-    # ШАГ 2: Режим работы сервера
+    # ШАГ 2: Выбор приложений
     # ────────────────────────────────────────────────────────────────────────
-    echo -e "${BOLD}--- [Шаг 2] Что вы хотите настроить? ---${NC}"
+    echo -e "${BOLD}--- [Шаг 2] Для каких приложений настраиваем сервер? ---${NC}"
     echo -e "${CYAN}${BOLD}[i] Источник правил по умолчанию:${NC} ${CYAN}https://github.com/hydraponique/roscomvpn-routing${NC}"
     echo -e "${DIM}Сервер автоматически скачивает и обновляет готовые правила (JSONSUB, WHITELIST) из этого репозитория.${NC}\n"
-    echo -e "  ${BOLD}1)${NC} Свой сервер маршрутизации ${DIM}(нужен домен)${NC}"
-    echo -e "     ${DIM}Раздает базы (geoip / geosite) и правила для приложений Happ и Incy.${NC}"
+    echo -e "  ${BOLD}1)${NC} Happ и Incy (Оба приложения) [Enter — Рекомендуется]"
+    echo -e "     ${DIM}Раздает базы (geoip / geosite) и правила с вашего домена для Happ и Incy.${NC}"
     echo ""
-    echo -e "  ${BOLD}2)${NC} Автообновление правил в Remnawave для Happ ${DIM}(домен не нужен)${NC}"
-    echo -e "     ${DIM}Каждый день отправляет свежие правила обхода блокировок для Happ в сквады панели Remnawave.${NC}"
+    echo -e "  ${BOLD}2)${NC} Только Happ"
+    echo -e "     ${DIM}Раздает базы с вашего домена + отправляет правила в сквады Remnawave.${NC}"
     echo ""
-    read -r -p "Выберите вариант [1-2, Enter = 1]: " server_mode
-    server_mode="${server_mode:-1}"
+    echo -e "  ${BOLD}3)${NC} Только Incy"
+    echo -e "     ${DIM}Раздает базы и правила для Incy с вашего домена.${NC}"
+    echo ""
+    read -r -p "Выберите вариант [1-3, Enter = 1]: " client_pick
+    client_pick="${client_pick:-1}"
 
     PUBLIC_GEO_BASE_URL="$prev_public_geo"
     ROUTING_SOURCE_REPO="$prev_routing_repo"
     NEEDS_PUBLIC_DOMAIN=true
     local config_remna=false
 
-    if [ "$server_mode" = "2" ]; then
-        ENABLED_CLIENTS="HAPP_DEEPLINK"
-        NEEDS_PUBLIC_DOMAIN=false
-        config_remna=true
-        echo -e "\n${CYAN}[i] Опционально: если geo-базы раздаются с другого вашего сервера, укажите его URL.${NC}"
-        echo -e "${DIM}Пример: https://geo.example.com/secret_token/HAPP${NC}"
-        read -r -p "URL к внешним geo-базам [Enter = ${prev_public_geo:-пропустить}]: " input_geo_url
-        PUBLIC_GEO_BASE_URL="${input_geo_url:-$prev_public_geo}"
-    else
-        echo -e "\n${BOLD}Для каких приложений готовить базы и правила?${NC}"
-        echo -e "  ${BOLD}1)${NC} Happ и Incy (Оба приложения) [Enter]"
-        echo -e "  ${BOLD}2)${NC} Только Happ"
-        echo -e "  ${BOLD}3)${NC} Только Incy"
-        read -r -p "Выберите [1-3, Enter = 1]: " client_pick
-        client_pick="${client_pick:-1}"
-        case "$client_pick" in
-            2) 
-                ENABLED_CLIENTS="HAPP"
-                config_remna=true
-                ;;
-            3) 
-                ENABLED_CLIENTS="INCY"
-                config_remna=false
-                ;;
-            *) 
-                ENABLED_CLIENTS="HAPP,INCY"
-                config_remna=true
-                ;;
-        esac
-    fi
+    case "$client_pick" in
+        2) 
+            ENABLED_CLIENTS="HAPP"
+            config_remna=true
+            ;;
+        3) 
+            ENABLED_CLIENTS="INCY"
+            config_remna=false
+            ;;
+        *) 
+            ENABLED_CLIENTS="HAPP,INCY"
+            config_remna=true
+            ;;
+    esac
     echo -e "${GREEN}[+] Режим: $ENABLED_CLIENTS${NC}\n"
 
     # ────────────────────────────────────────────────────────────────────────
@@ -765,14 +752,13 @@ install_wizard() {
         echo -e "${BOLD}--- [Шаг 3] Прямая интеграция с Remnawave ---${NC}"
         echo -e "${DIM}Сервер сам отправляет правила маршрутизации прямо в API вашей панели Remnawave.${NC}\n"
         
-        local remna_choice="Y"
-        if [ "$server_mode" != "2" ]; then
-            local default_remna_prompt="y/N"
-            [ -n "$prev_remna_token" ] && default_remna_prompt="Y/n"
-            read -r -p "Настроить отправку правил Happ в сквады Remnawave? [$default_remna_prompt]: " remna_choice
-            if [ -n "$prev_remna_token" ]; then
-                remna_choice="${remna_choice:-Y}"
-            fi
+        local default_remna_prompt="y/N"
+        [ -n "$prev_remna_token" ] && default_remna_prompt="Y/n"
+        read -r -p "Настроить отправку правил Happ в сквады Remnawave? [$default_remna_prompt]: " remna_choice
+        if [ -n "$prev_remna_token" ]; then
+            remna_choice="${remna_choice:-Y}"
+        else
+            remna_choice="${remna_choice:-N}"
         fi
 
         if [[ "$remna_choice" =~ ^[YyДд]$ ]]; then
