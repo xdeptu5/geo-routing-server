@@ -800,6 +800,7 @@ configure_remnawave() {
             prev_sq_uuid=$(grep "^REMNAWAVE_SQUAD_${i}_UUID=" "$env_file" | cut -d'=' -f2- || true)
             prev_sq_name=$(grep "^REMNAWAVE_SQUAD_${i}_NAME=" "$env_file" | cut -d'=' -f2- || true)
             prev_sq_rule=$(grep "^REMNAWAVE_SQUAD_${i}_RULE=" "$env_file" | cut -d'=' -f2- || true)
+        fi
         if [ -n "$prev_sq_uuid" ] && [ -n "$ext_squads_raw" ]; then
             local live_match
             live_match=$(echo "$ext_squads_raw" | grep -i "^${prev_sq_uuid}|" | cut -d'|' -f2- || true)
@@ -1543,6 +1544,7 @@ REMNAWAVE_TOKEN=${r_token}
                     prev_s_uuid=$(grep "^REMNAWAVE_SQUAD_${i}_UUID=" "$scan_env" | cut -d'=' -f2- || true)
                     prev_s_name=$(grep "^REMNAWAVE_SQUAD_${i}_NAME=" "$scan_env" | cut -d'=' -f2- || true)
                     prev_s_rule=$(grep "^REMNAWAVE_SQUAD_${i}_RULE=" "$scan_env" | cut -d'=' -f2- || true)
+                fi
                 if [ -n "$prev_s_uuid" ] && [ -n "$ext_squads_raw" ]; then
                     local live_match
                     live_match=$(echo "$ext_squads_raw" | grep -i "^${prev_s_uuid}|" | cut -d'|' -f2- || true)
