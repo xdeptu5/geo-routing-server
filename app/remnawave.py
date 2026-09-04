@@ -80,6 +80,45 @@ class RemnawaveSync:
             return None
 
     UUID_REGEX = re.compile(r"^[A-Za-z0-9_-]+$")
+    cached_squad_names: Dict[str, str] = {}
+
+    @classmethod
+    def get_squad_name(cls, squad_uuid: str) -> str:
+        """Возвращает читаемое имя сквада, если доступно."""
+        squad_uuid = (squad_uuid or "").lower()
+        if squad_uuid in cls.cached_squad_names:
+            return cls.cached_squad_names[squad_uuid]
+        for k, v in os.environ.items():
+            m = re.match(r"^(?:REMNAWAVE_)?SQUAD_(\d+)_UUID$", k)
+            if m and (v or "").strip().lower() == squad_uuid:
+                idx = m.group(1)
+                name = (os.getenv(f"REMNAWAVE_SQUAD_{idx}_NAME") or os.getenv(f"SQUAD_{idx}_NAME") or "").strip()
+                if name:
+                    cls.cached_squad_names[squad_uuid] = name
+                    return name
+        return ""
+
+    @classmethod
+    def fetch_all_squad_names(cls) -> Dict[str, str]:
+        """Запрашивает имена всех доступных внешних сквадов из Remnawave API."""
+        if not cls.is_configured():
+            return cls.cached_squad_names
+        try:
+            url = f"{cls.get_api_url()}/external-squads"
+            res = cls._api_request("GET", url)
+            if res:
+                raw = res.get("response", res.get("data", []))
+                if isinstance(raw, dict):
+                    raw = raw.get("externalSquads", raw.get("items", []))
+                if isinstance(raw, list):
+                    for s in raw:
+                        if isinstance(s, dict) and "uuid" in s:
+                            u = str(s["uuid"]).lower()
+                            if "name" in s and s["name"]:
+                                cls.cached_squad_names[u] = s["name"]
+        except Exception:
+            pass
+        return cls.cached_squad_names
 
     @classmethod
     def load_squad_configs(cls) -> List[Dict[str, str]]:
@@ -94,6 +133,7 @@ class RemnawaveSync:
         for i in sorted(found_indices):
             uuid = os.getenv(f"REMNAWAVE_SQUAD_{i}_UUID", "").strip() or os.getenv(f"SQUAD_{i}_UUID", "").strip()
             rule = os.getenv(f"REMNAWAVE_SQUAD_{i}_RULE", "").strip() or os.getenv(f"SQUAD_{i}_RULE", "").strip()
+            name = os.getenv(f"REMNAWAVE_SQUAD_{i}_NAME", "").strip() or os.getenv(f"SQUAD_{i}_NAME", "").strip()
             
             # Поддержка старого формата SQUAD_i_URL
             old_url = os.getenv(f"SQUAD_{i}_URL", "").strip()
@@ -108,10 +148,14 @@ class RemnawaveSync:
                 continue
                 
             rule = rule.split("/")[-1] if rule else "JSONSUB.JSON"
-            squads.append({
+            squad_item = {
                 "uuid": uuid.lower(),
                 "rule": rule.upper()
-            })
+            }
+            if name:
+                squad_item["name"] = name
+                cls.cached_squad_names[uuid.lower()] = name
+            squads.append(squad_item)
         return squads
 
     @classmethod
@@ -195,7 +239,10 @@ class RemnawaveSync:
                 if isinstance(raw_squads, list):
                     for s in raw_squads:
                         if isinstance(s, dict) and "uuid" in s:
-                            known_squads[str(s["uuid"]).lower()] = s
+                            u = str(s["uuid"]).lower()
+                            known_squads[u] = s
+                            if "name" in s and s["name"]:
+                                cls.cached_squad_names[u] = s["name"]
                     
                     logger.info(f"[Remnawave] Найдено внешних сквадов в панели: {len(known_squads)}")
                     if known_squads:
@@ -210,15 +257,17 @@ class RemnawaveSync:
             for squad in squads:
                 squad_uuid = squad["uuid"]
                 rule_name = squad["rule"]
+                s_name = squad.get("name") or cls.get_squad_name(squad_uuid)
+                s_desc = f"Squad '{s_name}' ({squad_uuid})" if s_name else f"Squad '{squad_uuid}'"
                 deeplink = cls._read_deeplink_content(happ_dir, rule_name)
                 
                 if not deeplink:
-                    logger.warning(f"[Remnawave] Deeplink for rule {rule_name} (Squad {squad_uuid}) not found in {happ_dir}")
+                    logger.warning(f"[Remnawave] Deeplink for rule {rule_name} ({s_desc}) not found in {happ_dir}")
                     continue
 
                 if known_squads and squad_uuid not in known_squads:
                     logger.error(
-                        f"[Remnawave] Сквад '{squad_uuid}' не найден во вкладке 'ВНЕШНИЕ сквады' (External Squads) Remnawave!\n"
+                        f"[Remnawave] {s_desc} не найден во вкладке 'ВНЕШНИЕ сквады' (External Squads) Remnawave!\n"
                         f"   -> Проверьте: в панели Remnawave должен быть создан сквад в меню 'Внешние сквады' (не 'Внутренние').\n"
                         f"   -> Доступные внешние сквады в панели: {list(known_squads.keys())}"
                     )
@@ -251,10 +300,10 @@ class RemnawaveSync:
                     }
                     patch_url = f"{base_api_url}/external-squads"
                     if cls._api_request("PATCH", patch_url, patch_payload):
-                        logger.info(f"[Remnawave] Successfully updated Squad '{squad_uuid}' with rule '{rule_name}'!")
+                        logger.info(f"[Remnawave] Successfully updated {s_desc} with rule '{rule_name}'!")
                     else:
                         success = False
                 else:
-                    logger.info(f"[Remnawave] Squad '{squad_uuid}' routing is already up to date.")
+                    logger.info(f"[Remnawave] {s_desc} routing is already up to date.")
 
         return success

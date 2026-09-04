@@ -346,6 +346,22 @@ class TestRemnawaveSquads(unittest.TestCase):
         server.shutdown()
         self.assertIsNone(res)
 
+    # ------------------------------------------------------------------
+    # Тест 13: Чтение имени сквада из REMNAWAVE_SQUAD_X_NAME
+    # ------------------------------------------------------------------
+    def test_squad_name_resolution(self):
+        """load_squad_configs и get_squad_name корректно возвращают человекочитаемое имя сквада."""
+        os.environ["REMNAWAVE_SQUAD_1_UUID"] = "uuid-trial"
+        os.environ["REMNAWAVE_SQUAD_1_NAME"] = "Trial Base JSON Squade"
+        os.environ["REMNAWAVE_SQUAD_1_RULE"] = "JSONSUB.JSON"
+
+        from app.remnawave import RemnawaveSync
+        squads = RemnawaveSync.load_squad_configs()
+
+        self.assertEqual(len(squads), 1)
+        self.assertEqual(squads[0]["name"], "Trial Base JSON Squade")
+        self.assertEqual(RemnawaveSync.get_squad_name("uuid-trial"), "Trial Base JSON Squade")
+
 
 class TestRemnawaveIsConfigured(unittest.TestCase):
     """is_configured() корректно реагирует на наличие/отсутствие переменных."""

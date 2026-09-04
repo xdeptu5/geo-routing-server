@@ -339,6 +339,68 @@ detect_remnawave_running() {
     return 1
 }
 
+# Загрузка списка внешних сквадов из Remnawave в формате "UUID|NAME"
+fetch_remnawave_external_squads() {
+    local base_url="${1:-}"
+    local token="${2:-}"
+    local cf_id="${3:-}"
+    local cf_secret="${4:-}"
+
+    # 1. Если запущен контейнер geo-routing-server, вызываем Python внутри контейнера
+    if command -v docker &>/dev/null && docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^geo-routing-server$"; then
+        local out
+        out=$(docker exec geo-routing-server python3 -c "
+from app.remnawave import RemnawaveSync
+res = RemnawaveSync._api_request('GET', RemnawaveSync.get_api_url() + '/external-squads')
+if res:
+    raw = res.get('response', res.get('data', []))
+    if isinstance(raw, dict):
+        raw = raw.get('externalSquads', raw.get('items', []))
+    if isinstance(raw, list):
+        for s in raw:
+            if isinstance(s, dict) and 'uuid' in s:
+                u = str(s['uuid']).lower()
+                n = str(s.get('name', '')).strip()
+                print(f'{u}|{n}')
+" 2>/dev/null || true)
+        if [ -n "$out" ]; then
+            echo "$out"
+            return 0
+        fi
+    fi
+
+    # 2. Если контейнер ещё не запущен, пробуем через curl с хоста
+    if [ -n "$base_url" ] && [ -n "$token" ] && command -v curl &>/dev/null; then
+        local api_url="${base_url%/}"
+        [[ "$api_url" != */api ]] && api_url="${api_url}/api"
+
+        local curl_headers=(-H "Authorization: Bearer $token" -H "Accept: application/json")
+        [ -n "$cf_id" ] && curl_headers+=(-H "CF-Access-Client-Id: $cf_id")
+        [ -n "$cf_secret" ] && curl_headers+=(-H "CF-Access-Client-Secret: $cf_secret")
+
+        local json_res
+        json_res=$(curl -s -f -m 3 "${curl_headers[@]}" "${api_url}/external-squads" 2>/dev/null || true)
+        if [ -n "$json_res" ] && command -v python3 &>/dev/null; then
+            python3 -c "
+import json, sys
+try:
+    data = json.loads(sys.argv[1])
+    raw = data.get('response', data.get('data', []))
+    if isinstance(raw, dict):
+        raw = raw.get('externalSquads', raw.get('items', []))
+    if isinstance(raw, list):
+        for s in raw:
+            if isinstance(s, dict) and 'uuid' in s:
+                u = str(s['uuid']).lower()
+                n = str(s.get('name', '')).strip()
+                print(f'{u}|{n}')
+except Exception:
+    pass
+" "$json_res" 2>/dev/null || true
+        fi
+    fi
+}
+
 detect_or_ask_language() {
     for arg in "$@"; do
         if [ "$arg" = "--lang=en" ] || [ "$arg" = "--en" ]; then
@@ -676,19 +738,51 @@ configure_remnawave() {
     echo -e "${YELLOW}${BOLD}[!] ВНИМАНИЕ:${NC} ${YELLOW}В панели Remnawave используйте вкладку ${GREEN}${BOLD}«Внешние сквады»${NC}${YELLOW} (External Squads)!${NC}"
     echo -e "${YELLOW}    Не используйте «Внутренние сквады» — они не поддерживают маршрутизацию подписок Happ.${NC}"
 
+    echo -e "${BLUE}[*] Загрузка списка внешних сквадов из Remnawave...${NC}"
+    local ext_squads_raw
+    ext_squads_raw=$(fetch_remnawave_external_squads "$input_base" "$input_token")
+    if [ -n "$ext_squads_raw" ]; then
+        echo -e "${GREEN}[+] В Remnawave обнаружены следующие внешние сквады:${NC}"
+        while IFS='|' read -r su sn; do
+            [ -z "$su" ] && continue
+            echo -e "      • ${BOLD}${sn:-Без имени}${NC} (${DIM}${su}${NC})"
+        done <<< "$ext_squads_raw"
+    fi
+
     local squads_env=""
     for ((i=1; i<=count_squads; i++)); do
         local prev_sq_uuid=""
+        local prev_sq_name=""
         local prev_sq_rule=""
         if [ -f "$env_file" ]; then
             prev_sq_uuid=$(grep "^REMNAWAVE_SQUAD_${i}_UUID=" "$env_file" | cut -d'=' -f2- || true)
+            prev_sq_name=$(grep "^REMNAWAVE_SQUAD_${i}_NAME=" "$env_file" | cut -d'=' -f2- || true)
             prev_sq_rule=$(grep "^REMNAWAVE_SQUAD_${i}_RULE=" "$env_file" | cut -d'=' -f2- || true)
         fi
-        echo -e "\n${CYAN}── Сквад #$i ──${NC}"
+        if [ -z "$prev_sq_name" ] && [ -n "$prev_sq_uuid" ] && [ -n "$ext_squads_raw" ]; then
+            prev_sq_name=$(echo "$ext_squads_raw" | grep -i "^${prev_sq_uuid}|" | cut -d'|' -f2- || true)
+        fi
+
+        local header_title=""
+        [ -n "$prev_sq_name" ] && header_title=": ${BOLD}${prev_sq_name}${NC}${CYAN}"
+        echo -e "\n${CYAN}── Сквад #$i${header_title} ──${NC}"
         local sq_hint="панель Remnawave → Сквады → Внешние сквады"
-        [ -n "$prev_sq_uuid" ] && sq_hint="$prev_sq_uuid"
+        if [ -n "$prev_sq_uuid" ]; then
+            if [ -n "$prev_sq_name" ]; then
+                sq_hint="${prev_sq_name} (${prev_sq_uuid})"
+            else
+                sq_hint="$prev_sq_uuid"
+            fi
+        fi
         read -r -p "  ▸ UUID внешнего сквада [${sq_hint}]: " sq_uuid
         sq_uuid="${sq_uuid:-$prev_sq_uuid}"
+
+        local sq_name="$prev_sq_name"
+        if [ -n "$ext_squads_raw" ]; then
+            local matched_name
+            matched_name=$(echo "$ext_squads_raw" | grep -i "^${sq_uuid}|" | cut -d'|' -f2- || true)
+            [ -n "$matched_name" ] && sq_name="$matched_name"
+        fi
 
         local def_rule_idx=0
         case "${prev_sq_rule:-JSONSUB.JSON}" in
@@ -718,9 +812,12 @@ configure_remnawave() {
                 ;;
             *) sq_rule="${prev_sq_rule:-JSONSUB.JSON}" ;;
         esac
-        echo -e "  ${GREEN}[+] Сквад #$i: ${sq_uuid} → ${sq_rule}${NC}"
+        local s_display_label="${sq_uuid}"
+        [ -n "$sq_name" ] && s_display_label="'${sq_name}' (${sq_uuid})"
+        echo -e "  ${GREEN}[+] Сквад #$i: ${s_display_label} → ${sq_rule}${NC}"
 
         squads_env="${squads_env}REMNAWAVE_SQUAD_${i}_UUID=${sq_uuid}
+REMNAWAVE_SQUAD_${i}_NAME=${sq_name}
 REMNAWAVE_SQUAD_${i}_RULE=${sq_rule}
 "
     done
@@ -1384,18 +1481,50 @@ REMNAWAVE_TOKEN=${r_token}
             echo -e "${YELLOW}${BOLD}[!] ВНИМАНИЕ:${NC} ${YELLOW}В панели Remnawave используйте вкладку ${GREEN}${BOLD}«Внешние сквады»${NC}${YELLOW} (External Squads)!${NC}"
             echo -e "${YELLOW}    Не используйте «Внутренние сквады» — они не поддерживают маршрутизацию подписок Happ.${NC}"
 
+            echo -e "${BLUE}[*] Загрузка списка внешних сквадов из Remnawave...${NC}"
+            local ext_squads_raw
+            ext_squads_raw=$(fetch_remnawave_external_squads "$r_base" "$r_token")
+            if [ -n "$ext_squads_raw" ]; then
+                echo -e "${GREEN}[+] В Remnawave обнаружены следующие внешние сквады:${NC}"
+                while IFS='|' read -r su sn; do
+                    [ -z "$su" ] && continue
+                    echo -e "      • ${BOLD}${sn:-Без имени}${NC} (${DIM}${su}${NC})"
+                done <<< "$ext_squads_raw"
+            fi
+
             for ((i=1; i<=r_count; i++)); do
                 local prev_s_uuid=""
+                local prev_s_name=""
                 local prev_s_rule=""
                 if [ -n "$scan_env" ] && [ -f "$scan_env" ]; then
                     prev_s_uuid=$(grep "^REMNAWAVE_SQUAD_${i}_UUID=" "$scan_env" | cut -d'=' -f2- || true)
+                    prev_s_name=$(grep "^REMNAWAVE_SQUAD_${i}_NAME=" "$scan_env" | cut -d'=' -f2- || true)
                     prev_s_rule=$(grep "^REMNAWAVE_SQUAD_${i}_RULE=" "$scan_env" | cut -d'=' -f2- || true)
                 fi
-                echo -e "\n${CYAN}── Сквад #$i ──${NC}"
+                if [ -z "$prev_s_name" ] && [ -n "$prev_s_uuid" ] && [ -n "$ext_squads_raw" ]; then
+                    prev_s_name=$(echo "$ext_squads_raw" | grep -i "^${prev_s_uuid}|" | cut -d'|' -f2- || true)
+                fi
+
+                local s_header_title=""
+                [ -n "$prev_s_name" ] && s_header_title=": ${BOLD}${prev_s_name}${NC}${CYAN}"
+                echo -e "\n${CYAN}── Сквад #$i${s_header_title} ──${NC}"
                 local s_hint="панель Remnawave → Сквады → Внешние сквады"
-                [ -n "$prev_s_uuid" ] && s_hint="$prev_s_uuid"
+                if [ -n "$prev_s_uuid" ]; then
+                    if [ -n "$prev_s_name" ]; then
+                        s_hint="${prev_s_name} (${prev_s_uuid})"
+                    else
+                        s_hint="$prev_s_uuid"
+                    fi
+                fi
                 read -r -p "  ▸ UUID внешнего сквада [${s_hint}]: " s_uuid
                 s_uuid="${s_uuid:-$prev_s_uuid}"
+
+                local s_name="$prev_s_name"
+                if [ -n "$ext_squads_raw" ]; then
+                    local matched_name
+                    matched_name=$(echo "$ext_squads_raw" | grep -i "^${s_uuid}|" | cut -d'|' -f2- || true)
+                    [ -n "$matched_name" ] && s_name="$matched_name"
+                fi
 
                 local def_rule_idx=0
                 case "${prev_s_rule:-JSONSUB.JSON}" in
@@ -1425,9 +1554,12 @@ REMNAWAVE_TOKEN=${r_token}
                         ;;
                     *) s_rule="JSONSUB.JSON" ;;
                 esac
-                echo -e "  ${GREEN}[+] Сквад #$i: ${s_uuid} → ${s_rule}${NC}"
+                local s_display_label="${s_uuid}"
+                [ -n "$s_name" ] && s_display_label="'${s_name}' (${s_uuid})"
+                echo -e "  ${GREEN}[+] Сквад #$i: ${s_display_label} → ${s_rule}${NC}"
 
                 REMNA_BLOCK="${REMNA_BLOCK}REMNAWAVE_SQUAD_${i}_UUID=${s_uuid}
+REMNAWAVE_SQUAD_${i}_NAME=${s_name}
 REMNAWAVE_SQUAD_${i}_RULE=${s_rule}
 "
             done

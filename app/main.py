@@ -83,8 +83,16 @@ def print_summary_banner(token: str):
             happ_lines.append("  - Прямая интеграция с Remnawave API: АКТИВНА (автопатч сквадов без сторонних сервисов)")
             try:
                 squads = RemnawaveSync.load_squad_configs()
+                if not any(RemnawaveSync.cached_squad_names.get(sq.get('uuid')) for sq in squads):
+                    RemnawaveSync.fetch_all_squad_names()
                 for sq in squads:
-                    happ_lines.append(f"      Сквад {sq.get('uuid')} -> {sq.get('rule')}")
+                    u = sq.get('uuid', '')
+                    rule = sq.get('rule', '')
+                    s_name = sq.get('name') or RemnawaveSync.get_squad_name(u)
+                    if s_name:
+                        happ_lines.append(f"      Сквад '{s_name}' ({u}) -> {rule}")
+                    else:
+                        happ_lines.append(f"      Сквад {u} -> {rule}")
             except Exception:
                 pass
         elif happ_deeplink:
