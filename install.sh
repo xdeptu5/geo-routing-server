@@ -164,7 +164,14 @@ tui_select() {
         for v in "${!visual_items[@]}"; do
             if [ "${is_header[v]}" -eq 1 ]; then
                 local title="${visual_items[v]#HEADER:}"
-                printf "  \033[1;34m── %s ──────────────────────────────────────────\033[0m\n" "$title" >&2
+                local title_len=${#title}
+                local right_dashes_count=$(( 52 - title_len ))
+                [ "$right_dashes_count" -lt 3 ] && right_dashes_count=3
+                local right_dashes=""
+                for ((d=0; d<right_dashes_count; d++)); do
+                    right_dashes="${right_dashes}─"
+                done
+                printf "  \033[1;34m── %s %s\033[0m\n" "$title" "$right_dashes" >&2
             else
                 local num="${action_num[v]}"
                 local act_idx="${visual_to_action[v]}"
