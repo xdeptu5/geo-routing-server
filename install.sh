@@ -115,7 +115,7 @@ tui_select() {
         echo -e "$prompt_title" >&2
         for i in "${!options[@]}"; do
             if [ "$i" -eq "$selected" ]; then
-                printf "  \033[1;36m▸\033[0m \033[1;37;44m %s \033[0m\n" "${options[i]}" >&2
+                printf "  \033[1;36m▸ \033[1;36m%s\033[0m\n" "${options[i]}" >&2
             else
                 printf "    \033[0;37m%s\033[0m\n" "${options[i]}" >&2
             fi
