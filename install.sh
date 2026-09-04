@@ -849,15 +849,12 @@ install_wizard() {
     existing_detected="$(detect_existing_dir)"
     local current_suggested_dir="${existing_detected:-/opt/geo-routing-server}"
 
-    # ────────────────────────────────────────────────────────────────────────
-    # ШАГ 1: Каталог установки
-    # ────────────────────────────────────────────────────────────────────────
     echo -e "${BOLD}--- [Шаг 1] Каталог установки ---${NC}"
     if [ -n "$existing_detected" ]; then
-        echo -e "${YELLOW}[i] Обнаружена существующая установка: ${BOLD}$existing_detected${NC}"
+        echo -e "${YELLOW}[i] Найдена существующая установка: ${BOLD}$existing_detected${NC}"
     fi
-    
-    read -r -p "Каталог [${current_suggested_dir}]: " input_dir
+    echo -e "${DIM}Папка, куда будут сохранены файлы compose.yaml и .env${NC}"
+    read -r -p "Укажите свой путь или нажмите Enter по умолчанию [${current_suggested_dir}]: " input_dir
     input_dir="$(echo "$input_dir" | tr -d '\r' | sed 's/[^a-zA-Z0-9_\/\.-]//g')"
     INSTALL_DIR="${input_dir:-$current_suggested_dir}"
     INSTALL_DIR="$(echo "$INSTALL_DIR" | tr -d '\r' | sed 's/[^a-zA-Z0-9_\/\.-]//g')"
