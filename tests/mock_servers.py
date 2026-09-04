@@ -94,10 +94,15 @@ class RemnawaveHandler(BaseHTTPRequestHandler):
             self._send_json(200, {"response": data})
             return
 
-        # /api/external-squads/<uuid>
+        # /api/external-squads или /api/external-squads/<uuid>
         parts = self.path.rstrip("/").split("/")
         if "external-squads" in parts:
-            uuid = parts[-1]
+            idx = parts.index("external-squads")
+            if idx == len(parts) - 1:
+                # Список всех внешних сквадов
+                self._send_json(200, {"response": list(self.__class__.squad_data.values())})
+                return
+            uuid = parts[idx + 1]
             data = self.__class__.squad_data.get(uuid, {
                 "uuid": uuid,
                 "responseHeadersAdd": {},

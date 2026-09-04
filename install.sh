@@ -673,6 +673,8 @@ configure_remnawave() {
     count_squads="${count_squads:-$default_squads}"
 
     echo -e "\n${CYAN}${BOLD}[i] Источник правил:${NC} ${CYAN}https://github.com/hydraponique/roscomvpn-routing${NC}"
+    echo -e "${YELLOW}${BOLD}[!] ВНИМАНИЕ:${NC} ${YELLOW}В панели Remnawave используйте вкладку ${GREEN}${BOLD}«Внешние сквады»${NC}${YELLOW} (External Squads)!${NC}"
+    echo -e "${YELLOW}    Не используйте «Внутренние сквады» — они не поддерживают маршрутизацию подписок Happ.${NC}"
 
     local squads_env=""
     for ((i=1; i<=count_squads; i++)); do
@@ -683,9 +685,9 @@ configure_remnawave() {
             prev_sq_rule=$(grep "^REMNAWAVE_SQUAD_${i}_RULE=" "$env_file" | cut -d'=' -f2- || true)
         fi
         echo -e "\n${CYAN}── Сквад #$i ──${NC}"
-        local sq_hint="из панели Remnawave → Сквады"
+        local sq_hint="панель Remnawave → Сквады → Внешние сквады"
         [ -n "$prev_sq_uuid" ] && sq_hint="$prev_sq_uuid"
-        read -r -p "  UUID сквада [${sq_hint}]: " sq_uuid
+        read -r -p "  ▸ UUID внешнего сквада [${sq_hint}]: " sq_uuid
         sq_uuid="${sq_uuid:-$prev_sq_uuid}"
 
         local def_rule_idx=0
@@ -1343,6 +1345,8 @@ install_wizard() {
 REMNAWAVE_TOKEN=${r_token}
 "
             echo -e "\n${CYAN}${BOLD}[i] Источник правил:${NC} ${CYAN}https://github.com/hydraponique/roscomvpn-routing${NC}"
+            echo -e "${YELLOW}${BOLD}[!] ВНИМАНИЕ:${NC} ${YELLOW}В панели Remnawave используйте вкладку ${GREEN}${BOLD}«Внешние сквады»${NC}${YELLOW} (External Squads)!${NC}"
+            echo -e "${YELLOW}    Не используйте «Внутренние сквады» — они не поддерживают маршрутизацию подписок Happ.${NC}"
 
             for ((i=1; i<=r_count; i++)); do
                 local prev_s_uuid=""
@@ -1352,9 +1356,9 @@ REMNAWAVE_TOKEN=${r_token}
                     prev_s_rule=$(grep "^REMNAWAVE_SQUAD_${i}_RULE=" "$scan_env" | cut -d'=' -f2- || true)
                 fi
                 echo -e "\n${CYAN}── Сквад #$i ──${NC}"
-                local s_hint="из панели Remnawave → Сквады"
+                local s_hint="панель Remnawave → Сквады → Внешние сквады"
                 [ -n "$prev_s_uuid" ] && s_hint="$prev_s_uuid"
-                read -r -p "  UUID сквада [${s_hint}]: " s_uuid
+                read -r -p "  ▸ UUID внешнего сквада [${s_hint}]: " s_uuid
                 s_uuid="${s_uuid:-$prev_s_uuid}"
 
                 local def_rule_idx=0

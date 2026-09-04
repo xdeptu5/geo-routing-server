@@ -67,6 +67,13 @@ class RemnawaveSync:
         except urllib.error.HTTPError as e:
             err_body = e.read().decode("utf-8", errors="ignore")
             logger.error(f"[Remnawave API] HTTP {e.code} on {method} {url}: {err_body}")
+            if "A188" in err_body or "Get external squad by UUID error" in err_body:
+                uuid_hint = url.rstrip("/").split("/")[-1]
+                logger.error(
+                    f"[Remnawave] Ошибка Remnawave A188: Сквад '{uuid_hint}' не найден во ВНЕШНИХ сквадах!\n"
+                    f"   -> Убедитесь, что в панели Remnawave вы используете раздел: Сквады -> ВНЕШНИЕ сквады (External Squads).\n"
+                    f"   -> Не используйте 'Внутренние сквады' (Internal Squads) — правила Happ работают только для внешних сквадов."
+                )
             return None
         except Exception as e:
             logger.error(f"[Remnawave API] Connection error on {method} {url}: {e}")
@@ -176,41 +183,78 @@ class RemnawaveSync:
                 logger.warning(f"[Remnawave] Deeplink for global rule {rule_file} not found in {happ_dir}")
 
         # 2. Синхронизация сквадов (External Squads)
-        for squad in squads:
-            squad_uuid = squad["uuid"]
-            rule_name = squad["rule"]
-            deeplink = cls._read_deeplink_content(happ_dir, rule_name)
-            
-            if not deeplink:
-                logger.warning(f"[Remnawave] Deeplink for rule {rule_name} (Squad {squad_uuid}) not found in {happ_dir}")
-                continue
+        if squads:
+            # Опрашиваем список всех существующих внешних сквадов для валидации и ускорения
+            known_squads: Dict[str, Dict[str, Any]] = {}
+            ext_squads_url = f"{base_api_url}/external-squads"
+            all_ext_res = cls._api_request("GET", ext_squads_url)
+            if all_ext_res:
+                raw_squads = all_ext_res.get("response", all_ext_res.get("data", []))
+                if isinstance(raw_squads, dict):
+                    raw_squads = raw_squads.get("externalSquads", raw_squads.get("items", []))
+                if isinstance(raw_squads, list):
+                    for s in raw_squads:
+                        if isinstance(s, dict) and "uuid" in s:
+                            known_squads[str(s["uuid"]).lower()] = s
+                    
+                    logger.info(f"[Remnawave] Найдено внешних сквадов в панели: {len(known_squads)}")
+                    if known_squads:
+                        names_preview = ", ".join([f"'{s.get('name', 'Без имени')}' ({u})" for u, s in known_squads.items()])
+                        logger.info(f"[Remnawave] Доступные внешние сквады: {names_preview}")
+                    else:
+                        logger.warning(
+                            "[Remnawave] В панели Remnawave список внешних сквадов пуст! "
+                            "Создайте сквад в меню: Сквады -> Внешние сквады (External Squads)."
+                        )
+
+            for squad in squads:
+                squad_uuid = squad["uuid"]
+                rule_name = squad["rule"]
+                deeplink = cls._read_deeplink_content(happ_dir, rule_name)
                 
-            squad_url = f"{base_api_url}/external-squads/{squad_uuid}"
-            squad_res = cls._api_request("GET", squad_url)
-            if not squad_res:
-                success = False
-                continue
-                
-            squad_data = squad_res.get("response", squad_res)
-            headers_add = squad_data.get("responseHeadersAdd", {}) or {}
-            headers_remove = squad_data.get("responseHeadersRemove", []) or []
-            
-            current_routing = headers_add.get(cls.ROUTING_HEADER, "")
-            if current_routing != deeplink:
-                headers_add[cls.ROUTING_HEADER] = deeplink
-                filtered_remove = [h for h in headers_remove if h.lower() != cls.ROUTING_HEADER]
-                
-                patch_payload = {
-                    "uuid": squad_uuid,
-                    "responseHeadersAdd": headers_add,
-                    "responseHeadersRemove": filtered_remove
-                }
-                patch_url = f"{base_api_url}/external-squads"
-                if cls._api_request("PATCH", patch_url, patch_payload):
-                    logger.info(f"[Remnawave] Successfully updated Squad '{squad_uuid}' with rule '{rule_name}'!")
-                else:
+                if not deeplink:
+                    logger.warning(f"[Remnawave] Deeplink for rule {rule_name} (Squad {squad_uuid}) not found in {happ_dir}")
+                    continue
+
+                if known_squads and squad_uuid not in known_squads:
+                    logger.error(
+                        f"[Remnawave] Сквад '{squad_uuid}' не найден во вкладке 'ВНЕШНИЕ сквады' (External Squads) Remnawave!\n"
+                        f"   -> Проверьте: в панели Remnawave должен быть создан сквад в меню 'Внешние сквады' (не 'Внутренние').\n"
+                        f"   -> Доступные внешние сквады в панели: {list(known_squads.keys())}"
+                    )
                     success = False
-            else:
-                logger.info(f"[Remnawave] Squad '{squad_uuid}' routing is already up to date.")
+                    continue
+
+                squad_data = None
+                if known_squads and squad_uuid in known_squads and "responseHeadersAdd" in known_squads[squad_uuid]:
+                    squad_data = known_squads[squad_uuid]
+                else:
+                    squad_url = f"{base_api_url}/external-squads/{squad_uuid}"
+                    squad_res = cls._api_request("GET", squad_url)
+                    if not squad_res:
+                        success = False
+                        continue
+                    squad_data = squad_res.get("response", squad_res)
+
+                headers_add = squad_data.get("responseHeadersAdd", {}) or {}
+                headers_remove = squad_data.get("responseHeadersRemove", []) or []
+                
+                current_routing = headers_add.get(cls.ROUTING_HEADER, "")
+                if current_routing != deeplink:
+                    headers_add[cls.ROUTING_HEADER] = deeplink
+                    filtered_remove = [h for h in headers_remove if str(h).lower() != cls.ROUTING_HEADER]
+                    
+                    patch_payload = {
+                        "uuid": squad_uuid,
+                        "responseHeadersAdd": headers_add,
+                        "responseHeadersRemove": filtered_remove
+                    }
+                    patch_url = f"{base_api_url}/external-squads"
+                    if cls._api_request("PATCH", patch_url, patch_payload):
+                        logger.info(f"[Remnawave] Successfully updated Squad '{squad_uuid}' with rule '{rule_name}'!")
+                    else:
+                        success = False
+                else:
+                    logger.info(f"[Remnawave] Squad '{squad_uuid}' routing is already up to date.")
 
         return success

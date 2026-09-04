@@ -285,6 +285,67 @@ class TestRemnawaveSquads(unittest.TestCase):
         # (это корректное поведение: нет файла = мы просто пропускаем)
         self.assertIsInstance(result, bool)
 
+    # ------------------------------------------------------------------
+    # Тест 11: Несуществующий сквад валидируется по списку внешних сквадов
+    # ------------------------------------------------------------------
+    def test_unknown_squad_not_in_external_squads_list(self):
+        """Если сквад отсутствует во внешних сквадах — sync() возвращает False с понятным логом."""
+        RemnawaveHandler.require_cf_headers = False
+        RemnawaveHandler.force_status = None
+        RemnawaveHandler.received_requests = []
+        # В панели есть только external-uuid-real
+        RemnawaveHandler.squad_data = {"external-uuid-real": {
+            "uuid": "external-uuid-real",
+            "name": "External VIP",
+            "responseHeadersAdd": {},
+            "responseHeadersRemove": []
+        }}
+        server, _, base_url = start_server(RemnawaveHandler)
+
+        os.environ["REMNAWAVE_BASE_URL"] = f"{base_url}/api"
+        os.environ["REMNAWAVE_TOKEN"] = "token"
+        # Пользователь ошибочно указал UUID внутреннего сквада
+        os.environ["REMNAWAVE_SQUAD_1_UUID"] = "internal-squad-uuid"
+        os.environ["REMNAWAVE_SQUAD_1_RULE"] = "JSONSUB.JSON"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            happ_dir = Path(tmpdir) / "tok" / "HAPP"
+            happ_dir.mkdir(parents=True)
+            (happ_dir / "JSONSUB.DEEPLINK").write_text("happ://routing/onadd/xyz", encoding="utf-8")
+
+            with patch("app.config.Config.STORAGE_DIR", Path(tmpdir)):
+                from app.remnawave import RemnawaveSync
+                result = RemnawaveSync.sync("tok")
+
+        server.shutdown()
+        # Так как сквада нет в списке внешних, sync возвращает False и не отправляет PATCH
+        self.assertFalse(result)
+
+    # ------------------------------------------------------------------
+    # Тест 12: Перехват ошибки Remnawave A188 при HTTP 500
+    # ------------------------------------------------------------------
+    def test_a188_error_handled_gracefully(self):
+        """Когда Remnawave отдаёт HTTP 500 c errorCode A188, _api_request перехватывает её без исключений."""
+        class A188Handler(RemnawaveHandler):
+            def do_GET(self):
+                self._send_json(500, {
+                    "statusCode": 500,
+                    "timestamp": "2026-09-04T23:00:18.577Z",
+                    "path": "/api/external-squads/invalid-uuid",
+                    "message": "Get external squad by UUID error",
+                    "errorCode": "A188"
+                })
+
+        server, _, base_url = start_server(A188Handler)
+        os.environ["REMNAWAVE_BASE_URL"] = f"{base_url}/api"
+        os.environ["REMNAWAVE_TOKEN"] = "token"
+
+        from app.remnawave import RemnawaveSync
+        res = RemnawaveSync._api_request("GET", f"{base_url}/api/external-squads/invalid-uuid")
+
+        server.shutdown()
+        self.assertIsNone(res)
+
 
 class TestRemnawaveIsConfigured(unittest.TestCase):
     """is_configured() корректно реагирует на наличие/отсутствие переменных."""
