@@ -6,7 +6,10 @@
 
 set -euo pipefail
 
-# Цвета для терминала
+# Если запуск через пайп (curl ... | bash), перенаправляем ввод с терминала
+if [ ! -t 0 ] && ( : < /dev/tty ) 2>/dev/null; then
+    exec < /dev/tty
+fi
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -1654,6 +1657,6 @@ main() {
     fi
 }
 
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+if [ -z "${BASH_SOURCE[0]:-}" ] || [ "${BASH_SOURCE[0]:-}" = "$0" ]; then
     main "$@"
 fi
