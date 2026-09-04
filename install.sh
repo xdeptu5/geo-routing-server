@@ -35,8 +35,8 @@ handle_error() {
         echo -e "${RED}[!] An error occurred during execution (exit code $code, line $line).${NC}"
         echo -e "${YELLOW}What would you like to do?${NC}"
         echo "  1) Open management menu (geoserver)"
-        echo "  2) Start installation again from scratch (clean files)"
-        echo "  3) Completely uninstall project from server"
+        echo "  2) Start setup again from scratch"
+        echo "  3) Completely remove geo-routing-server"
         echo "  4) Exit to shell"
         read -r -p "Select option [1-4, Enter = 1]: " err_choice
     else
@@ -44,7 +44,7 @@ handle_error() {
         echo -e "${YELLOW}Что вы хотите сделать?${NC}"
         echo "  1) Открыть главное меню управления (geoserver)"
         echo "  2) Начать настройку заново (с чистого листа)"
-        echo "  3) Полностью удалить проект с сервера"
+        echo "  3) Полностью удалить geo-routing-server"
         echo "  4) Выйти в терминал"
         read -r -p "Выберите вариант [1-4, Enter = 1]: " err_choice
     fi
@@ -948,7 +948,7 @@ update_script_only() {
 update_project() {
     local target_dir
     target_dir="$(get_install_dir)"
-    echo -e "${BLUE}[*] Обновление Docker-образа сервера до последней версии...${NC}"
+    echo -e "${BLUE}[*] Загрузка и обновление Docker-образа...${NC}"
     
     # Также обновляем сам скрипт с проверкой целостности
     if curl -fsSL "https://raw.githubusercontent.com/xdeptu5/geo-routing-server/main/install.sh" -o "$target_dir/install.sh.new" 2>/dev/null; then
@@ -1124,14 +1124,14 @@ EOF
 uninstall_project() {
     local target_dir
     target_dir="$(get_install_dir)"
-    echo -e "${RED}${BOLD}[!] ВНИМАНИЕ: Удаление Geo Routing Server${NC}"
+    echo -e "${RED}${BOLD}[!] ВНИМАНИЕ: Удаление geo-routing-server${NC}"
     if [ -n "$target_dir" ]; then
-        echo -e "${DIM}Будут удалены: контейнер, тома данных, каталог $target_dir и команда geo-server.${NC}\n"
+        echo -e "${DIM}Будут удалены: контейнер, тома данных, каталог $target_dir и команда geoserver.${NC}\n"
     fi
     local conf_idx
-    conf_idx=$(tui_select "Вы действительно хотите полностью удалить проект?" 0 \
+    conf_idx=$(tui_select "Вы действительно хотите удалить geo-routing-server?" 0 \
         "Отмена (вернуться в главное меню)" \
-        "Да, полностью удалить всё с сервера")
+        "Да, удалить контейнер и все файлы")
 
     if [ "$conf_idx" -eq 1 ]; then
         echo -e "${YELLOW}[*] Остановка и удаление контейнеров...${NC}"
@@ -1141,11 +1141,11 @@ uninstall_project() {
         # Принудительное удаление контейнера на случай, если compose.yaml был поврежден
         docker rm -f geo-routing-server 2>/dev/null || true
 
-        # Безопасное удаление каталога проекта с защитой системных папок
+        # Безопасное удаление каталога установки с защитой системных папок
         if [ -n "$target_dir" ] && [ -d "$target_dir" ]; then
             case "$target_dir" in
                 /|/root|/home|/opt|/var|/usr|/etc|/bin|/sbin|/tmp)
-                    echo -e "${YELLOW}[!] Каталог $target_dir является системным. Удаляются только файлы проекта...${NC}"
+                    echo -e "${YELLOW}[!] Каталог $target_dir является системным. Удаляются только файлы geo-routing-server...${NC}"
                     rm -f "$target_dir/compose.yaml" "$target_dir/docker-compose.yml" "$target_dir/.env" "$target_dir/.env.backup" "$target_dir/.sync.lock" 2>/dev/null || true
                     rm -rf "$target_dir/custom_geo" 2>/dev/null || true
                     ;;
@@ -1155,7 +1155,7 @@ uninstall_project() {
                     elif [ -f "$target_dir/.env" ] && grep -q "ROUTING_TOKEN" "$target_dir/.env" 2>/dev/null; then
                         rm -rf "$target_dir"
                     else
-                        echo -e "${YELLOW}[!] В каталоге $target_dir не обнаружен маркер проекта. Удаляются только файлы проекта...${NC}"
+                        echo -e "${YELLOW}[!] В каталоге $target_dir не обнаружен маркер geo-routing-server. Удаляются только файлы конфигурации...${NC}"
                         rm -f "$target_dir/compose.yaml" "$target_dir/docker-compose.yml" "$target_dir/.env" "$target_dir/.env.backup" 2>/dev/null || true
                     fi
                     ;;
@@ -1164,7 +1164,7 @@ uninstall_project() {
 
         rm -f "$CONFIG_FILE_RECORD" "$LANG_RECORD"
         rm -f /usr/local/bin/geo-server /usr/bin/geo-server /usr/local/bin/geoserver /usr/bin/geoserver
-        echo -e "${GREEN}[+] Проект полностью удалён с сервера.${NC}"
+        echo -e "${GREEN}[+] geo-routing-server успешно удалён.${NC}"
         exit 0
     else
         echo -e "\n${GREEN}[+] Удаление отменено. Возврат в меню...${NC}"
@@ -1186,7 +1186,7 @@ install_wizard() {
     existing_detected="$(detect_existing_dir)"
     local current_suggested_dir="${existing_detected:-/opt/geo-routing-server}"
 
-    ui_step "1/8" "Каталог установки проекта"
+    ui_step "1/8" "Каталог установки"
     if [ -n "$existing_detected" ]; then
         echo -e "  ${YELLOW}[i] Обнаружена существующая установка: ${BOLD}$existing_detected${NC}"
     fi
@@ -1958,7 +1958,7 @@ EOF
     echo -e "\n\033[1;32m╭─────────────────────────────────────────────────────────────────────────────╮\033[0m"
     echo -e "\033[1;32m│                     ✓ НАСТРОЙКА УСПЕШНО ЗАВЕРШЕНА!                          │\033[0m"
     echo -e "\033[1;32m╰─────────────────────────────────────────────────────────────────────────────╯\033[0m"
-    echo -e "  Каталог проекта:               ${CYAN}${BOLD}${INSTALL_DIR}${NC}"
+    echo -e "  Каталог установки:             ${CYAN}${BOLD}${INSTALL_DIR}${NC}"
     echo -e "  Команда управления из консоли: ${CYAN}${BOLD}geoserver${NC} (или ${CYAN}${BOLD}geo-server${NC})\n"
     
     if [ "$NEEDS_PUBLIC_DOMAIN" = true ]; then
@@ -2066,14 +2066,14 @@ main_menu() {
         fi
 
         if [ "${UI_LANG:-ru}" = "en" ]; then
-            echo -e "Project directory: ${CYAN}$target_dir${NC}"
-            echo -e "Container status:  $status_msg"
-            echo -e "Active modules:    ${GREEN}$modules_en${NC}"
+            echo -e "Installation directory: ${CYAN}$target_dir${NC}"
+            echo -e "Container status:       $status_msg"
+            echo -e "Active modules:         ${GREEN}$modules_en${NC}"
             if [ "$is_local" -eq 0 ] && [ -n "$domain_val" ] && [ "$domain_val" != "geo.example.com" ]; then
-                echo -e "Public domain:     ${CYAN}$domain_val${NC}"
+                echo -e "Public domain:          ${CYAN}$domain_val${NC}"
             fi
             if [ -n "$integrations_en" ]; then
-                echo -e "Integrations:      ${YELLOW}$integrations_en${NC}"
+                echo -e "Integrations:           ${YELLOW}$integrations_en${NC}"
             fi
             echo ""
 
@@ -2085,30 +2085,30 @@ main_menu() {
                 "HEADER:Settings & Integrations"
                 "Configure Remnawave API sync"
                 "Configure Telegram notifications"
-                "Reconfigure server (run wizard)"
-                "HEADER:Server Management"
+                "Reconfigure parameters (run wizard)"
+                "HEADER:Container Management"
                 "View container logs"
-                "Restart server"
-                "Stop server"
-                "Update Docker image (pull & restart)"
+                "Restart container"
+                "Stop container"
+                "Update Docker image (pull & recreate)"
                 "Update management script from GitHub"
                 "HEADER:System"
                 "Change language / Сменить язык (RU/EN)"
-                "Uninstall project from server"
+                "Completely remove geo-routing-server"
                 "Exit"
             )
 
             local menu_idx
             menu_idx=$(tui_select "Choose an action:" 0 "${en_options[@]}")
         else
-            echo -e "Каталог проекта:  ${CYAN}$target_dir${NC}"
-            echo -e "Статус сервера:   $status_msg"
-            echo -e "Активные модули:  ${GREEN}$modules_ru${NC}"
+            echo -e "Каталог установки: ${CYAN}$target_dir${NC}"
+            echo -e "Статус контейнера: $status_msg"
+            echo -e "Активные модули:   ${GREEN}$modules_ru${NC}"
             if [ "$is_local" -eq 0 ] && [ -n "$domain_val" ] && [ "$domain_val" != "geo.example.com" ]; then
-                echo -e "Публичный домен:  ${CYAN}$domain_val${NC}"
+                echo -e "Публичный домен:   ${CYAN}$domain_val${NC}"
             fi
             if [ -n "$integrations_ru" ]; then
-                echo -e "Интеграции:       ${YELLOW}$integrations_ru${NC}"
+                echo -e "Интеграции:        ${YELLOW}$integrations_ru${NC}"
             fi
             echo ""
 
@@ -2120,16 +2120,16 @@ main_menu() {
                 "HEADER:Настройки и интеграции"
                 "Настроить прямую синхронизацию с Remnawave"
                 "Настроить / Изменить Telegram-уведомления"
-                "Перенастроить сервер (мастер установки)"
-                "HEADER:Управление сервером"
+                "Перенастроить параметры (мастер настройки)"
+                "HEADER:Управление контейнером"
                 "Посмотреть логи контейнера"
-                "Перезапустить сервер"
-                "Остановить сервер"
-                "Обновить Docker-образ сервера"
+                "Перезапустить контейнер"
+                "Остановить контейнер"
+                "Обновить Docker-образ (pull & recreate)"
                 "Обновить скрипт управления из GitHub"
                 "HEADER:Система"
                 "Сменить язык / Change language (RU/EN)"
-                "Удалить проект с сервера"
+                "Полностью удалить geo-routing-server"
                 "Выход"
             )
 
@@ -2218,12 +2218,12 @@ main() {
             init_idx=$(tui_select "${YELLOW}[!] Incomplete installation detected in $target_dir${NC}" 0 \
                 "Resume / reconfigure installation" \
                 "Reset and start fresh (clean all files)" \
-                "Completely uninstall project from server")
+                "Completely remove geo-routing-server")
         else
             init_idx=$(tui_select "${YELLOW}[!] Обнаружена незавершенная установка в $target_dir${NC}" 0 \
                 "Продолжить настройку (сохранить старые данные)" \
                 "Очистить все файлы и начать с чистого листа" \
-                "Полностью удалить проект с сервера")
+                "Полностью удалить geo-routing-server")
         fi
         case "$init_idx" in
             0) 
