@@ -113,6 +113,7 @@ tui_select() {
 
     local num_fmt="%d"
     [ "$count" -ge 10 ] && num_fmt="%2d"
+    local input_buf=""
 
     draw_tui_menu() {
         echo -e "$prompt_title" >&2
@@ -124,10 +125,18 @@ tui_select() {
                 printf "    \033[0;36m${num_fmt})\033[0;37m %s\033[0m\n" "$num" "${options[i]}" >&2
             fi
         done
-        if [ "${UI_LANG:-ru}" = "en" ]; then
-            printf "  \033[2m[↑/↓] Navigate   [Enter] Select   [1-%d] Quick jump\033[0m\n" "$count" >&2
+        if [ -n "$input_buf" ]; then
+            if [ "${UI_LANG:-ru}" = "en" ]; then
+                printf "  \033[1;33m[Input: %s]\033[0m \033[2m[Enter] Confirm   [Backspace] Clear   [↑/↓] Navigate\033[0m\n" "$input_buf" >&2
+            else
+                printf "  \033[1;33m[Введено: %s]\033[0m \033[2m[Enter] Подтвердить   [Backspace] Стереть   [↑/↓] Выбор\033[0m\n" "$input_buf" >&2
+            fi
         else
-            printf "  \033[2m[↑/↓] Выбор   [Enter] Подтвердить   [1-%d] Быстрый ввод\033[0m\n" "$count" >&2
+            if [ "${UI_LANG:-ru}" = "en" ]; then
+                printf "  \033[2m[↑/↓] Navigate   [Enter] Select   [1-%d] Type number\033[0m\n" "$count" >&2
+            else
+                printf "  \033[2m[↑/↓] Выбор   [Enter] Подтвердить   [1-%d] Номер пункта\033[0m\n" "$count" >&2
+            fi
         fi
     }
 
@@ -144,9 +153,11 @@ tui_select() {
 
         case "$key" in
             $'\x1b[A'|$'\x1bOA'|'k'|'K') # Вверх
+                input_buf=""
                 selected=$(( (selected - 1 + count) % count ))
                 ;;
             $'\x1b[B'|$'\x1bOB'|'j'|'J') # Вниз
+                input_buf=""
                 selected=$(( (selected + 1) % count ))
                 ;;
             "") # Enter
@@ -155,20 +166,23 @@ tui_select() {
             " ") # Пробел
                 break
                 ;;
-            [1-9]) # Быстрый выбор по цифре
-                local num_typed="$key"
-                if [ "$count" -ge 10 ] && [ "$key" -le $((count / 10)) ]; then
-                    local next_char=""
-                    if read -rsn1 -t 0.4 next_char < "$tty_in" 2>/dev/null; then
-                        if [[ "$next_char" =~ ^[0-9]$ ]]; then
-                            num_typed="${key}${next_char}"
-                        fi
+            $'\x7f'|$'\x08') # Backspace
+                if [ -n "$input_buf" ]; then
+                    input_buf="${input_buf%?}"
+                    if [ -n "$input_buf" ] && [ "$input_buf" -ge 1 ] && [ "$input_buf" -le "$count" ]; then
+                        selected=$((input_buf - 1))
                     fi
                 fi
-                local num_pick=$((num_typed - 1))
-                if [ "$num_pick" -ge 0 ] && [ "$num_pick" -lt "$count" ]; then
-                    selected=$num_pick
-                    break
+                ;;
+            [0-9]) # Ввод номера пункта (включая многозначные 10, 11, 12...)
+                local candidate="${input_buf}${key}"
+                candidate="$(echo "$candidate" | sed 's/^0*//')"
+                if [ -n "$candidate" ] && [ "$candidate" -ge 1 ] && [ "$candidate" -le "$count" ]; then
+                    input_buf="$candidate"
+                    selected=$((candidate - 1))
+                elif [ "$key" -ge 1 ] && [ "$key" -le "$count" ]; then
+                    input_buf="$key"
+                    selected=$((key - 1))
                 fi
                 ;;
             $'\x03') # Ctrl+C
