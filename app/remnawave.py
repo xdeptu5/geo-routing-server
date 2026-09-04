@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import re
 import urllib.request
 import urllib.error
 from pathlib import Path
@@ -99,8 +100,19 @@ class RemnawaveSync:
     @classmethod
     def _read_deeplink_content(cls, happ_dir: Path, rule_name: str) -> Optional[str]:
         """Читает сгенерированный файл .DEEPLINK для указанного правила."""
-        base_name = rule_name.rsplit(".", 1)[0].upper()
-        deeplink_path = happ_dir / f"{base_name}.DEEPLINK"
+        base_name = Path(rule_name).name.rsplit(".", 1)[0].upper()
+        if not re.match(r"^[A-Za-z0-9_-]+$", base_name):
+            logger.error(f"[Remnawave] Invalid rule name format: {rule_name}")
+            return None
+        deeplink_path = (happ_dir / f"{base_name}.DEEPLINK").resolve()
+        try:
+            if not deeplink_path.is_relative_to(happ_dir.resolve()):
+                logger.error(f"[Remnawave] Path traversal detected in rule: {rule_name}")
+                return None
+        except AttributeError:
+            if not str(deeplink_path).startswith(str(happ_dir.resolve())):
+                logger.error(f"[Remnawave] Path traversal detected in rule: {rule_name}")
+                return None
         if deeplink_path.is_file():
             try:
                 return deeplink_path.read_text(encoding="utf-8").strip()
@@ -147,6 +159,9 @@ class RemnawaveSync:
                             success = False
                     else:
                         logger.info("[Remnawave] Global subscription-settings routing is already up to date.")
+                else:
+                    logger.error("[Remnawave] Failed to fetch subscription-settings from Remnawave API")
+                    success = False
             else:
                 logger.warning(f"[Remnawave] Deeplink for global rule {rule_file} not found in {happ_dir}")
 

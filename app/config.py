@@ -43,12 +43,20 @@ class Config:
             return f"{root}/{client.upper()}"
         return f"{raw}/{client.upper()}"
     
-    GEOIP_SOURCE_URL = os.getenv("GEOIP_SOURCE_URL", "").strip()
-    GEOSITE_SOURCE_URL = os.getenv("GEOSITE_SOURCE_URL", "").strip()
-    ROUTING_SOURCE_REPO = os.getenv(
-        "ROUTING_SOURCE_REPO", 
-        "https://raw.githubusercontent.com/hydraponique/roscomvpn-routing/main"
-    ).strip().rstrip("/")
+    @classmethod
+    def _validate_http_url(cls, url: str) -> str:
+        """Валидирует URL, разрешая только http:// и https:// схемы."""
+        clean = url.strip()
+        if clean and clean.startswith(("http://", "https://")):
+            return clean
+        return ""
+
+    GEOIP_SOURCE_URL = _validate_http_url.__func__(None, os.getenv("GEOIP_SOURCE_URL", ""))
+    GEOSITE_SOURCE_URL = _validate_http_url.__func__(None, os.getenv("GEOSITE_SOURCE_URL", ""))
+    ROUTING_SOURCE_REPO = (
+        _validate_http_url.__func__(None, os.getenv("ROUTING_SOURCE_REPO", ""))
+        or "https://raw.githubusercontent.com/hydraponique/roscomvpn-routing/main"
+    ).rstrip("/")
     
     # Telegram Notifications (опционально)
     TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
@@ -78,9 +86,10 @@ class Config:
             print("ERROR: ROUTING_TOKEN is not configured! Please set a valid secret token in .env or token.txt", file=sys.stderr)
             sys.exit(1)
             
-        # Строгая валидация токена: только безопасные URL-символы
-        if not re.match(r"^[A-Za-z0-9._-]+$", token):
-            print("ERROR: ROUTING_TOKEN contains illegal characters! Allowed: A-Z, a-z, 0-9, '.', '_', '-'", file=sys.stderr)
+        # Строгая валидация токена: только безопасные URL-символы (буквы, цифры, дефис, подчёркивание)
+        # Точки исключены для защиты от path traversal (. и ..) и скрытых файлов
+        if len(token) < 4 or not re.match(r"^[A-Za-z0-9_-]+$", token):
+            print("ERROR: ROUTING_TOKEN must be at least 4 characters and contain only A-Z, a-z, 0-9, '_', '-'", file=sys.stderr)
             sys.exit(1)
             
         return token

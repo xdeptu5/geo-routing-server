@@ -208,6 +208,36 @@ class TestDownloaderCacheIntegrity(unittest.TestCase):
         self.assertTrue(body2.exists())
         self.assertNotEqual(str(body1), str(body2))
 
+    # ------------------------------------------------------------------
+    # Тест 16: Длинный HTML с паддингом отклоняется бинарным валидатором
+    # ------------------------------------------------------------------
+    def test_binary_rejects_padded_html(self):
+        padded_html = b" " * 1000 + b"<html><body>Server Error</body></html>" + b" " * 1000
+        self.assertFalse(self.dl._validate_content(padded_html, "binary"))
+
+    # ------------------------------------------------------------------
+    # Тест 17: Небезопасные схемы URL (file://, ftp://) блокируются
+    # ------------------------------------------------------------------
+    def test_fetch_rejects_unsafe_scheme(self):
+        from app.downloader import DownloadError
+        for unsafe_url in ["file:///etc/passwd", "ftp://evil.com/base", "gopher://bad.com"]:
+            with self.assertRaises(DownloadError):
+                self.dl.fetch(unsafe_url, "unsafe_key", kind="binary")
+
+    # ------------------------------------------------------------------
+    # Тест 18: Stale-if-error — возврат кэша при сбое сети
+    # ------------------------------------------------------------------
+    def test_stale_if_error_fallback(self):
+        # Создаем валидный закэшированный файл
+        valid_cache = b"\x00\x01" * 600
+        cache_file = Path(self.tmp) / "stale_key.body"
+        cache_file.write_bytes(valid_cache)
+
+        # Пытаемся скачать с заведомо мертвого URL на несуществующем порту
+        dead_url = "http://127.0.0.1:59999/nonexistent.dat"
+        result = self.dl.fetch(dead_url, "stale_key", kind="binary")
+        self.assertEqual(result, valid_cache)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

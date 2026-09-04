@@ -1,7 +1,7 @@
-import json
+import hashlib
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import Dict, Optional
 from app.config import Config
 from app.downloader import Downloader, DownloadError
 from app.publisher import Publisher
@@ -14,6 +14,7 @@ class GeoManager:
     def __init__(self, downloader: Downloader, custom_geo_dir: Path):
         self.downloader = downloader
         self.custom_geo_dir = custom_geo_dir
+        self._memory_cache: Dict[str, bytes] = {}
         
     def resolve_and_fetch(self, client: str, geo_type: str, default_json_data: Optional[dict] = None) -> bytes:
         """
@@ -37,8 +38,14 @@ class GeoManager:
         # 2. Кастомный URL из .env
         custom_url = Config.GEOIP_SOURCE_URL if geo_type == "geoip" else Config.GEOSITE_SOURCE_URL
         if custom_url:
+            if custom_url in self._memory_cache:
+                logger.info(f"  Reusing already downloaded {geo_type} for {client}")
+                return self._memory_cache[custom_url]
             logger.info(f"  Downloading {geo_type} for {client} from custom URL: {custom_url}")
-            return self.downloader.fetch(custom_url, f"{client}_{geo_type}_custom", kind="binary")
+            url_hash = hashlib.sha256(custom_url.encode("utf-8")).hexdigest()[:8]
+            data = self.downloader.fetch(custom_url, f"geo_{geo_type}_custom_{url_hash}", kind="binary")
+            self._memory_cache[custom_url] = data
+            return data
 
         # 3. Извлечение URL из DEFAULT.JSON
         url = None
@@ -47,16 +54,26 @@ class GeoManager:
             url = default_json_data.get(key)
 
         if url:
+            if url in self._memory_cache:
+                logger.info(f"  Reusing already downloaded {geo_type} for {client}")
+                return self._memory_cache[url]
             logger.info(f"  Downloading {geo_type} for {client} from repository source: {url}")
             try:
-                return self.downloader.fetch(url, f"{client}_{geo_type}", kind="binary")
+                data = self.downloader.fetch(url, f"global_{geo_type}", kind="binary")
+                self._memory_cache[url] = data
+                return data
             except DownloadError as e:
                 logger.warning(f"  Failed to download from primary source ({e}), trying fallback...")
 
         # 4. Fallback на GitHub Releases
         fallback_url = f"https://github.com/hydraponique/roscomvpn-{geo_type}/releases/latest/download/{geo_type}.dat"
+        if fallback_url in self._memory_cache:
+            logger.info(f"  Reusing fallback {geo_type} for {client}")
+            return self._memory_cache[fallback_url]
         logger.info(f"  Downloading {geo_type} for {client} from fallback: {fallback_url}")
-        return self.downloader.fetch(fallback_url, f"{client}_{geo_type}_fallback", kind="binary")
+        data = self.downloader.fetch(fallback_url, f"global_{geo_type}_fallback", kind="binary")
+        self._memory_cache[fallback_url] = data
+        return data
 
     def sync_client_geo(self, client: str, target_dir: Path, default_json_data: Optional[dict] = None) -> bool:
         """Синхронизирует geoip.dat и geosite.dat с их sha256 для указанного клиента."""

@@ -4,7 +4,6 @@ import json
 import logging
 import os
 import re
-import urllib.request
 from typing import Set
 from app.processors.base import BaseProcessor
 from app.processors.geo import GeoManager
@@ -100,6 +99,10 @@ class HappProcessor(BaseProcessor):
                 try:
                     raw_bytes = self.downloader.fetch(url, f"{client}_{file_key}", kind="json")
                     data = json.loads(raw_bytes.decode("utf-8"))
+                    if not isinstance(data, dict):
+                        logger.error(f"Invalid JSON format for {file_name} (expected object): {type(data)}")
+                        success = False
+                        continue
                     
                     if geoip_url:
                         data["Geoipurl"] = geoip_url
@@ -110,14 +113,16 @@ class HappProcessor(BaseProcessor):
                         content_hash = int(hashlib.md5(raw_bytes).hexdigest()[:8], 16)
                         data["LastUpdated"] = str(content_hash)
                         
+                    # Форматированный JSON для отдачи по HTTP
                     json_content = json.dumps(data, indent=2, ensure_ascii=False)
                     if not Publisher.publish_file(target_dir, file_name, json_content):
                         success = False
                         continue
                     published_files.add(file_name)
                         
-                    # Генерируем DEEPLINK (happ://routing/onadd/<base64>)
-                    b64_payload = base64.b64encode(json_content.encode("utf-8")).decode("ascii")
+                    # Генерируем компактный DEEPLINK (happ://routing/onadd/<base64>) без пробелов (сокращение размера заголовка на 40%)
+                    compact_json = json.dumps(data, separators=(",", ":"), ensure_ascii=False)
+                    b64_payload = base64.b64encode(compact_json.encode("utf-8")).decode("ascii")
                     deeplink_content = f"happ://routing/onadd/{b64_payload}\n"
                     
                     deeplink_filename = f"{file_name.rsplit('.', 1)[0]}.DEEPLINK"

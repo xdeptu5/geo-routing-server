@@ -32,10 +32,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 # Стратегии (наборы генерируемых данных)
 # ---------------------------------------------------------------------------
 
-# Строки содержащие хотя бы один небезопасный символ для токена
+# Строки содержащие хотя бы один небезопасный символ для токена (включая точку для защиты от traversal)
 UNSAFE_TOKEN_CHARS = st.characters(
     whitelist_categories=(),
-    whitelist_characters="!@#$%^&*()+=[]{}|;:,<>?/ \t\n\r\"\\"
+    whitelist_characters="!@#$%^&*()+=[]{}|;:,<>?/ \t\n\r\"\\."
 )
 unsafe_token = st.text(
     alphabet=UNSAFE_TOKEN_CHARS,
@@ -43,9 +43,9 @@ unsafe_token = st.text(
     max_size=30
 )
 
-# Строки только из безопасных символов [A-Za-z0-9._-]
+# Строки только из безопасных символов [A-Za-z0-9_-]
 safe_token = st.text(
-    alphabet="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-",
+    alphabet="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-",
     min_size=4,
     max_size=64
 )

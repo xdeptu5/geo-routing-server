@@ -1,10 +1,12 @@
 FROM alpine:3.21
 
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
 RUN apk add --no-cache \
     python3 \
     nginx \
-    ca-certificates \
-    curl
+    ca-certificates
 
 WORKDIR /app
 
@@ -23,6 +25,6 @@ RUN chmod 755 /usr/local/bin/docker-entrypoint.sh
 EXPOSE 80
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD curl -f http://127.0.0.1:80/health || exit 1
+    CMD wget -q -O /dev/null http://127.0.0.1:80/health || exit 1
 
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]

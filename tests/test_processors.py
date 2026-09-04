@@ -184,6 +184,32 @@ class TestHappProcessor(unittest.TestCase):
                 self.assertIsInstance(data["LastUpdated"], str)
                 self.assertTrue(data["LastUpdated"].isdigit())
 
+    # ------------------------------------------------------------------
+    # Тест 4b: Диплинки кодируются в компактный (minified) JSON
+    # ------------------------------------------------------------------
+    def test_deeplink_is_compact_minified_json(self):
+        """DEEPLINK генерируется без пробелов и переносов строк для минимизации размера."""
+        mock_dl, _ = self._make_downloader_mock({
+            "Geoipurl": "https://upstream.example.com/geoip.dat",
+            "Geositeurl": "https://upstream.example.com/geosite.dat",
+            "rules": [{"domain": "example.com"}]
+        })
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch("app.processors.base.BaseProcessor._discover_config_files",
+                       return_value=["JSONSUB.json"]):
+                with patch("app.processors.happ.GeoManager.sync_client_geo", return_value=True):
+                    with patch("app.config.Config.ENABLED_CLIENTS", ["HAPP"]):
+                        with patch("app.config.Config.STORAGE_DIR", Path(tmpdir)):
+                            proc = self._make_processor(tmpdir, mock_dl=mock_dl)
+                            proc.process()
+                            deeplink_file = Path(tmpdir) / "testtoken" / "HAPP" / "JSONSUB.DEEPLINK"
+                            raw_deeplink = deeplink_file.read_text().strip()
+                            b64 = raw_deeplink.replace("happ://routing/onadd/", "")
+                            decoded_raw = base64.b64decode(b64).decode("utf-8")
+                            # Убеждаемся, что внутри нет красивых переносов строк и пробелов indent=2
+                            self.assertNotIn("\n", decoded_raw)
+                            self.assertNotIn(": ", decoded_raw)
+
 
 class TestIncyProcessor(unittest.TestCase):
     """Тесты генерации INCY файлов и диплинков."""
@@ -361,6 +387,28 @@ class TestPathTraversalProtection(unittest.TestCase):
                     re.match(pattern, name, re.IGNORECASE),
                     f"Безопасное имя '{name}' должно проходить!"
                 )
+
+    # ------------------------------------------------------------------
+    # Тест 11: GeoManager кэширует скачанную базу в памяти для всех клиентов
+    # ------------------------------------------------------------------
+    def test_geo_manager_reuses_in_memory_cache(self):
+        """GeoManager не качает базу повторно при вызове для HAPP и затем INCY."""
+        from app.processors.geo import GeoManager
+        mock_dl = MagicMock()
+        mock_dl.fetch.return_value = b"\x00\x01" * 600
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            geo_mgr = GeoManager(downloader=mock_dl, custom_geo_dir=Path(tmpdir))
+            default_json = {"Geoipurl": "https://example.com/geoip.dat"}
+            
+            # Первый вызов для HAPP
+            data1 = geo_mgr.resolve_and_fetch("HAPP", "geoip", default_json)
+            # Второй вызов для INCY с тем же источником
+            data2 = geo_mgr.resolve_and_fetch("INCY", "geoip", default_json)
+
+            self.assertEqual(data1, data2)
+            # Проверяем, что реальная загрузка через сеть произошла ровно один раз!
+            self.assertEqual(mock_dl.fetch.call_count, 1)
 
 
 if __name__ == "__main__":

@@ -34,9 +34,10 @@ def setup_logging():
     )
 
 def acquire_lock(lock_path: Path):
-    """Блокировка от параллельного запуска нескольких синхронизаций."""
+    """Блокировка от параллельного запуска нескольких синхронизаций без усечения файла до flock."""
     lock_path.parent.mkdir(parents=True, exist_ok=True)
-    lock_file = open(lock_path, "w", encoding="utf-8")
+    fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o600)
+    lock_file = os.fdopen(fd, "r+", encoding="utf-8")
     if HAS_FCNTL:
         try:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -46,18 +47,21 @@ def acquire_lock(lock_path: Path):
     return lock_file
 
 def ensure_internal_symlinks(storage_dir: Path, token: str):
-    """Создает симлинки в корне www для прямого доступа из локальной Docker-сети без токена."""
+    """Создает атомарные симлинки в корне www для прямого доступа из внутренней Docker-сети."""
     for client in ("HAPP", "INCY"):
         target = storage_dir / token / client
         link = storage_dir / client
         if target.is_dir():
-            if link.is_symlink() or link.is_file():
+            tmp_link = storage_dir / f".{client}.tmp_link"
+            try:
+                if tmp_link.is_symlink() or tmp_link.exists():
+                    tmp_link.unlink()
+                tmp_link.symlink_to(target, target_is_directory=True)
+                os.replace(tmp_link, link)
+            except Exception:
                 try:
-                    link.unlink()
-                except Exception:
-                    pass
-            if not link.exists():
-                try:
+                    if link.is_symlink() or link.is_file():
+                        link.unlink()
                     link.symlink_to(target, target_is_directory=True)
                 except Exception:
                     pass

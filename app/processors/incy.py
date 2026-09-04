@@ -4,7 +4,6 @@ import json
 import logging
 import os
 import re
-import urllib.request
 from typing import Set
 from app.processors.base import BaseProcessor
 from app.processors.geo import GeoManager
@@ -76,6 +75,10 @@ class IncyProcessor(BaseProcessor):
                 try:
                     raw_bytes = self.downloader.fetch(url, f"{client}_{file_key}", kind="json")
                     data = json.loads(raw_bytes.decode("utf-8"))
+                    if not isinstance(data, dict):
+                        logger.error(f"Invalid JSON format for {file_name} (expected object): {type(data)}")
+                        success = False
+                        continue
                     
                     # Подменяем ссылки на локальные
                     data["Geoipurl"] = geoip_public_url
@@ -93,8 +96,9 @@ class IncyProcessor(BaseProcessor):
                         continue
                     published_files.add(file_name)
                         
-                    # Генерируем DEEPLINK (схема incy://routing/onadd/<base64>)
-                    b64_payload = base64.b64encode(json_content.encode("utf-8")).decode("ascii")
+                    # Генерируем компактный DEEPLINK (схема incy://routing/onadd/<base64>) без лишних пробелов
+                    compact_json = json.dumps(data, separators=(",", ":"), ensure_ascii=False)
+                    b64_payload = base64.b64encode(compact_json.encode("utf-8")).decode("ascii")
                     prefix = client.lower()
                     deeplink_content = f"{prefix}://routing/onadd/{b64_payload}\n"
                     

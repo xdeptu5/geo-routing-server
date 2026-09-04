@@ -56,6 +56,25 @@ class TestConfigTokenValidation(unittest.TestCase):
         with self.assertRaises(SystemExit):
             Config.get_token()
 
+    def test_token_with_dot_raises(self):
+        os.environ["ROUTING_TOKEN"] = "token.with.dot"
+        from app.config import Config
+        with self.assertRaises(SystemExit):
+            Config.get_token()
+
+    def test_token_traversal_dots_raises(self):
+        for bad in [".", "..", "../secret"]:
+            os.environ["ROUTING_TOKEN"] = bad
+            from app.config import Config
+            with self.assertRaises(SystemExit):
+                Config.get_token()
+
+    def test_token_too_short_raises(self):
+        os.environ["ROUTING_TOKEN"] = "abc"
+        from app.config import Config
+        with self.assertRaises(SystemExit):
+            Config.get_token()
+
     # ------------------------------------------------------------------
     # Тест 3: Пустой токен — sys.exit(1) (кроме HAPP_DEEPLINK режима)
     # ------------------------------------------------------------------

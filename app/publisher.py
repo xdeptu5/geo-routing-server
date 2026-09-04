@@ -4,7 +4,7 @@ import os
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Optional, Union
+from typing import Dict, Union
 
 logger = logging.getLogger("geo-routing-server")
 
@@ -40,12 +40,26 @@ class Publisher:
     def publish_file(cls, dest_dir: Path, filename: str, content: Union[str, bytes]) -> bool:
         """
         Атомарно публикует файл:
+        - Проверяет безопасность пути назначения (защита от path traversal)
+        - Эффективно проверяет изменения через stat() и sha256 без паразитного I/O
         - Записывает во временный файл в целевой директории
+        - Выполняет fsync для исключения повреждения данных при сбоях питания
         - Выставляет права 0644
         - Атомарно перемещает (os.replace)
         """
         cls.ensure_dir(dest_dir)
-        target_path = dest_dir / filename
+        target_path = (dest_dir / filename).resolve()
+        
+        # Защита от Path Traversal
+        try:
+            if not target_path.is_relative_to(dest_dir.resolve()):
+                logger.error(f"Refusing to publish outside dest_dir: {filename}")
+                return False
+        except AttributeError:
+            # Python < 3.9 fallback
+            if not str(target_path).startswith(str(dest_dir.resolve())):
+                logger.error(f"Refusing to publish outside dest_dir: {filename}")
+                return False
         
         raw_data = content.encode("utf-8") if isinstance(content, str) else content
         if not raw_data:
@@ -58,16 +72,27 @@ class Publisher:
         # Если файл уже существует и идентичен, не меняем mtime
         if target_path.is_file():
             try:
-                if target_path.read_bytes() == raw_data:
-                    is_updated = False
+                # 1. Быстрая проверка: если размер отличается, файл изменился
+                if target_path.stat().st_size != len(raw_data):
+                    is_updated = True
+                else:
+                    # 2. Если есть .sha256 файл, читаем только 64 байта вместо мегабайт баз
+                    sha_file = dest_dir / f"{filename}.sha256"
+                    if sha_file.is_file():
+                        existing_hash = sha_file.read_text(encoding="utf-8").strip()
+                        is_updated = (existing_hash != sha256_hash)
+                    else:
+                        is_updated = (target_path.read_bytes() != raw_data)
             except Exception:
-                pass
+                is_updated = True
 
         if is_updated:
             temp_fd, temp_path = tempfile.mkstemp(prefix=f".{filename}.", dir=str(dest_dir))
             try:
                 with os.fdopen(temp_fd, "wb") as f:
                     f.write(raw_data)
+                    f.flush()
+                    os.fsync(f.fileno())
                 os.chmod(temp_path, 0o644)
                 os.replace(temp_path, target_path)
                 logger.info(f"  Updated: {filename}")

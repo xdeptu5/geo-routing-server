@@ -1,6 +1,5 @@
 import json
 import logging
-import re
 import urllib.request
 from abc import ABC, abstractmethod
 from pathlib import Path

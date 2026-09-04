@@ -654,9 +654,25 @@ uninstall_project() {
         # Принудительное удаление контейнера на случай, если compose.yaml был поврежден
         docker rm -f geo-routing-server 2>/dev/null || true
 
-        # Безопасное удаление каталога проекта
-        if [ -n "$target_dir" ] && [ "$target_dir" != "/" ] && [ "$target_dir" != "/root" ] && [ "$target_dir" != "/home" ] && [ -d "$target_dir" ]; then
-            rm -rf "$target_dir"
+        # Безопасное удаление каталога проекта с защитой системных папок
+        if [ -n "$target_dir" ] && [ -d "$target_dir" ]; then
+            case "$target_dir" in
+                /|/root|/home|/opt|/var|/usr|/etc|/bin|/sbin|/tmp)
+                    echo -e "${YELLOW}[!] Каталог $target_dir является системным. Удаляются только файлы проекта...${NC}"
+                    rm -f "$target_dir/compose.yaml" "$target_dir/.env" "$target_dir/.env.backup" "$target_dir/.sync.lock" 2>/dev/null || true
+                    rm -rf "$target_dir/custom_geo" 2>/dev/null || true
+                    ;;
+                *)
+                    if [ -f "$target_dir/compose.yaml" ] && grep -q "geo-routing-server" "$target_dir/compose.yaml" 2>/dev/null; then
+                        rm -rf "$target_dir"
+                    elif [ -f "$target_dir/.env" ] && grep -q "ROUTING_TOKEN" "$target_dir/.env" 2>/dev/null; then
+                        rm -rf "$target_dir"
+                    else
+                        echo -e "${YELLOW}[!] В каталоге $target_dir не обнаружен маркер проекта. Удаляются только файлы проекта...${NC}"
+                        rm -f "$target_dir/compose.yaml" "$target_dir/.env" "$target_dir/.env.backup" 2>/dev/null || true
+                    fi
+                    ;;
+            esac
         fi
 
         rm -f "$CONFIG_FILE_RECORD" "$LANG_RECORD"
@@ -882,8 +898,8 @@ install_wizard() {
         read -r -p "Введите свой токен или нажмите Enter для подтверждения: " input_token
         ROUTING_TOKEN="${input_token:-$auto_token}"
         ROUTING_TOKEN="$(echo "$ROUTING_TOKEN" | tr -d '[:space:]/\\')"
-        while [[ ! "$ROUTING_TOKEN" =~ ^[A-Za-z0-9._-]+$ ]]; do
-            echo -e "${RED}[!] Токен может содержать только латинские буквы, цифры, точку, дефис и подчеркивание!${NC}"
+        while [[ ! "$ROUTING_TOKEN" =~ ^[A-Za-z0-9_-]+$ ]] || [ "${#ROUTING_TOKEN}" -lt 8 ]; do
+            echo -e "${RED}[!] Токен должен быть длиной не менее 8 символов и содержать только латинские буквы, цифры, дефис и подчеркивание (без точек)!${NC}"
             read -r -p "Введите корректный токен [Enter = ${auto_token}]: " input_token
             ROUTING_TOKEN="${input_token:-$auto_token}"
             ROUTING_TOKEN="$(echo "$ROUTING_TOKEN" | tr -d '[:space:]/\\')"
@@ -1163,6 +1179,8 @@ CLOUDFLARE_ZERO_TRUST_CLIENT_SECRET=${prev_cf_secret}
         [ -n "$TG_THREAD_ID" ] && echo "TELEGRAM_THREAD_ID=${TG_THREAD_ID}"
         echo "TELEGRAM_NOTIFY_SUCCESS=${TG_NOTIFY_SUCCESS}"
     } > "$INSTALL_DIR/.env"
+    chmod 600 "$INSTALL_DIR/.env"
+    [ -f "$INSTALL_DIR/.env.backup" ] && chmod 600 "$INSTALL_DIR/.env.backup" 2>/dev/null || true
 
     local networks_block=""
     local top_networks_block=""
