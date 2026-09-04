@@ -1260,8 +1260,32 @@ install_wizard() {
 
     if [ -z "$prev_ext_network" ] && [ -n "$comp_scan" ]; then
         local comp_net
-        comp_net=$(awk '/external:\s*true/{print prev} {gsub(/[: ]/, "", $0); prev=$0}' "$comp_scan" 2>/dev/null || true)
+        comp_net=$(awk '
+            /^[[:space:]]*name:[[:space:]]*/ { n=$0; sub(/^[[:space:]]*name:[[:space:]]*/, "", n); gsub(/["'\'' ]/, "", n); last_name=n }
+            /^[[:space:]]{2}[a-zA-Z0-9_-]+:[[:space:]]*$/ { s=$0; gsub(/^[[:space:]]*|:[[:space:]]*$/, "", s); last_sec=s }
+            /external:[[:space:]]*true/ {
+                if (last_name != "") { print last_name; exit }
+                if (last_sec != "" && last_sec != "default") { print last_sec; exit }
+            }
+        ' "$comp_scan" 2>/dev/null || true)
+        if [ -z "$comp_net" ]; then
+            comp_net=$(awk '
+                /^[[:space:]]*-[[:space:]]+default/ { next }
+                /^[[:space:]]*-[[:space:]]+[a-zA-Z0-9_-]+/ {
+                    val=$0; sub(/^[[:space:]]*-[[:space:]]+/, "", val); gsub(/["'\'' ]/, "", val)
+                    if (val != "" && val != "default") { print val; exit }
+                }
+            ' "$comp_scan" 2>/dev/null || true)
+        fi
         [ -n "$comp_net" ] && [ "$comp_net" != "default" ] && prev_ext_network="$comp_net"
+    fi
+
+    # Автоисправление, если из-за бага парсера старой версии скрипта в .env попало "name<сеть>"
+    if [[ "$prev_ext_network" =~ ^name([a-zA-Z0-9_-]+)$ ]]; then
+        local fixed_candidate="${BASH_REMATCH[1]}"
+        if command -v docker &>/dev/null && docker network inspect "$fixed_candidate" &>/dev/null; then
+            prev_ext_network="$fixed_candidate"
+        fi
     fi
 
     # Если в compose.yaml не найдено, проверяем подключённые сети живого контейнера geo-routing-server
