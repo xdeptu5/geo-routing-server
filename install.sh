@@ -514,18 +514,11 @@ pause_menu() {
         fi
     fi
 
-    local tty_in=""
-    if [ -t 0 ]; then
-        tty_in="/dev/stdin"
-    elif [ -c /dev/tty ] && ( : < /dev/tty ) 2>/dev/null; then
-        tty_in="/dev/tty"
-    fi
-
-    echo "" >&2
-    if [ -n "$tty_in" ]; then
-        read -r -p "$prompt_msg" _ < "$tty_in" 2>/dev/null || true
-    else
-        read -r -p "$prompt_msg" _ 2>/dev/null || true
+    echo -e "\n${YELLOW}${BOLD}${prompt_msg}${NC}"
+    if [ -c /dev/tty ] && ( : < /dev/tty ) 2>/dev/null; then
+        read -r _ < /dev/tty || true
+    elif [ -t 0 ]; then
+        read -r _ || true
     fi
 }
 
