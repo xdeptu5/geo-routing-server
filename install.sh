@@ -858,17 +858,29 @@ install_wizard() {
                 PUBLIC_GEO_BASE_URL="https://${PUBLIC_GEO_BASE_URL}"
             fi
 
-            # Удаляем хвостовой слеш
-            PUBLIC_GEO_BASE_URL="$(echo "$PUBLIC_GEO_BASE_URL" | sed 's:/*$::')"
+            # Удаляем хвостовые слеши
+            while [[ "$PUBLIC_GEO_BASE_URL" == */ ]]; do
+                PUBLIC_GEO_BASE_URL="${PUBLIC_GEO_BASE_URL%/}"
+            done
 
             # Если скопирована ссылка на файл, отрезаем имя файла
-            PUBLIC_GEO_BASE_URL="$(echo "$PUBLIC_GEO_BASE_URL" | sed 's:/[gG][eE][oO][iI][pP]\.dat$::' | sed 's:/[gG][eE][oO][sS][iI][tT][eE]\.dat$::')"
-            PUBLIC_GEO_BASE_URL="$(echo "$PUBLIC_GEO_BASE_URL" | sed 's:/*$::')"
+            case "$PUBLIC_GEO_BASE_URL" in
+                *[gG][eE][oO][iI][pP].[dD][aA][tT])
+                    PUBLIC_GEO_BASE_URL="${PUBLIC_GEO_BASE_URL%/*}"
+                    ;;
+                *[gG][eE][oO][sS][iI][tT][eE].[dD][aA][tT])
+                    PUBLIC_GEO_BASE_URL="${PUBLIC_GEO_BASE_URL%/*}"
+                    ;;
+            esac
 
-            # Проверяем наличие токена в пути
-            local path_part
-            path_part="$(echo "$PUBLIC_GEO_BASE_URL" | sed 's:^https*://[^/]*/*::')"
-            if [ -z "$path_part" ]; then
+            while [[ "$PUBLIC_GEO_BASE_URL" == */ ]]; do
+                PUBLIC_GEO_BASE_URL="${PUBLIC_GEO_BASE_URL%/}"
+            done
+
+            # Проверяем наличие токена в пути (хотя бы один слеш после хоста)
+            local no_proto="${PUBLIC_GEO_BASE_URL#*://}"
+            local path_part="${no_proto#*/}"
+            if [ "$path_part" = "$no_proto" ] || [ -z "$path_part" ]; then
                 echo -e "${YELLOW}[!] Вы указали адрес без секретного токена (${PUBLIC_GEO_BASE_URL}).${NC}"
                 read -r -p "    Сервер раздачи действительно настроен без токена? [y/N]: " confirm_no_tok
                 if [[ ! "$confirm_no_tok" =~ ^[YyДд]$ ]]; then
