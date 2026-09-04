@@ -327,7 +327,7 @@ detect_docker_networks() {
     if ! command -v docker &>/dev/null; then
         return
     fi
-    docker network ls --format '{{.Name}}' 2>/dev/null | grep -vE '^(bridge|host|none)$' || true
+    docker network ls --format '{{.Name}}' 2>/dev/null | grep -vE '^(bridge|host|none|geo-routing-server_default)$' || true
 }
 
 # Проверка, запущен ли контейнер Remnawave на этом же сервере
@@ -769,8 +769,9 @@ ${cf_env}${squads_env}
 EOF
         echo -e "\n${GREEN}[+] Настройки Remnawave сохранены! Перезапускаем контейнер...${NC}"
         cd "$target_dir"
-        docker compose up -d
-        local remna_net="remnawave-network"
+        local saved_net
+        saved_net=$(grep "^DOCKER_NETWORK=" "$env_file" | cut -d'=' -f2- || true)
+        local remna_net="${saved_net:-remnawave-network}"
         if docker network inspect "$remna_net" &>/dev/null; then
             if ! docker inspect geo-routing-server --format '{{json .NetworkSettings.Networks}}' 2>/dev/null | grep -q "$remna_net"; then
                 docker network connect "$remna_net" geo-routing-server 2>/dev/null || true
@@ -1075,6 +1076,7 @@ install_wizard() {
     local prev_cf_secret=""
     local prev_routing_repo="https://raw.githubusercontent.com/hydraponique/roscomvpn-routing/main"
     local prev_schedule="0 10 * * *"
+    local prev_ext_network=""
 
     local scan_env=""
     if [ -f "$INSTALL_DIR/.env" ]; then
@@ -1100,6 +1102,40 @@ install_wizard() {
         prev_cf_secret="$(grep "^CLOUDFLARE_ZERO_TRUST_CLIENT_SECRET=" "$scan_env" | cut -d'=' -f2- || true)"
         prev_routing_repo="$(grep "^ROUTING_SOURCE_REPO=" "$scan_env" | cut -d'=' -f2- || echo "$prev_routing_repo")"
         prev_schedule="$(grep "^SCHEDULE=" "$scan_env" | cut -d'=' -f2- || echo "$prev_schedule")"
+        prev_ext_network="$(grep -E '^(DOCKER_NETWORK|EXT_NETWORK)=' "$scan_env" | cut -d'=' -f2- || true)"
+    fi
+
+    # Если в .env сеть не сохранена, проверяем существующий compose.yaml
+    local comp_scan=""
+    if [ -f "$INSTALL_DIR/compose.yaml" ]; then
+        comp_scan="$INSTALL_DIR/compose.yaml"
+    elif [ -f "$INSTALL_DIR/docker-compose.yml" ]; then
+        comp_scan="$INSTALL_DIR/docker-compose.yml"
+    elif [ -n "$existing_detected" ] && [ -f "$existing_detected/compose.yaml" ]; then
+        comp_scan="$existing_detected/compose.yaml"
+    elif [ -n "$existing_detected" ] && [ -f "$existing_detected/docker-compose.yml" ]; then
+        comp_scan="$existing_detected/docker-compose.yml"
+    fi
+
+    if [ -z "$prev_ext_network" ] && [ -n "$comp_scan" ]; then
+        local comp_net
+        comp_net=$(awk '/external:\s*true/{print prev} {gsub(/[: ]/, "", $0); prev=$0}' "$comp_scan" 2>/dev/null || true)
+        [ -n "$comp_net" ] && [ "$comp_net" != "default" ] && prev_ext_network="$comp_net"
+    fi
+
+    # Если в compose.yaml не найдено, проверяем подключённые сети живого контейнера geo-routing-server
+    if [ -z "$prev_ext_network" ] && command -v docker &>/dev/null; then
+        local c_nets
+        c_nets=$(docker inspect geo-routing-server --format '{{range $k, $v := .NetworkSettings.Networks}}{{println $k}}{{end}}' 2>/dev/null || true)
+        if [ -n "$c_nets" ]; then
+            while IFS= read -r cn; do
+                [ -z "$cn" ] && continue
+                if [[ ! "$cn" =~ (bridge|host|none|_default$) ]]; then
+                    prev_ext_network="$cn"
+                    break
+                fi
+            done <<< "$c_nets"
+        fi
     fi
 
     # ────────────────────────────────────────────────────────────────────────
@@ -1426,7 +1462,7 @@ CLOUDFLARE_ZERO_TRUST_CLIENT_SECRET=${prev_cf_secret}
     fi
 
     # ────────────────────────────────────────────────────────────────────────
-    # ШАГ 7: Docker-сеть (умный автодетект)
+    # ШАГ 7: Docker-сеть (умный автодетект и сохранение)
     # ────────────────────────────────────────────────────────────────────────
     EXT_NETWORK=""
     NEEDS_NETWORK=false
@@ -1443,21 +1479,40 @@ CLOUDFLARE_ZERO_TRUST_CLIENT_SECRET=${prev_cf_secret}
         detected_nets=$(detect_docker_networks)
         local net_options=()
         local remna_found_net=""
+        local other_nets=()
 
         if [ -n "$detected_nets" ]; then
             while IFS= read -r net_name; do
                 [ -z "$net_name" ] && continue
+                [[ "$net_name" =~ geo-routing-server_default$ ]] && continue
+                
+                if [ -n "$prev_ext_network" ] && [ "$net_name" = "$prev_ext_network" ]; then
+                    continue
+                fi
                 if [[ "$net_name" =~ remna ]]; then
                     remna_found_net="$net_name"
                 fi
-                net_options+=("$net_name")
+                other_nets+=("$net_name")
             done <<< "$detected_nets"
         fi
 
-        # Если не нашли remnawave-network в списке, добавим ее как вариант
-        if [ -z "$remna_found_net" ]; then
-            net_options=("remnawave-network" "${net_options[@]}")
+        # 1. Если ранее сеть уже была настроена, ставим её на 1-е место с пометкой (сохранена)
+        if [ -n "$prev_ext_network" ]; then
+            net_options+=("${prev_ext_network} (текущая сохранённая)")
+            echo -e "  ${CYAN}[i] Ранее настроенная Docker-сеть: ${BOLD}${prev_ext_network}${NC}"
+        elif [ -n "$remna_found_net" ]; then
+            net_options+=("${remna_found_net} (обнаружена Remnawave)")
+        else
+            net_options+=("remnawave-network (создать / подключить)")
         fi
+
+        # 2. Добавляем остальные обнаруженные сети
+        for onet in "${other_nets[@]}"; do
+            [ -n "$remna_found_net" ] && [ "$onet" = "$remna_found_net" ] && [ -z "$prev_ext_network" ] && continue
+            net_options+=("$onet")
+        done
+
+        # 3. Варианты ручного ввода и пропуска
         net_options+=("Ввести другое имя сети" "Не подключать к внешней сети")
 
         local net_pick_idx
@@ -1466,6 +1521,7 @@ CLOUDFLARE_ZERO_TRUST_CLIENT_SECRET=${prev_cf_secret}
 
         if [ "$chosen_net" = "Не подключать к внешней сети" ]; then
             echo -e "${DIM}Пропущено. Используется стандартная сеть.${NC}\n"
+            EXT_NETWORK=""
         elif [ "$chosen_net" = "Ввести другое имя сети" ]; then
             read -r -p "Имя Docker-сети: " input_custom_net
             EXT_NETWORK="${input_custom_net:-remnawave-network}"
@@ -1475,7 +1531,7 @@ CLOUDFLARE_ZERO_TRUST_CLIENT_SECRET=${prev_cf_secret}
             fi
             echo -e "${GREEN}[+] Сеть: $EXT_NETWORK${NC}\n"
         else
-            EXT_NETWORK="$chosen_net"
+            EXT_NETWORK="$(echo "$chosen_net" | awk '{print $1}')"
             if ! docker network inspect "$EXT_NETWORK" &>/dev/null; then
                 echo -e "${YELLOW}[*] Создаём Docker-сеть $EXT_NETWORK...${NC}"
                 docker network create "$EXT_NETWORK" || true
@@ -1581,6 +1637,7 @@ CLOUDFLARE_ZERO_TRUST_CLIENT_SECRET=${prev_cf_secret}
         [ -n "$TG_CHAT_ID" ] && echo "TELEGRAM_CHAT_ID=${TG_CHAT_ID}"
         [ -n "$TG_THREAD_ID" ] && echo "TELEGRAM_THREAD_ID=${TG_THREAD_ID}"
         echo "TELEGRAM_NOTIFY_SUCCESS=${TG_NOTIFY_SUCCESS}"
+        [ -n "$EXT_NETWORK" ] && echo "DOCKER_NETWORK=${EXT_NETWORK}"
     } > "$INSTALL_DIR/.env"
     chmod 644 "$INSTALL_DIR/.env" 2>/dev/null || true
     [ -f "$INSTALL_DIR/.env.backup" ] && chmod 600 "$INSTALL_DIR/.env.backup" 2>/dev/null || true
