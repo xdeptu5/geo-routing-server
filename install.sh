@@ -851,20 +851,55 @@ install_wizard() {
 
     # Если базы на внешнем сервере (варианты 4 и 5)
     if [ "$server_role" = "4" ] || [ "$server_role" = "5" ]; then
-        echo -e "${BOLD}--- Адрес внешнего сервера с базами ---${NC}"
-        echo -e "${DIM}Пример: https://geo.example.com/секретный_токен${NC}"
-        echo -e "${DIM}Сервер автоматически подставит путь /HAPP/ или /INCY/ для каждого клиента.${NC}\n"
+        echo -e "${BOLD}--- Внешний сервер geo-баз (где хранятся geoip.dat и geosite.dat) ---${NC}"
+        echo -e "Укажите полный адрес вашего сервера раздачи баз (домен + секретный токен)."
+        echo -e "${DIM}Можно вставить в любом формате или скопировать любую ссылку из баннера сервера баз:${NC}"
+        echo -e "${DIM}  • Базовый адрес с токеном:   https://geo.example.com/секретный_токен${NC}"
+        echo -e "${DIM}  • Прямую ссылку на базу:     https://geo.example.com/секретный_токен/HAPP/geoip.dat${NC}"
+        echo -e "${DIM}  • Или адрес без https://:    geo.example.com/секретный_токен${NC}\n"
+
+        local prompt_str="Полный URL к базам с токеном: "
+        if [ -n "$prev_public_geo" ]; then
+            prompt_str="Полный URL к базам с токеном [Enter = ${prev_public_geo}]: "
+        fi
 
         while true; do
-            read -r -p "URL к базам [Enter = ${prev_public_geo:-обязательно}]: " input_geo_url
+            read -r -p "$prompt_str" input_geo_url
+            input_geo_url="$(echo "$input_geo_url" | tr -d '[:space:]"' | tr -d "'")"
             PUBLIC_GEO_BASE_URL="${input_geo_url:-$prev_public_geo}"
-            PUBLIC_GEO_BASE_URL="$(echo "$PUBLIC_GEO_BASE_URL" | sed 's:/*$::')"
-            if [[ "$PUBLIC_GEO_BASE_URL" =~ ^https?:// ]]; then
-                break
+            
+            if [ -z "$PUBLIC_GEO_BASE_URL" ]; then
+                echo -e "${RED}[!] Адрес сервера баз обязателен для этого сценария!${NC}"
+                continue
             fi
-            echo -e "${RED}[!] URL должен начинаться с https:// (например: https://geo.example.com/секретный_токен)${NC}"
+
+            # Автоматически добавляем https://, если протокол не указан
+            if [[ ! "$PUBLIC_GEO_BASE_URL" =~ ^https?:// ]]; then
+                PUBLIC_GEO_BASE_URL="https://${PUBLIC_GEO_BASE_URL}"
+            fi
+
+            # Удаляем хвостовые слеши
+            PUBLIC_GEO_BASE_URL="$(echo "$PUBLIC_GEO_BASE_URL" | sed 's:/*$::')"
+
+            # Если скопирована прямая ссылка на файл, автоматически отрезаем имя файла
+            PUBLIC_GEO_BASE_URL="$(echo "$PUBLIC_GEO_BASE_URL" | sed 's:/[gG][eE][oO][iI][pP]\.dat$::' | sed 's:/[gG][eE][oO][sS][iI][tT][eE]\.dat$::')"
+            PUBLIC_GEO_BASE_URL="$(echo "$PUBLIC_GEO_BASE_URL" | sed 's:/*$::')"
+
+            # Проверяем наличие токена после домена (хотя бы один слеш после хоста)
+            local path_part
+            path_part="$(echo "$PUBLIC_GEO_BASE_URL" | sed 's:^https*://[^/]*/*::')"
+            if [ -z "$path_part" ]; then
+                echo -e "${YELLOW}[!] Внимание: вы указали только домен без токена (${PUBLIC_GEO_BASE_URL}).${NC}"
+                echo -e "${YELLOW}    На сервере раздачи файлы баз защищены токеном в пути URL!${NC}"
+                read -r -p "    Вы уверены, что сервер раздачи настроен без токена? [y/N]: " confirm_no_tok
+                if [[ ! "$confirm_no_tok" =~ ^[YyДд]$ ]]; then
+                    continue
+                fi
+            fi
+
+            break
         done
-        echo -e "${GREEN}[+] Базы берутся с: $PUBLIC_GEO_BASE_URL${NC}\n"
+        echo -e "${GREEN}[+] Базы будут загружаться по адресу: $PUBLIC_GEO_BASE_URL${NC}\n"
     fi
 
     # ────────────────────────────────────────────────────────────────────────
