@@ -407,12 +407,12 @@ create_cli_shortcut() {
     cat > "$wrapper_script" <<EOF
 #!/usr/bin/env bash
 TARGET_SCRIPT="$target_dir/install.sh"
-if [ ! -s "\$TARGET_SCRIPT" ]; then
+if [ ! -s "\$TARGET_SCRIPT" ] || ! grep -q "Geo Routing Server" "\$TARGET_SCRIPT" 2>/dev/null; then
     mkdir -p "$target_dir"
     curl -fsSL "https://raw.githubusercontent.com/xdeptu5/geo-routing-server/main/install.sh" -o "\$TARGET_SCRIPT" 2>/dev/null || true
     chmod +x "\$TARGET_SCRIPT" 2>/dev/null || true
 fi
-bash "\$TARGET_SCRIPT" "\$@"
+exec bash "\$TARGET_SCRIPT" "\$@"
 EOF
     chmod +x "$wrapper_script"
     
@@ -424,11 +424,12 @@ EOF
 run_sync_now() {
     local target_dir
     target_dir="$(get_install_dir)"
-    echo -e "${BLUE}[*] Запуск принудительной синхронизации баз...${NC}"
-    docker exec geo-routing-server run-routing-sync || {
-        echo -e "${RED}[!] Ошибка запуска синхронизации. Проверьте запущен ли контейнер: docker compose ps${NC}"
-    }
-    echo ""
+    echo -e "${BLUE}[*] Запуск внеочередной синхронизации правил и баз...${NC}"
+    if docker exec geo-routing-server python3 -m app.main; then
+        echo -e "${GREEN}[+] Синхронизация успешно выполнена!${NC}\n"
+    else
+        echo -e "${RED}[!] Ошибка синхронизации. Проверьте логи: geo-server logs${NC}\n"
+    fi
     read -r -p "Нажмите Enter для продолжения..."
 }
 
@@ -444,7 +445,22 @@ print_summary_banner(Config.get_token())
         echo -e "${YELLOW}[!] Не удалось получить ссылки напрямую из контейнера. Проверьте логи: docker compose logs${NC}"
     }
     echo -e "\n${DIM}💎 Поддержать проект / Donations: https://github.com/xdeptu5/geo-routing-server#-%D0%BF%D0%BE%D0%B4%D0%B4%D0%B5%D1%80%D0%B6%D0%B0%D1%82%D1%8C-%D0%BF%D1%80%D0%BE%D0%B5%D0%BA%D1%82-donations${NC}\n"
-    read -r -p "Нажмите Enter для продолжения..."
+
+    local tty_in=""
+    if [ -t 0 ]; then
+        tty_in="/dev/stdin"
+    elif [ -c /dev/tty ] && ( : < /dev/tty ) 2>/dev/null; then
+        tty_in="/dev/tty"
+    fi
+
+    local prompt_msg="Нажмите Enter для перехода в главное меню..."
+    [ "${UI_LANG:-ru}" = "en" ] && prompt_msg="Press Enter to open main menu..."
+
+    if [ -n "$tty_in" ]; then
+        read -r -p "$prompt_msg" _ < "$tty_in" || true
+    else
+        read -r -p "$prompt_msg" _ || true
+    fi
 }
 
 show_proxy_snippets() {
@@ -1462,10 +1478,10 @@ EOF
     touch "$INSTALL_DIR/custom_geo/.gitkeep"
 
     # Сохраняем скрипт установщика в каталог проекта для работы команды geo-server
-    if [[ "$0" =~ ^/dev/fd/ || "$0" =~ ^/proc/ ]] || [ ! -s "$0" ]; then
-        curl -fsSL "https://raw.githubusercontent.com/xdeptu5/geo-routing-server/main/install.sh" -o "$INSTALL_DIR/install.sh" 2>/dev/null || true
-    else
+    if [ -f "$0" ] && grep -q "Geo Routing Server" "$0" 2>/dev/null; then
         cp "$0" "$INSTALL_DIR/install.sh" 2>/dev/null || true
+    else
+        curl -fsSL "https://raw.githubusercontent.com/xdeptu5/geo-routing-server/main/install.sh" -o "$INSTALL_DIR/install.sh" 2>/dev/null || true
     fi
     chmod +x "$INSTALL_DIR/install.sh" 2>/dev/null || true
     create_cli_shortcut "$INSTALL_DIR"
@@ -1632,6 +1648,7 @@ main() {
             ;;
         --reconfigure|-r|reconfigure|install)
             install_wizard
+            main_menu
             exit 0
             ;;
         --menu|-m|menu)
@@ -1668,21 +1685,29 @@ main() {
                 "Полностью удалить проект с сервера")
         fi
         case "$init_idx" in
-            0) install_wizard ;;
+            0) 
+                install_wizard
+                main_menu
+                ;;
             1) 
                 if [ -n "$target_dir" ] && [ "$target_dir" != "/" ] && [ "$target_dir" != "/root" ] && [ -d "$target_dir" ]; then
                     rm -rf "$target_dir"
                 fi
                 install_wizard
+                main_menu
                 ;;
             2) 
                 uninstall_project
                 exit 0
                 ;;
-            *) install_wizard ;;
+            *) 
+                install_wizard
+                main_menu
+                ;;
         esac
     else
         install_wizard
+        main_menu
     fi
 }
 
