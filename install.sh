@@ -452,6 +452,31 @@ EOF
     ln -sf "$wrapper_script" /usr/bin/geoserver 2>/dev/null || true
 }
 
+pause_menu() {
+    local prompt_msg="${1:-}"
+    if [ -z "$prompt_msg" ]; then
+        if [ "${UI_LANG:-ru}" = "en" ]; then
+            prompt_msg="Press Enter to return to main menu..."
+        else
+            prompt_msg="Нажмите Enter для возврата в главное меню..."
+        fi
+    fi
+
+    local tty_in=""
+    if [ -t 0 ]; then
+        tty_in="/dev/stdin"
+    elif [ -c /dev/tty ] && ( : < /dev/tty ) 2>/dev/null; then
+        tty_in="/dev/tty"
+    fi
+
+    echo "" >&2
+    if [ -n "$tty_in" ]; then
+        read -r -p "$prompt_msg" _ < "$tty_in" 2>/dev/null || true
+    else
+        read -r -p "$prompt_msg" _ 2>/dev/null || true
+    fi
+}
+
 run_sync_now() {
     local target_dir
     target_dir="$(get_install_dir)"
@@ -461,7 +486,7 @@ run_sync_now() {
     else
         echo -e "${RED}[!] Ошибка синхронизации. Проверьте логи: geo-server logs${NC}\n"
     fi
-    read -r -p "Нажмите Enter для продолжения..."
+    pause_menu
 }
 
 show_links() {
@@ -475,23 +500,8 @@ print_summary_banner(Config.get_token())
 " || {
         echo -e "${YELLOW}[!] Не удалось получить ссылки напрямую из контейнера. Проверьте логи: docker compose logs${NC}"
     }
-    echo -e "\n${DIM}💎 Поддержать проект / Donations: https://github.com/xdeptu5/geo-routing-server#-%D0%BF%D0%BE%D0%B4%D0%B4%D0%B5%D1%80%D0%B6%D0%B0%D1%82%D1%8C-%D0%BF%D1%80%D0%BE%D0%B5%D0%BA%D1%82-donations${NC}\n"
-
-    local tty_in=""
-    if [ -t 0 ]; then
-        tty_in="/dev/stdin"
-    elif [ -c /dev/tty ] && ( : < /dev/tty ) 2>/dev/null; then
-        tty_in="/dev/tty"
-    fi
-
-    local prompt_msg="Нажмите Enter для перехода в главное меню..."
-    [ "${UI_LANG:-ru}" = "en" ] && prompt_msg="Press Enter to open main menu..."
-
-    if [ -n "$tty_in" ]; then
-        read -r -p "$prompt_msg" _ < "$tty_in" || true
-    else
-        read -r -p "$prompt_msg" _ || true
-    fi
+    echo -e "\n${DIM}💎 Поддержать проект / Donations: https://github.com/xdeptu5/geo-routing-server#-%D0%BF%D0%BE%D0%B4%D0%B4%D0%B5%D1%80%D0%B6%D0%B0%D1%82%D1%8C-%D0%BF%D1%80%D0%BE%D0%B5%D0%BA%D1%82-donations${NC}"
+    pause_menu
 }
 
 show_proxy_snippets() {
@@ -692,7 +702,7 @@ EOF
         docker exec geo-routing-server run-routing-sync 2>/dev/null || true
         echo -e "${GREEN}[+] Готово! Правила обновлены и отправлены в Remnawave.${NC}\n"
     fi
-    read -r -p "Нажмите Enter для продолжения..."
+    pause_menu
 }
 
 update_script_only() {
@@ -735,9 +745,13 @@ update_project() {
 view_logs() {
     local target_dir
     target_dir="$(get_install_dir)"
-    echo -e "${BLUE}[*] Просмотр последних логов (Ctrl+C для выхода):${NC}\n"
+    echo -e "${BLUE}[*] Просмотр последних логов (нажмите Ctrl+C для возврата в меню):${NC}\n"
     cd "$target_dir"
-    docker compose logs -f --tail 100
+    (
+        trap 'exit 0' INT TERM
+        docker compose logs -f --tail 100 2>&1 || true
+    ) || true
+    pause_menu
 }
 
 restart_server() {
@@ -747,7 +761,7 @@ restart_server() {
     echo -e "${YELLOW}[*] Перезапуск контейнера...${NC}"
     docker compose restart
     echo -e "${GREEN}[+] Контейнер успешно перезапущен.${NC}\n"
-    read -r -p "Нажмите Enter для продолжения..."
+    pause_menu
 }
 
 stop_server() {
@@ -757,7 +771,7 @@ stop_server() {
     echo -e "${YELLOW}[*] Остановка контейнера...${NC}"
     docker compose down
     echo -e "${GREEN}[+] Контейнер остановлен.${NC}\n"
-    read -r -p "Нажмите Enter для продолжения..."
+    pause_menu
 }
 
 test_telegram() {
@@ -861,7 +875,7 @@ EOF
         echo -e "${RED}[!] Файл .env не найден в $target_dir${NC}"
     fi
 
-    read -r -p "Нажмите Enter для продолжения..."
+    pause_menu
 }
 
 uninstall_project() {
@@ -873,7 +887,7 @@ uninstall_project() {
     fi
     local conf_idx
     conf_idx=$(tui_select "Вы действительно хотите полностью удалить проект?" 0 \
-        "Отмена (не удалять)" \
+        "Отмена (вернуться в главное меню)" \
         "Да, полностью удалить всё с сервера")
 
     if [ "$conf_idx" -eq 1 ]; then
@@ -889,7 +903,7 @@ uninstall_project() {
             case "$target_dir" in
                 /|/root|/home|/opt|/var|/usr|/etc|/bin|/sbin|/tmp)
                     echo -e "${YELLOW}[!] Каталог $target_dir является системным. Удаляются только файлы проекта...${NC}"
-                    rm -f "$target_dir/compose.yaml" "$target_dir/.env" "$target_dir/.env.backup" "$target_dir/.sync.lock" 2>/dev/null || true
+                    rm -f "$target_dir/compose.yaml" "$target_dir/docker-compose.yml" "$target_dir/.env" "$target_dir/.env.backup" "$target_dir/.sync.lock" 2>/dev/null || true
                     rm -rf "$target_dir/custom_geo" 2>/dev/null || true
                     ;;
                 *)
@@ -899,7 +913,7 @@ uninstall_project() {
                         rm -rf "$target_dir"
                     else
                         echo -e "${YELLOW}[!] В каталоге $target_dir не обнаружен маркер проекта. Удаляются только файлы проекта...${NC}"
-                        rm -f "$target_dir/compose.yaml" "$target_dir/.env" "$target_dir/.env.backup" 2>/dev/null || true
+                        rm -f "$target_dir/compose.yaml" "$target_dir/docker-compose.yml" "$target_dir/.env" "$target_dir/.env.backup" 2>/dev/null || true
                     fi
                     ;;
             esac
@@ -910,8 +924,9 @@ uninstall_project() {
         echo -e "${GREEN}[+] Проект полностью удалён с сервера.${NC}"
         exit 0
     else
-        echo -e "${DIM}Удаление отменено.${NC}"
-        exit 0
+        echo -e "\n${GREEN}[+] Удаление отменено. Возврат в меню...${NC}"
+        sleep 1
+        return 0
     fi
 }
 
@@ -1639,7 +1654,7 @@ main_menu() {
         case "$menu_idx" in
             0) run_sync_now ;;
             1) show_links ;;
-            2) show_proxy_snippets; read -r -p "Нажмите Enter для возврата в меню..." ;;
+            2) show_proxy_snippets; pause_menu ;;
             3) configure_remnawave ;;
             4) configure_telegram ;;
             5) install_wizard ;;
