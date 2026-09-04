@@ -165,21 +165,21 @@ tui_select() {
             if [ "${is_header[v]}" -eq 1 ]; then
                 local title="${visual_items[v]#HEADER:}"
                 local title_len=${#title}
-                local right_dashes_count=$(( 52 - title_len ))
+                local right_dashes_count=$(( 51 - title_len ))
                 [ "$right_dashes_count" -lt 3 ] && right_dashes_count=3
                 local right_dashes=""
                 for ((d=0; d<right_dashes_count; d++)); do
                     right_dashes="${right_dashes}─"
                 done
-                printf "  \033[1;34m── %s %s\033[0m\n" "$title" "$right_dashes" >&2
+                printf "  \033[0;36m── \033[1;37m%s \033[0;36m%s\033[0m\n" "$title" "$right_dashes" >&2
             else
                 local num="${action_num[v]}"
                 local act_idx="${visual_to_action[v]}"
                 local text="${visual_items[v]}"
                 if [ "$act_idx" -eq "$selected" ]; then
-                    printf "  \033[1;36m▸ ${num_fmt}) \033[1;36m%s\033[0m\n" "$num" "$text" >&2
+                    printf "  \033[1;36m▸ \033[1;37m${num_fmt})\033[1;36m %s\033[0m\n" "$num" "$text" >&2
                 else
-                    printf "    \033[0;36m${num_fmt})\033[0;37m %s\033[0m\n" "$num" "$text" >&2
+                    printf "    \033[2m${num_fmt})\033[0m \033[0;37m%s\033[0m\n" "$num" "$text" >&2
                 fi
             fi
         done
@@ -371,10 +371,31 @@ detect_or_ask_language() {
 print_header() {
     clear || true
     echo -e "${CYAN}${BOLD}"
-    echo "==============================================================================="
-    echo "                      * GEO ROUTING SERVER MANAGER                            "
-    echo "==============================================================================="
+    if [ "${UI_LANG:-ru}" = "en" ]; then
+        echo "╭─────────────────────────────────────────────────────────────────────────────╮"
+        echo "│                         GEO ROUTING SERVER MANAGER                          │"
+        echo "│           Automated routing rules & geo-databases for Happ & Incy           │"
+        echo "╰─────────────────────────────────────────────────────────────────────────────╯"
+    else
+        echo "╭─────────────────────────────────────────────────────────────────────────────╮"
+        echo "│                         GEO ROUTING SERVER MANAGER                          │"
+        echo "│            Автоматическая маршрутизация и гео-базы для Happ & Incy          │"
+        echo "╰─────────────────────────────────────────────────────────────────────────────╯"
+    fi
     echo -e "${NC}"
+}
+
+ui_step() {
+    local step_str="$1"
+    local title="$2"
+    local total_len=75
+    local prefix="  ◆ [Шаг $step_str] $title "
+    local pre_len=${#prefix}
+    local dashes_cnt=$(( total_len - pre_len ))
+    [ "$dashes_cnt" -lt 3 ] && dashes_cnt=3
+    local dashes=""
+    for ((d=0; d<dashes_cnt; d++)); do dashes="${dashes}─"; done
+    echo -e "\n\033[1;36m${prefix}\033[0;36m${dashes}\033[0m"
 }
 
 check_root() {
@@ -1022,19 +1043,19 @@ install_wizard() {
     existing_detected="$(detect_existing_dir)"
     local current_suggested_dir="${existing_detected:-/opt/geo-routing-server}"
 
-    echo -e "${BOLD}--- [Шаг 1] Каталог установки ---${NC}"
+    ui_step "1/8" "Каталог установки проекта"
     if [ -n "$existing_detected" ]; then
-        echo -e "${YELLOW}[i] Найдена существующая установка: ${BOLD}$existing_detected${NC}"
+        echo -e "  ${YELLOW}[i] Обнаружена существующая установка: ${BOLD}$existing_detected${NC}"
     fi
-    echo -e "${DIM}Папка, куда будут сохранены файлы compose.yaml и .env${NC}"
-    read -r -p "Укажите свой путь или нажмите Enter по умолчанию [${current_suggested_dir}]: " input_dir
+    echo -e "  ${DIM}Каталог, куда будут сохранены файлы compose.yaml и .env${NC}"
+    read -r -p "  ▸ Путь [Enter = ${current_suggested_dir}]: " input_dir
     input_dir="$(echo "$input_dir" | tr -d '\r' | sed 's/[^a-zA-Z0-9_\/\.-]//g')"
     INSTALL_DIR="${input_dir:-$current_suggested_dir}"
     INSTALL_DIR="$(echo "$INSTALL_DIR" | tr -d '\r' | sed 's/[^a-zA-Z0-9_\/\.-]//g')"
     mkdir -p "$INSTALL_DIR"
     chmod 755 "$INSTALL_DIR" 2>/dev/null || true
     save_install_dir "$INSTALL_DIR"
-    echo -e "${GREEN}[+] Каталог: $INSTALL_DIR${NC}\n"
+    echo -e "  ${GREEN}[+] Каталог сохранён: ${BOLD}$INSTALL_DIR${NC}\n"
 
     # Считываем текущие настройки из существующего .env (в целевой папке или ранее обнаруженной)
     local prev_domain="geo.example.com"
@@ -1082,7 +1103,7 @@ install_wizard() {
     # ────────────────────────────────────────────────────────────────────────
     # ШАГ 2: Выбор сценария работы сервера
     # ────────────────────────────────────────────────────────────────────────
-    echo -e "${BOLD}--- [Шаг 2] Сценарий работы ---${NC}"
+    ui_step "2/8" "Сценарий и режим работы сервера"
     local default_role_idx=0
     case "$prev_clients" in
         "HAPP_DEEPLINK") default_role_idx=3 ;;
@@ -1159,13 +1180,13 @@ install_wizard() {
             config_remna=true
             ;;
     esac
-    echo -e "${GREEN}[+] Режим: $ENABLED_CLIENTS${NC}\n"
+    echo -e "  ${GREEN}[+] Выбранный режим: ${BOLD}$ENABLED_CLIENTS${NC}\n"
 
     # Если базы на внешнем сервере (варианты 4 и 5)
     if [ "$server_role" = "4" ] || [ "$server_role" = "5" ]; then
-        local prompt_str="Адрес сервера с базами (например, https://geo.example.com/секретный_токен): "
+        local prompt_str="  ▸ Адрес сервера с базами (например, https://geo.example.com/секретный_токен): "
         if [ -n "$prev_public_geo" ]; then
-            prompt_str="Адрес сервера с базами [${prev_public_geo}]: "
+            prompt_str="  ▸ Адрес сервера с базами [${prev_public_geo}]: "
         fi
 
         while true; do
@@ -1227,45 +1248,46 @@ install_wizard() {
     HTTP_PORT="8080"
 
     if [ "$NEEDS_PUBLIC_DOMAIN" = true ]; then
-        echo -e "${BOLD}--- [Шаг 3] Публичный домен для HTTPS ---${NC}"
-        read -r -p "Введите домен [${prev_domain:-geo.example.com}]: " input_domain
+        ui_step "3/8" "Публичный домен для HTTPS"
+        echo -e "  ${DIM}Имя хоста, по которому клиенты будут скачивать правила и базы${NC}"
+        read -r -p "  ▸ Домен [${prev_domain:-geo.example.com}]: " input_domain
         DOMAIN="${input_domain:-${prev_domain:-geo.example.com}}"
         DOMAIN="$(echo "$DOMAIN" | tr -d '[:space:]' | sed -e 's~^https\?://~~' -e 's~/*$~~')"
-        echo -e "${GREEN}[+] Домен: $DOMAIN${NC}\n"
+        echo -e "  ${GREEN}[+] Домен: ${BOLD}$DOMAIN${NC}\n"
 
         # ШАГ 4: Токен
-        echo -e "${BOLD}--- [Шаг 4] Секретный URL-токен ---${NC}"
+        ui_step "4/8" "Секретный URL-токен авторизации"
         local auto_token
         if [ -n "$prev_token" ] && [ "$prev_token" != "local" ]; then
             auto_token="$prev_token"
-            echo -e "Текущий токен: ${CYAN}${BOLD}${auto_token}${NC}"
+            echo -e "  Текущий токен: ${CYAN}${BOLD}${auto_token}${NC}"
         else
             auto_token="$(openssl rand -hex 16)"
-            echo -e "Сгенерирован токен: ${CYAN}${BOLD}${auto_token}${NC}"
+            echo -e "  Сгенерирован токен: ${CYAN}${BOLD}${auto_token}${NC}"
         fi
         
-        read -r -p "Секретный токен [${auto_token}]: " input_token
+        read -r -p "  ▸ Секретный токен [${auto_token}]: " input_token
         ROUTING_TOKEN="${input_token:-$auto_token}"
         ROUTING_TOKEN="$(echo "$ROUTING_TOKEN" | tr -d '[:space:]/\\')"
         while [[ ! "$ROUTING_TOKEN" =~ ^[A-Za-z0-9_-]+$ ]] || [ "${#ROUTING_TOKEN}" -lt 8 ]; do
-            echo -e "${RED}[!] Токен должен быть длиной не менее 8 символов (буквы, цифры, дефис, подчеркивание)${NC}"
-            read -r -p "Введите корректный токен [${auto_token}]: " input_token
+            echo -e "  ${RED}[!] Токен должен быть длиной не менее 8 символов (буквы, цифры, дефис, подчеркивание)${NC}"
+            read -r -p "  ▸ Введите корректный токен [${auto_token}]: " input_token
             ROUTING_TOKEN="${input_token:-$auto_token}"
             ROUTING_TOKEN="$(echo "$ROUTING_TOKEN" | tr -d '[:space:]/\\')"
         done
-        echo -e "${GREEN}[+] Токен сохранён.${NC}"
-        echo -e "${CYAN}${BOLD}[i] Базовый URL:${NC} ${CYAN}https://${DOMAIN}/${ROUTING_TOKEN}${NC}\n"
+        echo -e "  ${GREEN}[+] Токен сохранён.${NC}"
+        echo -e "  ${CYAN}${BOLD}[i] Базовый URL:${NC} ${CYAN}https://${DOMAIN}/${ROUTING_TOKEN}${NC}\n"
 
         # ШАГ 5: Локальный порт
-        echo -e "${BOLD}--- [Шаг 5] Локальный порт веб-сервера ---${NC}"
+        ui_step "5/8" "Локальный порт веб-сервера"
         local suggested_port="${prev_port:-8080}"
         if is_port_in_use "$suggested_port"; then
             local free_p
             free_p="$(find_free_port 8081)"
-            echo -e "${YELLOW}[!] Порт $suggested_port занят. Предлагаем свободный порт: ${BOLD}${free_p}${NC}"
+            echo -e "  ${YELLOW}[!] Порт $suggested_port занят. Предлагаем свободный порт: ${BOLD}${free_p}${NC}"
             suggested_port="$free_p"
         fi
-        read -r -p "Порт [${suggested_port}]: " input_port
+        read -r -p "  ▸ Порт веб-сервера [${suggested_port}]: " input_port
         HTTP_PORT="${input_port:-$suggested_port}"
         while is_port_in_use "$HTTP_PORT"; do
             echo -e "${RED}[!] Порт $HTTP_PORT занят другим процессом!${NC}"
@@ -1288,7 +1310,7 @@ install_wizard() {
     # ────────────────────────────────────────────────────────────────────────
     REMNA_BLOCK=""
     if [ "$config_remna" = true ]; then
-        echo -e "${BOLD}--- [Шаг 6] Прямая интеграция с Remnawave ---${NC}"
+        ui_step "6/8" "Прямая интеграция с Remnawave API"
 
         local remna_proceed=true
         if [ "$server_role" != "1" ] && [ "$server_role" != "4" ]; then
@@ -1299,10 +1321,10 @@ install_wizard() {
 
         if [ "$remna_proceed" = true ]; then
             if detect_remnawave_running; then
-                echo -e "${CYAN}[i] Обнаружен локальный контейнер Remnawave в Docker.${NC}"
+                echo -e "  ${CYAN}[i] Обнаружен локальный контейнер Remnawave в Docker.${NC}"
             fi
 
-            read -r -p "URL API панели Remnawave [${prev_remna_base:-http://remnawave:3000/api}]: " r_base
+            read -r -p "  ▸ URL API панели Remnawave [${prev_remna_base:-http://remnawave:3000/api}]: " r_base
             r_base="${r_base:-${prev_remna_base:-http://remnawave:3000/api}}"
 
             local r_token
@@ -1314,7 +1336,7 @@ install_wizard() {
             fi
             local default_sq_count="${existing_squads:-1}"
             [ "$default_sq_count" -le 0 ] && default_sq_count=1
-            read -r -p "Сколько сквадов привязать? [${default_sq_count}]: " r_count
+            read -r -p "  ▸ Сколько сквадов привязать? [${default_sq_count}]: " r_count
             r_count="${r_count:-$default_sq_count}"
             
             REMNA_BLOCK="REMNAWAVE_BASE_URL=${r_base}
@@ -1410,7 +1432,7 @@ CLOUDFLARE_ZERO_TRUST_CLIENT_SECRET=${prev_cf_secret}
     fi
 
     if [ "$NEEDS_NETWORK" = true ]; then
-        echo -e "${BOLD}--- [Шаг 7] Подключение к Docker-сети ---${NC}"
+        ui_step "7/8" "Подключение к Docker-сети"
         
         # Получаем список сетей Docker
         local detected_nets
@@ -1461,7 +1483,7 @@ CLOUDFLARE_ZERO_TRUST_CLIENT_SECRET=${prev_cf_secret}
     # ────────────────────────────────────────────────────────────────────────
     # ШАГ 8: Расписание обновления (Cron)
     # ────────────────────────────────────────────────────────────────────────
-    echo -e "${BOLD}--- [Шаг 8] Расписание автоматического обновления ---${NC}"
+    ui_step "8/8" "Расписание автоматического обновления"
     local def_sched_idx=0
     case "${prev_schedule:-0 10 * * *}" in
         "0 */6 * * *") def_sched_idx=1 ;;
@@ -1482,17 +1504,17 @@ CLOUDFLARE_ZERO_TRUST_CLIENT_SECRET=${prev_cf_secret}
         1) SCHEDULE="0 */6 * * *" ;;
         2) SCHEDULE="0 */12 * * *" ;;
         3)
-            read -r -p "Введите cron-выражение [${prev_schedule:-0 10 * * *}]: " custom_sched
+            read -r -p "  ▸ Введите cron-выражение [${prev_schedule:-0 10 * * *}]: " custom_sched
             SCHEDULE="${custom_sched:-${prev_schedule:-0 10 * * *}}"
             ;;
         *) SCHEDULE="0 10 * * *" ;;
     esac
-    echo -e "${GREEN}[+] Расписание: $SCHEDULE${NC}\n"
+    echo -e "  ${GREEN}[+] Расписание: ${BOLD}$SCHEDULE${NC}\n"
 
     # ────────────────────────────────────────────────────────────────────────
     # ШАГ 9: Telegram (опционально)
     # ────────────────────────────────────────────────────────────────────────
-    echo -e "${BOLD}--- [Последний шаг] Telegram-уведомления ---${NC}"
+    ui_step "Дополнительно" "Telegram-уведомления"
     local def_tg_idx=0
     [ -n "$prev_tg_token" ] && def_tg_idx=1
 
@@ -1509,10 +1531,10 @@ CLOUDFLARE_ZERO_TRUST_CLIENT_SECRET=${prev_cf_secret}
     if [ "$tg_opt_idx" -eq 1 ]; then
         TG_BOT_TOKEN=$(tui_secret "TELEGRAM_BOT_TOKEN" "$prev_tg_token")
         
-        read -r -p "TELEGRAM_CHAT_ID [${prev_tg_chat:-пропустить}]: " input_chat
+        read -r -p "  ▸ TELEGRAM_CHAT_ID [${prev_tg_chat:-пропустить}]: " input_chat
         TG_CHAT_ID="${input_chat:-$prev_tg_chat}"
 
-        read -r -p "TELEGRAM_THREAD_ID (ID темы) [${prev_tg_thread:-нет}]: " input_thread
+        read -r -p "  ▸ TELEGRAM_THREAD_ID (ID темы) [${prev_tg_thread:-нет}]: " input_thread
         TG_THREAD_ID="${input_thread:-$prev_tg_thread}"
 
         local tg_succ_idx
@@ -1653,11 +1675,11 @@ EOF
         fi
     done
 
-    echo -e "\n${GREEN}${BOLD}===============================================================================${NC}"
-    echo -e "${GREEN}${BOLD}  НАСТРОЙКА УСПЕШНО ЗАВЕРШЕНА!${NC}"
-    echo -e "${GREEN}${BOLD}===============================================================================${NC}"
-    echo -e "Каталог проекта: ${CYAN}${INSTALL_DIR}${NC}"
-    echo -e "Быстрый вызов меню в терминале: команда ${CYAN}${BOLD}geo-server${NC} (или ${CYAN}${BOLD}geoserver${NC})\n"
+    echo -e "\n\033[1;32m╭─────────────────────────────────────────────────────────────────────────────╮\033[0m"
+    echo -e "\033[1;32m│                     ✓ НАСТРОЙКА УСПЕШНО ЗАВЕРШЕНА!                          │\033[0m"
+    echo -e "\033[1;32m╰─────────────────────────────────────────────────────────────────────────────╯\033[0m"
+    echo -e "  Каталог проекта:               ${CYAN}${BOLD}${INSTALL_DIR}${NC}"
+    echo -e "  Команда управления из консоли: ${CYAN}${BOLD}geoserver${NC} (или ${CYAN}${BOLD}geo-server${NC})\n"
     
     if [ "$NEEDS_PUBLIC_DOMAIN" = true ]; then
         show_proxy_snippets
