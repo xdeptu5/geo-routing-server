@@ -1682,9 +1682,97 @@ main_menu() {
             status_msg="${RED}[-] Остановлен или не найден${NC}"
         fi
 
+        local env_file="$target_dir/.env"
+        local modules_ru="—"
+        local modules_en="—"
+        local integrations_ru=""
+        local integrations_en=""
+        local domain_val=""
+        local is_local=0
+
+        if [ -f "$env_file" ]; then
+            local clients
+            clients=$(grep "^ENABLED_CLIENTS=" "$env_file" | cut -d'=' -f2- || echo "")
+            local ext_geo
+            ext_geo=$(grep "^PUBLIC_GEO_BASE_URL=" "$env_file" | cut -d'=' -f2- || echo "")
+            domain_val=$(grep "^DOMAIN=" "$env_file" | cut -d'=' -f2- || echo "")
+
+            if [ "$clients" = "HAPP_DEEPLINK" ] || [ "$clients" = "HAPP_LOCAL" ]; then
+                is_local=1
+                modules_ru="Happ (генератор для Remnawave)"
+                modules_en="Happ (Remnawave rule generator)"
+            elif [ "$clients" = "HAPP_GEO" ] || [ "$clients" = "INCY_GEO" ] || [ "$clients" = "HAPP_GEO,INCY_GEO" ]; then
+                modules_ru="Раздача GeoIP / GeoSite баз"
+                modules_en="GeoIP / GeoSite binary distribution"
+            elif [ "$clients" = "HAPP" ]; then
+                modules_ru="Happ (диплинки) + Раздача Geo-баз"
+                modules_en="Happ (deeplinks) + Geo-databases"
+            elif [ "$clients" = "INCY" ]; then
+                if [ -n "$ext_geo" ]; then
+                    modules_ru="Incy (Autorouting, внешние Geo-базы)"
+                    modules_en="Incy (Autorouting, external geo)"
+                else
+                    modules_ru="Incy (Autorouting) + Раздача Geo-баз"
+                    modules_en="Incy (Autorouting) + Geo-databases"
+                fi
+            elif [[ "$clients" =~ HAPP ]] && [[ "$clients" =~ INCY ]]; then
+                if [ -n "$ext_geo" ]; then
+                    modules_ru="Happ + Incy (внешние Geo-базы)"
+                    modules_en="Happ + Incy (external geo)"
+                else
+                    modules_ru="Happ + Incy + Раздача Geo-баз"
+                    modules_en="Happ + Incy + Geo-databases"
+                fi
+            elif [ -n "$clients" ]; then
+                modules_ru="$clients"
+                modules_en="$clients"
+            fi
+
+            local remna_base
+            remna_base=$(grep "^REMNAWAVE_BASE_URL=" "$env_file" | cut -d'=' -f2- || echo "")
+            local remna_tok
+            remna_tok=$(grep "^REMNAWAVE_TOKEN=" "$env_file" | cut -d'=' -f2- || echo "")
+            local int_ru=()
+            local int_en=()
+
+            if [ -n "$remna_base" ] && [ -n "$remna_tok" ]; then
+                local sq_cnt=0
+                sq_cnt=$(grep -c "^REMNAWAVE_SQUAD_.*_UUID=" "$env_file" || true)
+                if [ "$sq_cnt" -gt 0 ]; then
+                    int_ru+=("Remnawave ($sq_cnt сквад.)")
+                    int_en+=("Remnawave ($sq_cnt squads)")
+                else
+                    int_ru+=("Remnawave API")
+                    int_en+=("Remnawave API")
+                fi
+            fi
+
+            local tg_tok
+            tg_tok=$(grep "^TELEGRAM_BOT_TOKEN=" "$env_file" | cut -d'=' -f2- || echo "")
+            local tg_chat
+            tg_chat=$(grep "^TELEGRAM_CHAT_ID=" "$env_file" | cut -d'=' -f2- || echo "")
+            if [ -n "$tg_tok" ] && [ -n "$tg_chat" ]; then
+                int_ru+=("Telegram")
+                int_en+=("Telegram")
+            fi
+
+            if [ ${#int_ru[@]} -gt 0 ]; then
+                integrations_ru=$(IFS=" • "; echo "${int_ru[*]}")
+                integrations_en=$(IFS=" • "; echo "${int_en[*]}")
+            fi
+        fi
+
         if [ "${UI_LANG:-ru}" = "en" ]; then
             echo -e "Project directory: ${CYAN}$target_dir${NC}"
-            echo -e "Container status:  $status_msg\n"
+            echo -e "Container status:  $status_msg"
+            echo -e "Active modules:    ${GREEN}$modules_en${NC}"
+            if [ "$is_local" -eq 0 ] && [ -n "$domain_val" ] && [ "$domain_val" != "geo.example.com" ]; then
+                echo -e "Public domain:     ${CYAN}$domain_val${NC}"
+            fi
+            if [ -n "$integrations_en" ]; then
+                echo -e "Integrations:      ${YELLOW}$integrations_en${NC}"
+            fi
+            echo ""
 
             local en_options=(
                 "HEADER:General & Information"
@@ -1711,7 +1799,15 @@ main_menu() {
             menu_idx=$(tui_select "Choose an action:" 0 "${en_options[@]}")
         else
             echo -e "Каталог проекта:  ${CYAN}$target_dir${NC}"
-            echo -e "Статус сервера:   $status_msg\n"
+            echo -e "Статус сервера:   $status_msg"
+            echo -e "Активные модули:  ${GREEN}$modules_ru${NC}"
+            if [ "$is_local" -eq 0 ] && [ -n "$domain_val" ] && [ "$domain_val" != "geo.example.com" ]; then
+                echo -e "Публичный домен:  ${CYAN}$domain_val${NC}"
+            fi
+            if [ -n "$integrations_ru" ]; then
+                echo -e "Интеграции:       ${YELLOW}$integrations_ru${NC}"
+            fi
+            echo ""
 
             local ru_options=(
                 "HEADER:Основное и ссылки"
