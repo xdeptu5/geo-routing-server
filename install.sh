@@ -104,10 +104,10 @@ tui_select() {
     fi
 
     # Скрываем курсор
-    tput civis 2>/dev/null || printf "\033[?25l" >&2
+    tput civis >&2 2>/dev/null || printf "\033[?25l" >&2
 
     cleanup_tui_cursor() {
-        tput cnorm 2>/dev/null || printf "\033[?25h" >&2
+        tput cnorm >&2 2>/dev/null || printf "\033[?25h" >&2
     }
     trap cleanup_tui_cursor EXIT INT TERM
 
@@ -187,6 +187,7 @@ tui_select() {
     cleanup_tui_cursor
     trap - EXIT INT TERM
 
+    selected="$(echo "$selected" | tr -cd '0-9')"
     echo "$selected"
 }
 
@@ -807,12 +808,16 @@ EOF
 uninstall_project() {
     local target_dir
     target_dir="$(get_install_dir)"
-    echo -e "${RED}${BOLD}[!] ВНИМАНИЕ: Вы действительно хотите удалить Geo Routing Server? [y/N]${NC}"
+    echo -e "${RED}${BOLD}[!] ВНИМАНИЕ: Удаление Geo Routing Server${NC}"
     if [ -n "$target_dir" ]; then
-        echo -e "${DIM}Будут удалены: контейнер, тома данных, каталог $target_dir и команда geo-server.${NC}"
+        echo -e "${DIM}Будут удалены: контейнер, тома данных, каталог $target_dir и команда geo-server.${NC}\n"
     fi
-    read -r -p "> " confirm
-    if [[ "$confirm" =~ ^[YyДд]$ ]]; then
+    local conf_idx
+    conf_idx=$(tui_select "Вы действительно хотите полностью удалить проект?" 0 \
+        "Отмена (не удалять)" \
+        "Да, полностью удалить всё с сервера")
+
+    if [ "$conf_idx" -eq 1 ]; then
         echo -e "${YELLOW}[*] Остановка и удаление контейнеров...${NC}"
         if [ -n "$target_dir" ] && [ -d "$target_dir" ]; then
             (cd "$target_dir" && docker compose down -v --remove-orphans 2>/dev/null) || true
@@ -846,8 +851,8 @@ uninstall_project() {
         echo -e "${GREEN}[+] Проект полностью удалён с сервера.${NC}"
         exit 0
     else
-        echo "Удаление отменено."
-        sleep 1
+        echo -e "${DIM}Удаление отменено.${NC}"
+        exit 0
     fi
 }
 
@@ -1651,13 +1656,17 @@ main() {
                 "Полностью удалить проект с сервера")
         fi
         case "$init_idx" in
+            0) install_wizard ;;
             1) 
                 if [ -n "$target_dir" ] && [ "$target_dir" != "/" ] && [ "$target_dir" != "/root" ] && [ -d "$target_dir" ]; then
                     rm -rf "$target_dir"
                 fi
                 install_wizard
                 ;;
-            2) uninstall_project ;;
+            2) 
+                uninstall_project
+                exit 0
+                ;;
             *) install_wizard ;;
         esac
     else
