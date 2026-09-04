@@ -22,11 +22,15 @@ class TelegramNotifier:
             return False
             
         url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+        # Обрезаем сообщение до 4000 символов для соблюдения лимитов Telegram API
+        safe_text = text if len(text) <= 4000 else text[:3900] + "\n\n<i>[...текст обрезан из-за лимита Telegram...]</i>"
+        
         payload: Dict[str, Any] = {
             "chat_id": chat_id,
-            "text": text,
+            "text": safe_text,
             "parse_mode": "HTML",
-            "disable_web_page_preview": True
+            "disable_web_page_preview": True,
+            "link_preview_options": {"is_disabled": True}
         }
         
         # Поддержка топиков/тем в супергруппах
@@ -52,10 +56,11 @@ class TelegramNotifier:
     def alert_failure(cls, error_msg: str) -> None:
         """Отправляет алерт при ошибке синхронизации."""
         now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        safe_domain = html.escape(Config.DOMAIN)
         safe_msg = html.escape(str(error_msg))
         text = (
             f"⚠️ <b>[Geo Routing Server] Ошибка синхронизации!</b>\n\n"
-            f"🌐 <b>Домен:</b> <code>{Config.DOMAIN}</code>\n"
+            f"🌐 <b>Домен:</b> <code>{safe_domain}</code>\n"
             f"⏱ <b>Время:</b> {now_str}\n\n"
             f"❌ <b>Причина ошибки:</b>\n"
             f"<code>{safe_msg}</code>\n\n"
@@ -74,7 +79,8 @@ class TelegramNotifier:
             return
             
         now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-        base_url = Config.get_base_url(token)
+        safe_domain = html.escape(Config.DOMAIN)
+        base_url = html.escape(Config.get_base_url(token))
         
         # Собираем информацию о geo-файлах
         geo_lines = []
@@ -83,7 +89,8 @@ class TelegramNotifier:
                 size_kb = round(info.size_bytes / 1024, 1)
                 short_hash = info.sha256[:12]
                 status_icon = "🆕" if info.is_updated else "▫️"
-                geo_lines.append(f"{status_icon} <code>{key}</code>: {size_kb} KB (<code>{short_hash}...</code>)")
+                safe_key = html.escape(key)
+                geo_lines.append(f"{status_icon} <code>{safe_key}</code>: {size_kb} KB (<code>{short_hash}...</code>)")
                 
         geo_block = "\n".join(geo_lines) if geo_lines else "—"
         
@@ -96,7 +103,7 @@ class TelegramNotifier:
         
         text = (
             f"🚀 <b>[Geo Routing Server] Вышли обновленные базы!</b>\n\n"
-            f"🌐 <b>Домен:</b> <code>{Config.DOMAIN}</code>\n"
+            f"🌐 <b>Домен:</b> <code>{safe_domain}</code>\n"
             f"⏱ <b>Время:</b> {now_str}\n\n"
             f"📊 <b>Geo-базы:</b>\n{geo_block}\n\n"
             f"{autorouting_block}"

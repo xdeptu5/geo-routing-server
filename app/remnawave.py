@@ -72,12 +72,19 @@ class RemnawaveSync:
             logger.error(f"[Remnawave API] Connection error on {method} {url}: {e}")
             return None
 
+    UUID_REGEX = re.compile(r"^[A-Za-z0-9_-]+$")
+
     @classmethod
     def load_squad_configs(cls) -> List[Dict[str, str]]:
         """Загружает список сконфигурированных сквадов из переменных окружения."""
         squads = []
-        i = 1
-        while True:
+        found_indices = set()
+        for k in os.environ:
+            m = re.match(r"^(?:REMNAWAVE_)?SQUAD_(\d+)_UUID$", k)
+            if m:
+                found_indices.add(int(m.group(1)))
+        
+        for i in sorted(found_indices):
             uuid = os.getenv(f"REMNAWAVE_SQUAD_{i}_UUID", "").strip() or os.getenv(f"SQUAD_{i}_UUID", "").strip()
             rule = os.getenv(f"REMNAWAVE_SQUAD_{i}_RULE", "").strip() or os.getenv(f"SQUAD_{i}_RULE", "").strip()
             
@@ -87,14 +94,17 @@ class RemnawaveSync:
                 rule = old_url.split("/")[-1].replace(".DEEPLINK", ".JSON").replace(".json", ".JSON")
             
             if not uuid:
-                break
+                continue
                 
-            rule = rule or "JSONSUB.JSON"
+            if not cls.UUID_REGEX.match(uuid):
+                logger.warning(f"[Remnawave] Skipping invalid UUID format for squad #{i}: '{uuid}'")
+                continue
+                
+            rule = rule.split("/")[-1] if rule else "JSONSUB.JSON"
             squads.append({
-                "uuid": uuid,
+                "uuid": uuid.lower(),
                 "rule": rule.upper()
             })
-            i += 1
         return squads
 
     @classmethod

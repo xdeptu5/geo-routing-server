@@ -43,9 +43,12 @@ class GeoManager:
                 return self._memory_cache[custom_url]
             logger.info(f"  Downloading {geo_type} for {client} from custom URL: {custom_url}")
             url_hash = hashlib.sha256(custom_url.encode("utf-8")).hexdigest()[:8]
-            data = self.downloader.fetch(custom_url, f"geo_{geo_type}_custom_{url_hash}", kind="binary")
-            self._memory_cache[custom_url] = data
-            return data
+            try:
+                data = self.downloader.fetch(custom_url, f"geo_{geo_type}_custom_{url_hash}", kind="binary")
+                self._memory_cache[custom_url] = data
+                return data
+            except DownloadError as e:
+                logger.warning(f"  Failed to download {geo_type} from custom URL ({e}), falling back to repository/fallback...")
 
         # 3. Извлечение URL из DEFAULT.JSON
         url = None

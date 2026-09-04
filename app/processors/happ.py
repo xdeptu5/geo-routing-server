@@ -57,10 +57,12 @@ class HappProcessor(BaseProcessor):
             for sq in squads:
                 r = sq.get("rule", "").strip().upper()
                 if r:
-                    configured_rules.add(r if r.endswith(".JSON") else f"{r}.JSON")
+                    r_name = r.split("/")[-1]
+                    configured_rules.add(r_name if r_name.endswith(".JSON") else f"{r_name}.JSON")
             global_rule = os.getenv("REMNAWAVE_GLOBAL_RULE", "").strip().upper()
             if global_rule:
-                configured_rules.add(global_rule if global_rule.endswith(".JSON") else f"{global_rule}.JSON")
+                g_name = global_rule.split("/")[-1]
+                configured_rules.add(g_name if g_name.endswith(".JSON") else f"{g_name}.JSON")
 
             if configured_rules:
                 filtered = [f for f in config_files if f.upper() in configured_rules]

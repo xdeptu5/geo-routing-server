@@ -23,6 +23,11 @@ handle_error() {
     local code=$?
     local line=$1
     [ "$code" -eq 0 ] && return
+    if [ "$code" -eq 130 ] || [ "$code" -eq 143 ]; then
+        tput cnorm 2>/dev/null || true
+        echo ""
+        exit "$code"
+    fi
     trap '' ERR
 
     echo -e "\n${RED}${BOLD}===============================================================================${NC}"
@@ -758,10 +763,15 @@ update_script_only() {
     echo -e "${BLUE}[*] Скачивание последней версии скрипта управления из GitHub...${NC}"
     
     if curl -fsSL "https://raw.githubusercontent.com/xdeptu5/geo-routing-server/main/install.sh" -o "$target_dir/install.sh.new" 2>/dev/null; then
-        mv "$target_dir/install.sh.new" "$target_dir/install.sh"
-        chmod +x "$target_dir/install.sh"
-        create_cli_shortcut "$target_dir"
-        echo -e "${GREEN}[+] Скрипт управления (меню и CLI) успешно обновлён!${NC}\n"
+        if bash -n "$target_dir/install.sh.new" 2>/dev/null; then
+            mv "$target_dir/install.sh.new" "$target_dir/install.sh"
+            chmod +x "$target_dir/install.sh"
+            create_cli_shortcut "$target_dir"
+            echo -e "${GREEN}[+] Скрипт управления (меню и CLI) успешно обновлён!${NC}\n"
+        else
+            rm -f "$target_dir/install.sh.new"
+            echo -e "${RED}[!] Скачанный скрипт содержит ошибки синтаксиса. Обновление отменено.${NC}\n"
+        fi
     else
         echo -e "${RED}[!] Не удалось загрузить скрипт. Проверьте интернет-соединение.${NC}\n"
     fi
@@ -774,15 +784,35 @@ update_project() {
     target_dir="$(get_install_dir)"
     echo -e "${BLUE}[*] Обновление Docker-образа сервера до последней версии...${NC}"
     
-    # Также обновляем сам скрипт
+    # Также обновляем сам скрипт с проверкой целостности
     if curl -fsSL "https://raw.githubusercontent.com/xdeptu5/geo-routing-server/main/install.sh" -o "$target_dir/install.sh.new" 2>/dev/null; then
-        mv "$target_dir/install.sh.new" "$target_dir/install.sh"
-        chmod +x "$target_dir/install.sh"
-        create_cli_shortcut "$target_dir"
+        if bash -n "$target_dir/install.sh.new" 2>/dev/null; then
+            mv "$target_dir/install.sh.new" "$target_dir/install.sh"
+            chmod +x "$target_dir/install.sh"
+            create_cli_shortcut "$target_dir"
+        else
+            rm -f "$target_dir/install.sh.new"
+        fi
     fi
 
+    # Удаляем устаревший симлинк, чтобы избежать конфликтов и предупреждений compose
+    rm -f "$target_dir/docker-compose.yml" 2>/dev/null || true
+
     cd "$target_dir"
-    docker compose pull
+    set +e
+    local pull_out
+    pull_out=$(docker compose pull 2>&1)
+    local pull_status=$?
+    set -e
+
+    if [ "$pull_status" -ne 0 ]; then
+        echo -e "\n${RED}[!] Ошибка при загрузке нового Docker-образа:${NC}"
+        echo "$pull_out"
+        echo -e "\n${YELLOW}[i] Текущий контейнер продолжает работу без изменений.${NC}"
+        pause_menu
+        return 1
+    fi
+
     docker compose up -d
     echo -e "${GREEN}[+] Контейнер и скрипт успешно обновлены до последней версии!${NC}\n"
     read -r -p "Нажмите Enter для перезапуска меню..."
@@ -1556,7 +1586,7 @@ services:
       - ./custom_geo:/app/custom_geo:ro
 ${networks_block}
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://127.0.0.1:80/health"]
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:80/health"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -1577,7 +1607,7 @@ EOF
     chmod 644 "$INSTALL_DIR/compose.yaml" 2>/dev/null || true
     chmod 644 "$INSTALL_DIR/.env" 2>/dev/null || true
     [ -f "$INSTALL_DIR/.env.backup" ] && chmod 600 "$INSTALL_DIR/.env.backup" 2>/dev/null || true
-    ln -sf compose.yaml "$INSTALL_DIR/docker-compose.yml" 2>/dev/null || true
+    rm -f "$INSTALL_DIR/docker-compose.yml" 2>/dev/null || true
 
     # Сохраняем скрипт установщика в каталог проекта для работы команды geo-server
     if [ -f "$0" ] && grep -q "Geo Routing Server" "$0" 2>/dev/null; then

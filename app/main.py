@@ -197,14 +197,20 @@ def main():
     ensure_internal_symlinks(Config.STORAGE_DIR, token)
     
     # Прямая нативная синхронизация с Remnawave API (если настроена)
+    remna_ok = True
     if RemnawaveSync.is_configured():
         if not RemnawaveSync.sync(token):
+            remna_ok = False
             logger.warning("[Remnawave] Synchronization with Remnawave API completed with errors!")
             TelegramNotifier.alert_failure("Remnawave API sync failed for one or more squads. Check container logs.")
     
-    logger.info("Synchronization completed successfully.")
-    print_summary_banner(token)
-    TelegramNotifier.notify_changes(token, Publisher.published_registry, Publisher.any_file_changed)
+    if remna_ok:
+        logger.info("Synchronization completed successfully.")
+        print_summary_banner(token)
+        TelegramNotifier.notify_changes(token, Publisher.published_registry, Publisher.any_file_changed)
+    else:
+        logger.warning("Synchronization completed with Remnawave warnings/errors.")
+        print_summary_banner(token)
 
 if __name__ == "__main__":
     main()

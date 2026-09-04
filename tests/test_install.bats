@@ -205,7 +205,7 @@ load_functions() {
     run bash -c "
         for f in app/config.py app/downloader.py app/notifier.py \
                   app/publisher.py app/remnawave.py app/main.py \
-                  app/processors/base.py app/processors/happ.py app/processors/incy.py; do
+                  app/processors/base.py app/processors/geo.py app/processors/happ.py app/processors/incy.py; do
             python3 -m py_compile \"$REPO_ROOT/\$f\" || exit 1
         done
     "

@@ -6,7 +6,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 RUN apk add --no-cache \
     python3 \
     nginx \
-    ca-certificates
+    ca-certificates \
+    curl
 
 WORKDIR /app
 

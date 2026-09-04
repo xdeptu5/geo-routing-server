@@ -4,6 +4,16 @@ set -eu
 : "${SCHEDULE:?SCHEDULE must be set}"
 SYNC_ON_START="${SYNC_ON_START:-true}"
 
+cleanup() {
+    echo "[geo-routing-server] Shutting down cleanly..."
+    if [ -n "${CRON_PID:-}" ]; then
+        kill -TERM "$CRON_PID" 2>/dev/null || true
+    fi
+    nginx -s quit 2>/dev/null || true
+    exit 0
+}
+trap cleanup SIGTERM SIGINT
+
 # Сохраняем переменные окружения для cron (BusyBox crond запускается с очищенным окружением)
 # Права 0600 исключают чтение секретных токенов другими непривилегированными процессами
 export -p > /etc/environment.sh
@@ -34,16 +44,6 @@ if [ "$SYNC_ON_START" = "true" ] || [ "$SYNC_ON_START" = "1" ] || [ "$SYNC_ON_ST
     echo "[geo-routing-server] SYNC_ON_START is enabled, running initial sync now..."
     /usr/local/bin/run-routing-sync || echo "[geo-routing-server] initial sync finished with warning/error (will retry on schedule)"
 fi
-
-cleanup() {
-    echo "[geo-routing-server] Shutting down cleanly..."
-    if [ -n "${CRON_PID:-}" ]; then
-        kill -TERM "$CRON_PID" 2>/dev/null || true
-    fi
-    nginx -s quit 2>/dev/null || true
-    exit 0
-}
-trap cleanup SIGTERM SIGINT
 
 echo "[geo-routing-server] crond scheduler active, listening for tasks..."
 crond -f -l 8 -L /dev/stdout &

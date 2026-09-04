@@ -21,7 +21,7 @@ services:
       - ./custom_geo:/app/custom_geo:ro
 
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://127.0.0.1:80/health"]
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:80/health"]
       interval: 30s
       timeout: 5s
       retries: 3

@@ -49,17 +49,9 @@ jobs:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
+          provenance: false
+          sbom: false
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-
-      # Автоматическое удаление старых untagged версий пакетов в GHCR
-      - name: Cleanup old and untagged package versions
-        uses: actions/delete-package-versions@v5
-        with:
-          package-name: 'geo-routing-server'
-          package-type: 'container'
-          min-versions-to-keep: 3
-          delete-only-untagged-versions: 'true'
-        continue-on-error: true

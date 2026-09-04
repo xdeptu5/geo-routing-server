@@ -78,7 +78,7 @@ class Config:
                 sys.exit(1)
         
         # Если включен только локальный генератор диплинков HAPP, токен может быть пустым или дефолтным
-        is_only_local = cls.ENABLED_CLIENTS == ["HAPP_DEEPLINK"] or cls.ENABLED_CLIENTS == ["HAPP_LOCAL"]
+        is_only_local = bool(cls.ENABLED_CLIENTS) and set(cls.ENABLED_CLIENTS).issubset({"HAPP_DEEPLINK", "HAPP_LOCAL"})
         
         if not token or token == "change_me_to_random_secret_token":
             if is_only_local:
