@@ -257,7 +257,7 @@ class RemnawaveSync:
             for squad in squads:
                 squad_uuid = squad["uuid"]
                 rule_name = squad["rule"]
-                s_name = squad.get("name") or cls.get_squad_name(squad_uuid)
+                s_name = cls.get_squad_name(squad_uuid) or squad.get("name")
                 s_desc = f"Squad '{s_name}' ({squad_uuid})" if s_name else f"Squad '{squad_uuid}'"
                 deeplink = cls._read_deeplink_content(happ_dir, rule_name)
                 

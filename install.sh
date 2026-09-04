@@ -401,6 +401,46 @@ except Exception:
     fi
 }
 
+# Автоматическая синхронизация названий сквадов в .env при переименовании в Remnawave
+refresh_squad_names_in_env() {
+    local target_dir
+    target_dir="$(get_install_dir)"
+    local env_file="$target_dir/.env"
+    [ ! -f "$env_file" ] && return 0
+
+    local remna_base remna_token cf_id cf_secret
+    remna_base=$(grep "^REMNAWAVE_BASE_URL=" "$env_file" | cut -d'=' -f2- || true)
+    remna_token=$(grep "^REMNAWAVE_TOKEN=" "$env_file" | cut -d'=' -f2- || true)
+    cf_id=$(grep "^CLOUDFLARE_ZERO_TRUST_CLIENT_ID=" "$env_file" | cut -d'=' -f2- || true)
+    cf_secret=$(grep "^CLOUDFLARE_ZERO_TRUST_CLIENT_SECRET=" "$env_file" | cut -d'=' -f2- || true)
+    [ -z "$remna_base" ] || [ -z "$remna_token" ] && return 0
+
+    local ext_squads_raw
+    ext_squads_raw=$(fetch_remnawave_external_squads "$remna_base" "$remna_token" "$cf_id" "$cf_secret")
+    [ -z "$ext_squads_raw" ] && return 0
+
+    local count_squads
+    count_squads=$(grep -c "^REMNAWAVE_SQUAD_.*_UUID=" "$env_file" || true)
+    [ "$count_squads" -le 0 ] && return 0
+
+    for ((i=1; i<=count_squads; i++)); do
+        local u old_n live_n
+        u=$(grep "^REMNAWAVE_SQUAD_${i}_UUID=" "$env_file" | cut -d'=' -f2- || true)
+        old_n=$(grep "^REMNAWAVE_SQUAD_${i}_NAME=" "$env_file" | cut -d'=' -f2- || true)
+        [ -z "$u" ] && continue
+        live_n=$(echo "$ext_squads_raw" | grep -i "^${u}|" | cut -d'|' -f2- || true)
+        if [ -n "$live_n" ] && [ "$live_n" != "$old_n" ]; then
+            local escaped_live
+            escaped_live=$(printf '%s\n' "$live_n" | sed -e 's/[\/&]/\\&/g')
+            if grep -q "^REMNAWAVE_SQUAD_${i}_NAME=" "$env_file"; then
+                sed -i "s/^REMNAWAVE_SQUAD_${i}_NAME=.*/REMNAWAVE_SQUAD_${i}_NAME=${escaped_live}/" "$env_file"
+            else
+                sed -i "/^REMNAWAVE_SQUAD_${i}_UUID=/a REMNAWAVE_SQUAD_${i}_NAME=${escaped_live}" "$env_file"
+            fi
+        fi
+    done
+}
+
 detect_or_ask_language() {
     for arg in "$@"; do
         if [ "$arg" = "--lang=en" ] || [ "$arg" = "--en" ]; then
@@ -618,6 +658,7 @@ run_sync_now() {
     echo -e "${BLUE}[*] Запуск внеочередной синхронизации правил и баз...${NC}"
     if docker exec geo-routing-server python3 -m app.main; then
         echo -e "${GREEN}[+] Синхронизация успешно выполнена!${NC}\n"
+        refresh_squad_names_in_env 2>/dev/null || true
     else
         echo -e "${RED}[!] Ошибка синхронизации. Проверьте логи: geo-server logs${NC}\n"
     fi
@@ -627,6 +668,7 @@ run_sync_now() {
 show_links() {
     local target_dir
     target_dir="$(get_install_dir)"
+    refresh_squad_names_in_env 2>/dev/null || true
     echo -e "${GREEN}${BOLD}[i] Публичные ссылки и интеграции:${NC}"
     docker exec geo-routing-server python3 -c "
 from app.config import Config
@@ -758,9 +800,10 @@ configure_remnawave() {
             prev_sq_uuid=$(grep "^REMNAWAVE_SQUAD_${i}_UUID=" "$env_file" | cut -d'=' -f2- || true)
             prev_sq_name=$(grep "^REMNAWAVE_SQUAD_${i}_NAME=" "$env_file" | cut -d'=' -f2- || true)
             prev_sq_rule=$(grep "^REMNAWAVE_SQUAD_${i}_RULE=" "$env_file" | cut -d'=' -f2- || true)
-        fi
-        if [ -z "$prev_sq_name" ] && [ -n "$prev_sq_uuid" ] && [ -n "$ext_squads_raw" ]; then
-            prev_sq_name=$(echo "$ext_squads_raw" | grep -i "^${prev_sq_uuid}|" | cut -d'|' -f2- || true)
+        if [ -n "$prev_sq_uuid" ] && [ -n "$ext_squads_raw" ]; then
+            local live_match
+            live_match=$(echo "$ext_squads_raw" | grep -i "^${prev_sq_uuid}|" | cut -d'|' -f2- || true)
+            [ -n "$live_match" ] && prev_sq_name="$live_match"
         fi
 
         local header_title=""
@@ -1500,9 +1543,10 @@ REMNAWAVE_TOKEN=${r_token}
                     prev_s_uuid=$(grep "^REMNAWAVE_SQUAD_${i}_UUID=" "$scan_env" | cut -d'=' -f2- || true)
                     prev_s_name=$(grep "^REMNAWAVE_SQUAD_${i}_NAME=" "$scan_env" | cut -d'=' -f2- || true)
                     prev_s_rule=$(grep "^REMNAWAVE_SQUAD_${i}_RULE=" "$scan_env" | cut -d'=' -f2- || true)
-                fi
-                if [ -z "$prev_s_name" ] && [ -n "$prev_s_uuid" ] && [ -n "$ext_squads_raw" ]; then
-                    prev_s_name=$(echo "$ext_squads_raw" | grep -i "^${prev_s_uuid}|" | cut -d'|' -f2- || true)
+                if [ -n "$prev_s_uuid" ] && [ -n "$ext_squads_raw" ]; then
+                    local live_match
+                    live_match=$(echo "$ext_squads_raw" | grep -i "^${prev_s_uuid}|" | cut -d'|' -f2- || true)
+                    [ -n "$live_match" ] && prev_s_name="$live_match"
                 fi
 
                 local s_header_title=""
@@ -1928,6 +1972,7 @@ EOF
 # ==============================================================================
 
 main_menu() {
+    refresh_squad_names_in_env 2>/dev/null || true
     while true; do
         print_header
         local target_dir
