@@ -195,11 +195,11 @@ tui_select() {
 tui_secret() {
     local prompt_label="$1"
     local current_val="${2:-}"
-    local prompt_text="${prompt_label}"
+    local prompt_text=""
     if [ -n "$current_val" ]; then
-        prompt_text="${prompt_label} [Enter = сохранить текущий]: "
+        prompt_text="${prompt_label} (ввод скрыт, Enter = оставить прежний): "
     else
-        prompt_text="${prompt_label}: "
+        prompt_text="${prompt_label} (ввод скрыт, вставьте и нажмите Enter): "
     fi
 
     local tty_in=""
@@ -217,6 +217,18 @@ tui_secret() {
         read -r secret_input || true
     fi
     secret_input="${secret_input:-$current_val}"
+
+    # Визуальное подтверждение для пользователя
+    if [ -n "$secret_input" ]; then
+        if [ "$secret_input" = "$current_val" ] && [ -n "$current_val" ]; then
+            echo -e "  ${GREEN}[+] Токен сохранён (без изменений)${NC}" >&2
+        else
+            echo -e "  ${GREEN}[+] Токен принят (${#secret_input} симв.)${NC}" >&2
+        fi
+    else
+        echo -e "  ${YELLOW}[i] Токен не указан${NC}" >&2
+    fi
+
     echo "$secret_input"
 }
 
