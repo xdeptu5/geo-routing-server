@@ -74,9 +74,42 @@ tui_select() {
     local prompt_title="$1"
     local default_idx="${2:-0}"
     shift 2
-    local options=("$@")
-    local count=${#options[@]}
+    local raw_items=("$@")
+
+    # Разделяем пункты на визуальные строки и доступные для выбора действия
+    local action_count=0
+    local visual_items=()
+    local is_header=()
+    local action_num=()
+    local action_to_visual=()
+    local visual_to_action=()
+
+    for line in "${raw_items[@]}"; do
+        local v_idx=${#visual_items[@]}
+        visual_items+=("$line")
+        if [[ "$line" =~ ^HEADER:(.*) ]]; then
+            is_header+=(1)
+            action_num+=(0)
+            visual_to_action+=(-1)
+        else
+            is_header+=(0)
+            action_count=$((action_count + 1))
+            action_num+=($action_count)
+            action_to_visual+=($v_idx)
+            visual_to_action+=($((action_count - 1)))
+        fi
+    done
+
+    # Защита: если нет действий
+    if [ "$action_count" -eq 0 ]; then
+        echo "0"
+        return 0
+    fi
+
     local selected=$default_idx
+    if [ "$selected" -ge "$action_count" ] || [ "$selected" -lt 0 ]; then
+        selected=0
+    fi
 
     # Определяем источник интерактивного терминального ввода
     local tty_in=""
@@ -89,13 +122,18 @@ tui_select() {
     # Fallback только для чисто неинтерактивного окружения (CI, тесты без tty)
     if [ -z "$tty_in" ]; then
         echo -e "$prompt_title" >&2
-        for i in "${!options[@]}"; do
-            echo -e "  $((i+1))) ${options[i]}" >&2
+        for v in "${!visual_items[@]}"; do
+            if [ "${is_header[v]}" -eq 1 ]; then
+                local title="${visual_items[v]#HEADER:}"
+                echo -e "\n  --- $title ---" >&2
+            else
+                echo -e "  ${action_num[v]}) ${visual_items[v]}" >&2
+            fi
         done
         local fallback_pick=""
         read -r -p "> " fallback_pick || true
         fallback_pick="${fallback_pick:-$((default_idx + 1))}"
-        if [[ "$fallback_pick" =~ ^[0-9]+$ ]] && [ "$fallback_pick" -ge 1 ] && [ "$fallback_pick" -le "$count" ]; then
+        if [[ "$fallback_pick" =~ ^[0-9]+$ ]] && [ "$fallback_pick" -ge 1 ] && [ "$fallback_pick" -le "$action_count" ]; then
             echo "$((fallback_pick - 1))"
         else
             echo "$default_idx"
@@ -112,19 +150,28 @@ tui_select() {
     trap cleanup_tui_cursor EXIT INT TERM
 
     local num_fmt="%d"
-    [ "$count" -ge 10 ] && num_fmt="%2d"
+    [ "$action_count" -ge 10 ] && num_fmt="%2d"
     local input_buf=""
+    local total_visual_lines=${#visual_items[@]}
 
     draw_tui_menu() {
         echo -e "$prompt_title" >&2
-        for i in "${!options[@]}"; do
-            local num=$((i + 1))
-            if [ "$i" -eq "$selected" ]; then
-                printf "  \033[1;36m▸ ${num_fmt}) \033[1;36m%s\033[0m\n" "$num" "${options[i]}" >&2
+        for v in "${!visual_items[@]}"; do
+            if [ "${is_header[v]}" -eq 1 ]; then
+                local title="${visual_items[v]#HEADER:}"
+                printf "  \033[1;34m── %s ──────────────────────────────────────────\033[0m\n" "$title" >&2
             else
-                printf "    \033[0;36m${num_fmt})\033[0;37m %s\033[0m\n" "$num" "${options[i]}" >&2
+                local num="${action_num[v]}"
+                local act_idx="${visual_to_action[v]}"
+                local text="${visual_items[v]}"
+                if [ "$act_idx" -eq "$selected" ]; then
+                    printf "  \033[1;36m▸ ${num_fmt}) \033[1;36m%s\033[0m\n" "$num" "$text" >&2
+                else
+                    printf "    \033[0;36m${num_fmt})\033[0;37m %s\033[0m\n" "$num" "$text" >&2
+                fi
             fi
         done
+
         if [ -n "$input_buf" ]; then
             if [ "${UI_LANG:-ru}" = "en" ]; then
                 printf "  \033[1;33m[Input: %s]\033[0m \033[2m[Enter] Confirm   [Backspace] Clear   [↑/↓] Navigate\033[0m\n" "$input_buf" >&2
@@ -133,9 +180,9 @@ tui_select() {
             fi
         else
             if [ "${UI_LANG:-ru}" = "en" ]; then
-                printf "  \033[2m[↑/↓] Navigate   [Enter] Select   [1-%d] Type number\033[0m\n" "$count" >&2
+                printf "  \033[2m[↑/↓] Navigate   [Enter] Select   [1-%d] Number\033[0m\n" "$action_count" >&2
             else
-                printf "  \033[2m[↑/↓] Выбор   [Enter] Подтвердить   [1-%d] Номер пункта\033[0m\n" "$count" >&2
+                printf "  \033[2m[↑/↓] Выбор   [Enter] Подтвердить   [1-%d] Номер пункта\033[0m\n" "$action_count" >&2
             fi
         fi
     }
@@ -154,11 +201,11 @@ tui_select() {
         case "$key" in
             $'\x1b[A'|$'\x1bOA'|'k'|'K') # Вверх
                 input_buf=""
-                selected=$(( (selected - 1 + count) % count ))
+                selected=$(( (selected - 1 + action_count) % action_count ))
                 ;;
             $'\x1b[B'|$'\x1bOB'|'j'|'J') # Вниз
                 input_buf=""
-                selected=$(( (selected + 1) % count ))
+                selected=$(( (selected + 1) % action_count ))
                 ;;
             "") # Enter
                 break
@@ -169,18 +216,18 @@ tui_select() {
             $'\x7f'|$'\x08') # Backspace
                 if [ -n "$input_buf" ]; then
                     input_buf="${input_buf%?}"
-                    if [ -n "$input_buf" ] && [ "$input_buf" -ge 1 ] && [ "$input_buf" -le "$count" ]; then
+                    if [ -n "$input_buf" ] && [ "$input_buf" -ge 1 ] && [ "$input_buf" -le "$action_count" ]; then
                         selected=$((input_buf - 1))
                     fi
                 fi
                 ;;
-            [0-9]) # Ввод номера пункта (включая многозначные 10, 11, 12...)
+            [0-9]) # Накопление номера пункта (без автотаймаута, подтверждение по Enter)
                 local candidate="${input_buf}${key}"
                 candidate="$(echo "$candidate" | sed 's/^0*//')"
-                if [ -n "$candidate" ] && [ "$candidate" -ge 1 ] && [ "$candidate" -le "$count" ]; then
+                if [ -n "$candidate" ] && [ "$candidate" -ge 1 ] && [ "$candidate" -le "$action_count" ]; then
                     input_buf="$candidate"
                     selected=$((candidate - 1))
-                elif [ "$key" -ge 1 ] && [ "$key" -le "$count" ]; then
+                elif [ "$key" -ge 1 ] && [ "$key" -le "$action_count" ]; then
                     input_buf="$key"
                     selected=$((key - 1))
                 fi
@@ -192,7 +239,7 @@ tui_select() {
         esac
 
         # Стираем меню для перерисовки
-        local lines_to_clear=$((count + 2))
+        local lines_to_clear=$((total_visual_lines + 2))
         printf "\033[%dA" "$lines_to_clear" >&2
         for ((l=0; l<lines_to_clear; l++)); do
             printf "\033[2K\r" >&2
@@ -205,7 +252,7 @@ tui_select() {
     done
 
     # После подтверждения очищаем меню на экране
-    local total_lines=$((count + 2))
+    local total_lines=$((total_visual_lines + 2))
     printf "\033[%dA" "$total_lines" >&2
     for ((l=0; l<total_lines; l++)); do
         printf "\033[2K\r" >&2
@@ -1608,19 +1655,23 @@ main_menu() {
             echo -e "Container status:  $status_msg\n"
 
             local en_options=(
+                "HEADER:General & Information"
                 "Sync geo-databases right now"
                 "Show public links and autorouting header"
                 "Show reverse-proxy configs (Caddy / Nginx / NPM)"
+                "HEADER:Settings & Integrations"
                 "Configure Remnawave API sync"
                 "Configure Telegram notifications"
                 "Reconfigure server (run wizard)"
-                "Update Docker image (pull & restart)"
-                "Update management script from GitHub"
+                "HEADER:Server Management"
                 "View container logs"
                 "Restart server"
                 "Stop server"
+                "Update Docker image (pull & restart)"
+                "Update management script from GitHub"
+                "HEADER:System"
+                "Change language / Сменить язык (RU/EN)"
                 "Uninstall project from server"
-                "Сменить язык / Change language (RU/EN)"
                 "Exit"
             )
 
@@ -1631,19 +1682,23 @@ main_menu() {
             echo -e "Статус сервера:   $status_msg\n"
 
             local ru_options=(
+                "HEADER:Основное и ссылки"
                 "Синхронизировать базы прямо сейчас"
                 "Показать публичные ссылки и диплинки"
                 "Готовые конфиги для Caddy / Nginx / NPM"
+                "HEADER:Настройки и интеграции"
                 "Настроить прямую синхронизацию с Remnawave"
                 "Настроить / Изменить Telegram-уведомления"
                 "Перенастроить сервер (мастер установки)"
-                "Обновить Docker-образ сервера"
-                "Обновить скрипт управления из GitHub"
+                "HEADER:Управление сервером"
                 "Посмотреть логи контейнера"
                 "Перезапустить сервер"
                 "Остановить сервер"
-                "Удалить проект с сервера"
+                "Обновить Docker-образ сервера"
+                "Обновить скрипт управления из GitHub"
+                "HEADER:Система"
                 "Сменить язык / Change language (RU/EN)"
+                "Удалить проект с сервера"
                 "Выход"
             )
 
@@ -1658,13 +1713,12 @@ main_menu() {
             3) configure_remnawave ;;
             4) configure_telegram ;;
             5) install_wizard ;;
-            6) update_project ;;
-            7) update_script_only ;;
-            8) view_logs ;;
-            9) restart_server ;;
-            10) stop_server ;;
-            11) uninstall_project ;;
-            12)
+            6) view_logs ;;
+            7) restart_server ;;
+            8) stop_server ;;
+            9) update_project ;;
+            10) update_script_only ;;
+            11)
                 if [ "${UI_LANG:-ru}" = "ru" ]; then
                     UI_LANG="en"
                 else
@@ -1674,6 +1728,7 @@ main_menu() {
                 echo -e "${GREEN}[+] Language / Язык: $UI_LANG${NC}"
                 sleep 1
                 ;;
+            12) uninstall_project ;;
             13) exit 0 ;;
             *) echo -e "${RED}[!] Неверный пункт меню${NC}"; sleep 1 ;;
         esac
