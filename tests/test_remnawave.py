@@ -362,6 +362,62 @@ class TestRemnawaveSquads(unittest.TestCase):
         self.assertEqual(squads[0]["name"], "Trial Base JSON Squade")
         self.assertEqual(RemnawaveSync.get_squad_name("uuid-trial"), "Trial Base JSON Squade")
 
+    # ------------------------------------------------------------------
+    # Тест 14: Удаленный или неизвестный сквад наполняет last_errors
+    # ------------------------------------------------------------------
+    def test_deleted_or_missing_squad_populates_last_errors(self):
+        """Когда сквад отсутствует в списке externalSquads, он заносится в last_errors с деталями."""
+        RemnawaveHandler.EXTERNAL_SQUADS = {"response": [
+            {"uuid": "existing-uuid", "name": "Active Squad"}
+        ]}
+        server, _, base_url = start_server(RemnawaveHandler)
+
+        os.environ["REMNAWAVE_BASE_URL"] = f"{base_url}/api"
+        os.environ["REMNAWAVE_TOKEN"] = "token"
+        os.environ["REMNAWAVE_SQUAD_1_UUID"] = "deleted-uuid"
+        os.environ["REMNAWAVE_SQUAD_1_NAME"] = "Deleted Squad"
+        os.environ["REMNAWAVE_SQUAD_1_RULE"] = "JSONSUB.JSON"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            happ_dir = Path(tmpdir) / "tok" / "HAPP"
+            happ_dir.mkdir(parents=True)
+            (happ_dir / "JSONSUB.DEEPLINK").write_text("happ://routing/onadd/xyz", encoding="utf-8")
+
+            with patch("app.config.Config.STORAGE_DIR", Path(tmpdir)):
+                from app.remnawave import RemnawaveSync
+                result = RemnawaveSync.sync("tok")
+
+        server.shutdown()
+        self.assertFalse(result)
+        self.assertTrue(len(RemnawaveSync.last_errors) > 0)
+        self.assertTrue(any("Deleted Squad" in err or "deleted-uuid" in err for err in RemnawaveSync.last_errors))
+
+    # ------------------------------------------------------------------
+    # Тест 15: Пустой список внешних сквадов в Remnawave
+    # ------------------------------------------------------------------
+    def test_empty_external_squads_list_handled_correctly(self):
+        """Если в панели 0 внешних сквадов, sync корректно обнаруживает отсутствие сквада и не падает."""
+        RemnawaveHandler.EXTERNAL_SQUADS = {"response": []}
+        server, _, base_url = start_server(RemnawaveHandler)
+
+        os.environ["REMNAWAVE_BASE_URL"] = f"{base_url}/api"
+        os.environ["REMNAWAVE_TOKEN"] = "token"
+        os.environ["REMNAWAVE_SQUAD_1_UUID"] = "any-uuid"
+        os.environ["REMNAWAVE_SQUAD_1_RULE"] = "JSONSUB.JSON"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            happ_dir = Path(tmpdir) / "tok" / "HAPP"
+            happ_dir.mkdir(parents=True)
+            (happ_dir / "JSONSUB.DEEPLINK").write_text("happ://routing/onadd/xyz", encoding="utf-8")
+
+            with patch("app.config.Config.STORAGE_DIR", Path(tmpdir)):
+                from app.remnawave import RemnawaveSync
+                result = RemnawaveSync.sync("tok")
+
+        server.shutdown()
+        self.assertFalse(result)
+        self.assertTrue(len(RemnawaveSync.last_errors) > 0)
+
 
 class TestRemnawaveIsConfigured(unittest.TestCase):
     """is_configured() корректно реагирует на наличие/отсутствие переменных."""

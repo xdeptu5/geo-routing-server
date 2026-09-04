@@ -433,9 +433,9 @@ refresh_squad_names_in_env() {
             local escaped_live
             escaped_live=$(printf '%s\n' "$live_n" | sed -e 's/[\/&]/\\&/g')
             if grep -q "^REMNAWAVE_SQUAD_${i}_NAME=" "$env_file"; then
-                sed -i "s/^REMNAWAVE_SQUAD_${i}_NAME=.*/REMNAWAVE_SQUAD_${i}_NAME=${escaped_live}/" "$env_file"
+                sed -i "s/^REMNAWAVE_SQUAD_${i}_NAME=.*/REMNAWAVE_SQUAD_${i}_NAME=\"${escaped_live}\"/" "$env_file"
             else
-                sed -i "/^REMNAWAVE_SQUAD_${i}_UUID=/a REMNAWAVE_SQUAD_${i}_NAME=${escaped_live}" "$env_file"
+                sed -i "/^REMNAWAVE_SQUAD_${i}_UUID=/a REMNAWAVE_SQUAD_${i}_NAME=\"${escaped_live}\"" "$env_file"
             fi
         fi
     done
@@ -732,7 +732,7 @@ show_proxy_snippets() {
     echo -e "После сохранения примените: ${YELLOW}sudo nginx -t && sudo nginx -s reload${NC}\n"
 
     echo -e "${GREEN}${BOLD}[ ВАРИАНТ 3: NGINX PROXY MANAGER (GUI) ]${NC}:"
-    echo -e "Forward Hostname / IP: ${BOLD}127.0.0.1${NC}"
+    echo -e "Forward Hostname / IP: ${BOLD}127.0.0.1${NC} (или IP хоста / имя контейнера, если NPM в Docker)"
     echo -e "Forward Port:          ${BOLD}${port}${NC}"
     echo -e "SSL:                   ${BOLD}Request a new SSL Certificate (Force SSL: ON)${NC}"
     echo -e "${CYAN}===============================================================================${NC}\n"
@@ -860,7 +860,7 @@ configure_remnawave() {
         echo -e "  ${GREEN}[+] Сквад #$i: ${s_display_label} → ${sq_rule}${NC}"
 
         squads_env="${squads_env}REMNAWAVE_SQUAD_${i}_UUID=${sq_uuid}
-REMNAWAVE_SQUAD_${i}_NAME=${sq_name}
+REMNAWAVE_SQUAD_${i}_NAME=\"${sq_name}\"
 REMNAWAVE_SQUAD_${i}_RULE=${sq_rule}
 "
     done
@@ -1603,7 +1603,7 @@ REMNAWAVE_TOKEN=${r_token}
                 echo -e "  ${GREEN}[+] Сквад #$i: ${s_display_label} → ${s_rule}${NC}"
 
                 REMNA_BLOCK="${REMNA_BLOCK}REMNAWAVE_SQUAD_${i}_UUID=${s_uuid}
-REMNAWAVE_SQUAD_${i}_NAME=${s_name}
+REMNAWAVE_SQUAD_${i}_NAME=\"${s_name}\"
 REMNAWAVE_SQUAD_${i}_RULE=${s_rule}
 "
             done

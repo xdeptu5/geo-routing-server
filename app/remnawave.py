@@ -269,7 +269,7 @@ class RemnawaveSync:
                     logger.warning(f"[Remnawave] Deeplink for rule {rule_name} ({s_desc}) not found in {happ_dir}")
                     continue
 
-                if known_squads and squad_uuid not in known_squads:
+                if all_ext_res is not None and squad_uuid not in known_squads:
                     err_msg = f"{s_desc} не найден во внешних сквадах (возможно, удалён в панели)"
                     logger.error(
                         f"[Remnawave] {err_msg}!\n"

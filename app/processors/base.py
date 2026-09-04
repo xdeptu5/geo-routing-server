@@ -21,6 +21,7 @@ class BaseProcessor(ABC):
         self.token = token
         self.domain = domain
         self.client_dir = storage_dir / token
+        self.is_fallback_discovery: bool = False
         
     @abstractmethod
     def process(self) -> bool:
@@ -43,15 +44,21 @@ class BaseProcessor(ABC):
                     if item.get("type") == "file" and item["name"].lower().endswith(".json")
                 ]
                 if discovered:
+                    self.is_fallback_discovery = False
                     return sorted(discovered)
         except Exception as e:
             logger.warning(f"GitHub API discovery failed for {self.CLIENT_NAME} ({e}), using fallback file list")
             
+        self.is_fallback_discovery = True
         return list(self.FALLBACK_FILES)
 
     def _cleanup_obsolete_files(self, target_dir: Path, valid_filenames: Set[str]) -> None:
         """Удаляет неактуальные JSON и DEEPLINK файлы, которых больше нет в источниках."""
         if not target_dir.is_dir():
+            return
+
+        if self.is_fallback_discovery:
+            logger.info(f"Skipping obsolete files cleanup for {self.CLIENT_NAME} due to fallback file discovery")
             return
             
         for path in target_dir.iterdir():

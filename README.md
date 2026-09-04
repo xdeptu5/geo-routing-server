@@ -87,7 +87,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/xdeptu5/geo-routing-server/m
          - ./.cache:/app/.cache
          - ./custom_geo:/app/custom_geo:ro
        healthcheck:
-         test: ["CMD", "curl", "-f", "http://127.0.0.1:80/health"]
+         test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:80/health"]
          interval: 30s
          timeout: 5s
          retries: 3
@@ -203,9 +203,10 @@ Happ принимает правила через Base64-диплинк `happ://
 | Переменная | По умолчанию | Описание |
 | :--- | :--- | :--- |
 | `DOMAIN` | `geo.example.com` | Домен для HTTPS-прокси (не нужен в режиме `HAPP_DEEPLINK`) |
-| `ROUTING_TOKEN` | — | **Обязательно** для раздачи файлов (`[A-Za-z0-9._-]+`) |
+| `ROUTING_TOKEN` | — | **Обязательно** для раздачи файлов (`[A-Za-z0-9_-]+`) |
 | `ENABLED_CLIENTS` | `HAPP,INCY` | Модули: `HAPP,INCY`, `HAPP`, `INCY`, `HAPP_GEO`, `INCY_GEO`, `HAPP_DEEPLINK` |
 | `PUBLIC_GEO_BASE_URL` | *пусто* | Внешний URL баз (`https://geo-node.example.com/<token>`) |
+| `DOCKER_NETWORK` | *пусто* | Внешняя Docker-сеть (например, `remnawave-network`) |
 | `HTTP_BIND` | `127.0.0.1` | IP привязки внутреннего веб-сервера |
 | `HTTP_PORT` | `8080` | Порт для реверс-прокси |
 | `SCHEDULE` | `0 10 * * *` | Расписание автообновления (cron UTC, дефолт 10:00 UTC) |
@@ -222,6 +223,7 @@ Happ принимает правила через Base64-диплинк `happ://
 | `REMNAWAVE_BASE_URL` | *пусто* | URL API панели (например, `http://remnawave:3000/api`) |
 | `REMNAWAVE_TOKEN` | *пусто* | JWT-токен администратора панели |
 | `REMNAWAVE_SQUAD_N_UUID` | *пусто* | UUID сквада N (N = 1..10+) |
+| `REMNAWAVE_SQUAD_N_NAME` | *пусто* | Читаемое имя сквада N (подтягивается из API автоматически) |
 | `REMNAWAVE_SQUAD_N_RULE` | `JSONSUB.JSON` | Имя правила для сквада N (`JSONSUB.JSON`, `WHITELIST.JSON`) |
 | `REMNAWAVE_GLOBAL_RULE` | *пусто* | Глобальное правило для всех подписок |
 | `CLOUDFLARE_ZERO_TRUST_CLIENT_ID` | *пусто* | Client ID сервисного токена Cloudflare Zero Trust |

@@ -48,4 +48,12 @@ fi
 echo "[geo-routing-server] crond scheduler active, listening for tasks..."
 crond -f -l 8 -L /dev/stdout &
 CRON_PID=$!
-wait "$CRON_PID"
+
+while kill -0 "$CRON_PID" 2>/dev/null; do
+    if [ -f /run/nginx.pid ] && ! kill -0 "$(cat /run/nginx.pid 2>/dev/null)" 2>/dev/null; then
+        echo "[geo-routing-server] internal nginx process died! Shutting down..."
+        cleanup
+    fi
+    sleep 5 &
+    wait $! 2>/dev/null || true
+done

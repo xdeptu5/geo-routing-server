@@ -194,12 +194,6 @@ def main():
             logger.error(f"Processor {processor.__class__.__name__} encountered unhandled exception: {e}")
             failures += 1
             
-    if failures > 0:
-        err_text = f"Synchronization finished with {failures} failed processor(s)"
-        logger.error(err_text)
-        TelegramNotifier.alert_failure(err_text)
-        sys.exit(1)
-        
     # Создаем симлинки для локальных сервисов в Docker
     ensure_internal_symlinks(Config.STORAGE_DIR, token)
     
@@ -212,13 +206,20 @@ def main():
             logger.warning(f"[Remnawave] Synchronization with Remnawave API completed with errors:\n{err_details}")
             TelegramNotifier.alert_failure(f"Ошибка Remnawave API:\n• {err_details}")
     
-    if remna_ok:
+    if failures > 0:
+        err_text = f"Synchronization finished with {failures} failed processor(s)"
+        logger.error(err_text)
+        TelegramNotifier.alert_failure(err_text)
+
+    if remna_ok and failures == 0:
         logger.info("Synchronization completed successfully.")
         print_summary_banner(token)
         TelegramNotifier.notify_changes(token, Publisher.published_registry, Publisher.any_file_changed)
     else:
-        logger.warning("Synchronization completed with Remnawave warnings/errors.")
+        logger.warning("Synchronization completed with warnings/errors.")
         print_summary_banner(token)
+        if failures > 0:
+            sys.exit(1)
 
 if __name__ == "__main__":
     main()

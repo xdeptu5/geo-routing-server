@@ -58,7 +58,7 @@ class Downloader:
             raise DownloadError(f"Rejected unsafe URL scheme '{parsed.scheme}': {url}")
 
         max_allowed_size = self.MAX_JSON_SIZE if kind == "json" else self.MAX_BINARY_SIZE
-        safe_cache_key = cache_key.replace("/", "_")
+        safe_cache_key = cache_key.replace("/", "_").replace("\\", "_")
         cache_body_file = self.cache_dir / f"{safe_cache_key}.body"
         cache_etag_file = self.cache_dir / f"{safe_cache_key}.etag"
         
