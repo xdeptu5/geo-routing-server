@@ -924,6 +924,7 @@ install_wizard() {
     INSTALL_DIR="${input_dir:-$current_suggested_dir}"
     INSTALL_DIR="$(echo "$INSTALL_DIR" | tr -d '\r' | sed 's/[^a-zA-Z0-9_\/\.-]//g')"
     mkdir -p "$INSTALL_DIR"
+    chmod 755 "$INSTALL_DIR" 2>/dev/null || true
     save_install_dir "$INSTALL_DIR"
     echo -e "${GREEN}[+] Каталог: $INSTALL_DIR${NC}\n"
 
@@ -1447,7 +1448,7 @@ CLOUDFLARE_ZERO_TRUST_CLIENT_SECRET=${prev_cf_secret}
         [ -n "$TG_THREAD_ID" ] && echo "TELEGRAM_THREAD_ID=${TG_THREAD_ID}"
         echo "TELEGRAM_NOTIFY_SUCCESS=${TG_NOTIFY_SUCCESS}"
     } > "$INSTALL_DIR/.env"
-    chmod 600 "$INSTALL_DIR/.env"
+    chmod 644 "$INSTALL_DIR/.env" 2>/dev/null || true
     [ -f "$INSTALL_DIR/.env.backup" ] && chmod 600 "$INSTALL_DIR/.env.backup" 2>/dev/null || true
 
     local networks_block=""
@@ -1493,6 +1494,14 @@ EOF
 
     mkdir -p "$INSTALL_DIR/custom_geo"
     touch "$INSTALL_DIR/custom_geo/.gitkeep"
+
+    # Совместимость с веб-панелями управления Docker (Arcane, Dockge, Portainer)
+    chmod 755 "$INSTALL_DIR" 2>/dev/null || true
+    chmod 755 "$INSTALL_DIR/custom_geo" 2>/dev/null || true
+    chmod 644 "$INSTALL_DIR/compose.yaml" 2>/dev/null || true
+    chmod 644 "$INSTALL_DIR/.env" 2>/dev/null || true
+    [ -f "$INSTALL_DIR/.env.backup" ] && chmod 600 "$INSTALL_DIR/.env.backup" 2>/dev/null || true
+    ln -sf compose.yaml "$INSTALL_DIR/docker-compose.yml" 2>/dev/null || true
 
     # Сохраняем скрипт установщика в каталог проекта для работы команды geo-server
     if [ -f "$0" ] && grep -q "Geo Routing Server" "$0" 2>/dev/null; then
