@@ -78,8 +78,16 @@ tui_select() {
     local count=${#options[@]}
     local selected=$default_idx
 
-    # Fallback для неинтерактивного режима (пайпы, CI, тесты)
-    if [ ! -t 0 ] || [ ! -t 1 ]; then
+    # Определяем источник интерактивного терминального ввода
+    local tty_in=""
+    if [ -t 0 ]; then
+        tty_in="/dev/stdin"
+    elif [ -c /dev/tty ] && ( : < /dev/tty ) 2>/dev/null; then
+        tty_in="/dev/tty"
+    fi
+
+    # Fallback только для чисто неинтерактивного окружения (CI, тесты без tty)
+    if [ -z "$tty_in" ]; then
         echo -e "$prompt_title" >&2
         for i in "${!options[@]}"; do
             echo -e "  $((i+1))) ${options[i]}" >&2
@@ -119,10 +127,10 @@ tui_select() {
 
     while true; do
         local key=""
-        IFS= read -rsn1 key 2>/dev/null || true
+        IFS= read -rsn1 key < "$tty_in" 2>/dev/null || true
         if [ "$key" = $'\x1b' ]; then
             local rest=""
-            read -rsn2 -t 0.1 rest 2>/dev/null || true
+            read -rsn2 -t 0.1 rest < "$tty_in" 2>/dev/null || true
             key="$key$rest"
         fi
 
@@ -193,9 +201,16 @@ tui_secret() {
         prompt_text="${prompt_label}: "
     fi
 
-    local secret_input=""
+    local tty_in=""
     if [ -t 0 ]; then
-        read -rs -p "$(echo -e "$prompt_text")" secret_input
+        tty_in="/dev/stdin"
+    elif [ -c /dev/tty ] && ( : < /dev/tty ) 2>/dev/null; then
+        tty_in="/dev/tty"
+    fi
+
+    local secret_input=""
+    if [ -n "$tty_in" ]; then
+        read -rs -p "$(echo -e "$prompt_text")" secret_input < "$tty_in"
         echo "" >&2
     else
         read -r secret_input || true
