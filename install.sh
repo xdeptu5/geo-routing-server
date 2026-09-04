@@ -66,6 +66,162 @@ handle_error() {
 
 trap 'handle_error $LINENO' ERR
 
+# ==============================================================================
+# TUI КОМПОНЕНТЫ И ХЕЛПЕРЫ ВВОДА
+# ==============================================================================
+
+# Интерактивный TUI-селектор со стрелками ↑/↓, Enter и быстрыми цифрами
+tui_select() {
+    local prompt_title="$1"
+    local default_idx="${2:-0}"
+    shift 2
+    local options=("$@")
+    local count=${#options[@]}
+    local selected=$default_idx
+
+    # Fallback для неинтерактивного режима (пайпы, CI, тесты)
+    if [ ! -t 0 ] || [ ! -t 1 ]; then
+        echo -e "$prompt_title" >&2
+        for i in "${!options[@]}"; do
+            echo -e "  $((i+1))) ${options[i]}" >&2
+        done
+        local fallback_pick=""
+        read -r -p "> " fallback_pick || true
+        fallback_pick="${fallback_pick:-$((default_idx + 1))}"
+        if [[ "$fallback_pick" =~ ^[0-9]+$ ]] && [ "$fallback_pick" -ge 1 ] && [ "$fallback_pick" -le "$count" ]; then
+            echo "$((fallback_pick - 1))"
+        else
+            echo "$default_idx"
+        fi
+        return 0
+    fi
+
+    # Скрываем курсор
+    tput civis 2>/dev/null || printf "\033[?25l" >&2
+
+    cleanup_tui_cursor() {
+        tput cnorm 2>/dev/null || printf "\033[?25h" >&2
+    }
+    trap cleanup_tui_cursor EXIT INT TERM
+
+    draw_tui_menu() {
+        echo -e "$prompt_title" >&2
+        for i in "${!options[@]}"; do
+            if [ "$i" -eq "$selected" ]; then
+                printf "  \033[1;36m▸\033[0m \033[1;37;44m %s \033[0m\n" "${options[i]}" >&2
+            else
+                printf "    \033[0;37m%s\033[0m\n" "${options[i]}" >&2
+            fi
+        done
+        printf "  \033[2m[↑/↓] Выбор   [Enter] Подтвердить   [1-%d] Быстрый ввод\033[0m\n" "$count" >&2
+    }
+
+    draw_tui_menu
+
+    while true; do
+        local key=""
+        IFS= read -rsn1 key 2>/dev/null || true
+        if [ "$key" = $'\x1b' ]; then
+            local rest=""
+            read -rsn2 -t 0.1 rest 2>/dev/null || true
+            key="$key$rest"
+        fi
+
+        case "$key" in
+            $'\x1b[A'|$'\x1bOA'|'k'|'K') # Вверх
+                selected=$(( (selected - 1 + count) % count ))
+                ;;
+            $'\x1b[B'|$'\x1bOB'|'j'|'J') # Вниз
+                selected=$(( (selected + 1) % count ))
+                ;;
+            "") # Enter
+                break
+                ;;
+            " ") # Пробел
+                break
+                ;;
+            [1-9]) # Быстрый выбор по цифре
+                local num_pick=$((key - 1))
+                if [ "$num_pick" -lt "$count" ]; then
+                    selected=$num_pick
+                    break
+                fi
+                ;;
+            $'\x03') # Ctrl+C
+                cleanup_tui_cursor
+                exit 130
+                ;;
+        esac
+
+        # Стираем меню для перерисовки
+        local lines_to_clear=$((count + 2))
+        printf "\033[%dA" "$lines_to_clear" >&2
+        for ((l=0; l<lines_to_clear; l++)); do
+            printf "\033[2K\r" >&2
+            if [ "$l" -lt $((lines_to_clear - 1)) ]; then
+                printf "\033[1B" >&2
+            fi
+        done
+        printf "\033[%dA" $((lines_to_clear - 1)) >&2
+        draw_tui_menu
+    done
+
+    # После подтверждения очищаем меню на экране
+    local total_lines=$((count + 2))
+    printf "\033[%dA" "$total_lines" >&2
+    for ((l=0; l<total_lines; l++)); do
+        printf "\033[2K\r" >&2
+        if [ "$l" -lt $((total_lines - 1)) ]; then
+            printf "\033[1B" >&2
+        fi
+    done
+    printf "\033[%dA" $((total_lines - 1)) >&2
+
+    cleanup_tui_cursor
+    trap - EXIT INT TERM
+
+    echo "$selected"
+}
+
+# Ввод с маскированием паролей и токенов (не оставляет секреты на экране)
+tui_secret() {
+    local prompt_label="$1"
+    local current_val="${2:-}"
+    local prompt_text="${prompt_label}"
+    if [ -n "$current_val" ]; then
+        prompt_text="${prompt_label} [Enter = сохранить текущий]: "
+    else
+        prompt_text="${prompt_label}: "
+    fi
+
+    local secret_input=""
+    if [ -t 0 ]; then
+        read -rs -p "$(echo -e "$prompt_text")" secret_input
+        echo "" >&2
+    else
+        read -r secret_input || true
+    fi
+    secret_input="${secret_input:-$current_val}"
+    echo "$secret_input"
+}
+
+# Умный поиск активных сетей Docker
+detect_docker_networks() {
+    if ! command -v docker &>/dev/null; then
+        return
+    fi
+    docker network ls --format '{{.Name}}' 2>/dev/null | grep -vE '^(bridge|host|none)$' || true
+}
+
+# Проверка, запущен ли контейнер Remnawave на этом же сервере
+detect_remnawave_running() {
+    if ! command -v docker &>/dev/null; then
+        return 1
+    fi
+    docker ps --format '{{.Names}}' 2>/dev/null | grep -qi "remna" && return 0
+    return 1
+}
+
 detect_or_ask_language() {
     for arg in "$@"; do
         if [ "$arg" = "--lang=en" ] || [ "$arg" = "--en" ]; then
@@ -84,11 +240,9 @@ detect_or_ask_language() {
     fi
     
     if [ -z "${UI_LANG:-}" ]; then
-        echo -e "\n${BOLD}Language / Выберите язык:${NC}"
-        echo -e "  1) Русский (RU) [Enter]"
-        echo -e "  2) English (EN)"
-        read -r -p "> " lang_choice
-        if [ "$lang_choice" = "2" ] || [[ "$lang_choice" =~ ^[Ee][Nn]$ ]]; then
+        local lang_idx
+        lang_idx=$(tui_select "\n${BOLD}Language / Выберите язык:${NC}" 0 "Русский (RU)" "English (EN)")
+        if [ "$lang_idx" -eq 1 ]; then
             UI_LANG="en"
         else
             UI_LANG="ru"
@@ -344,13 +498,11 @@ configure_remnawave() {
         fi
     fi
 
-    read -r -p "REMNAWAVE_BASE_URL [Enter = ${current_base:-http://remnawave:3000/api}]: " input_base
+    read -r -p "REMNAWAVE_BASE_URL [${current_base:-http://remnawave:3000/api}]: " input_base
     input_base="${input_base:-${current_base:-http://remnawave:3000/api}}"
 
-    local r_token_hint="пропустить"
-    [ -n "$current_token" ] && r_token_hint="оставить текущий"
-    read -r -p "REMNAWAVE_TOKEN (JWT токен панели) [Enter = $r_token_hint]: " input_token
-    input_token="${input_token:-$current_token}"
+    local input_token
+    input_token=$(tui_secret "JWT токен администратора Remnawave" "$current_token")
 
     local existing_squads=0
     if [ -f "$env_file" ]; then
@@ -358,16 +510,10 @@ configure_remnawave() {
     fi
     local default_squads="${existing_squads:-1}"
     [ "$default_squads" -le 0 ] && default_squads=1
-    read -r -p "Сколько сквадов хотите привязать? [1-10, Enter = $default_squads]: " count_squads
+    read -r -p "Сколько сквадов привязать? [${default_squads}]: " count_squads
     count_squads="${count_squads:-$default_squads}"
 
-    echo -e "\n${CYAN}${BOLD}[i] Источник правил маршрутизации:${NC} ${CYAN}https://github.com/hydraponique/roscomvpn-routing${NC}"
-    echo -e "${DIM}Сервер берет готовые правила из папки HAPP этого репозитория.${NC}"
-    echo -e "Доступные варианты правил:"
-    echo -e "  ${BOLD}1) JSONSUB.JSON${NC}   [Рекомендуется]"
-    echo -e "  ${BOLD}2) WHITELIST.JSON${NC}"
-    echo -e "  ${BOLD}3) DEFAULT.JSON${NC}"
-    echo -e "  ${DIM}(или введите имя любого другого .JSON файла из репозитория)${NC}"
+    echo -e "\n${CYAN}${BOLD}[i] Источник правил:${NC} ${CYAN}https://github.com/hydraponique/roscomvpn-routing${NC}"
 
     local squads_env=""
     for ((i=1; i<=count_squads; i++)); do
@@ -377,23 +523,32 @@ configure_remnawave() {
             prev_sq_uuid=$(grep "^REMNAWAVE_SQUAD_${i}_UUID=" "$env_file" | cut -d'=' -f2- || true)
             prev_sq_rule=$(grep "^REMNAWAVE_SQUAD_${i}_RULE=" "$env_file" | cut -d'=' -f2- || true)
         fi
-        echo -e "\n${CYAN}--- Настройка Сквада #$i ---${NC}"
+        echo -e "\n${CYAN}── Сквад #$i ──${NC}"
         local sq_hint="из панели Remnawave → Сквады"
-        [ -n "$prev_sq_uuid" ] && sq_hint="Enter = оставить $prev_sq_uuid"
-        read -r -p "UUID сквада $i [$sq_hint]: " sq_uuid
+        [ -n "$prev_sq_uuid" ] && sq_hint="$prev_sq_uuid"
+        read -r -p "  UUID сквада [${sq_hint}]: " sq_uuid
         sq_uuid="${sq_uuid:-$prev_sq_uuid}"
 
-        echo -e "  Правило маршрутизации для сквада $i:"
-        echo -e "    ${BOLD}1)${NC} JSONSUB.JSON [Enter]"
-        echo -e "    ${BOLD}2)${NC} WHITELIST.JSON"
-        echo -e "    ${BOLD}3)${NC} Свой файл из репозитория"
-        read -r -p "  Выберите [1-3, Enter = 1]: " rule_pick
-        rule_pick="${rule_pick:-1}"
-        local sq_rule="${prev_sq_rule:-JSONSUB.JSON}"
+        local def_rule_idx=0
+        case "${prev_sq_rule:-JSONSUB.JSON}" in
+            "WHITELIST.JSON") def_rule_idx=1 ;;
+            "DEFAULT.JSON") def_rule_idx=2 ;;
+            *) def_rule_idx=0 ;;
+        esac
+
+        local rule_pick
+        rule_pick=$(tui_select "  Правило для сквада #$i:" "$def_rule_idx" \
+            "JSONSUB.JSON" \
+            "WHITELIST.JSON" \
+            "DEFAULT.JSON" \
+            "Свой файл из репозитория")
+
+        local sq_rule="JSONSUB.JSON"
         case "$rule_pick" in
-            2) sq_rule="WHITELIST.JSON" ;;
+            1) sq_rule="WHITELIST.JSON" ;;
+            2) sq_rule="DEFAULT.JSON" ;;
             3)
-                read -r -p "  Введите имя файла [например, DEFAULT.JSON]: " custom_rule
+                read -r -p "  Имя файла [например, CUSTOM.JSON]: " custom_rule
                 custom_rule="${custom_rule:-JSONSUB.JSON}"
                 if [[ ! "$custom_rule" =~ \.[Jj][Ss][Oo][Nn]$ ]]; then
                     custom_rule="${custom_rule}.JSON"
@@ -402,6 +557,8 @@ configure_remnawave() {
                 ;;
             *) sq_rule="${prev_sq_rule:-JSONSUB.JSON}" ;;
         esac
+        echo -e "  ${GREEN}[+] Сквад #$i: ${sq_uuid} → ${sq_rule}${NC}"
+
         squads_env="${squads_env}REMNAWAVE_SQUAD_${i}_UUID=${sq_uuid}
 REMNAWAVE_SQUAD_${i}_RULE=${sq_rule}
 "
@@ -414,23 +571,20 @@ REMNAWAVE_SQUAD_${i}_RULE=${sq_rule}
         current_cf_secret=$(grep "^CLOUDFLARE_ZERO_TRUST_CLIENT_SECRET=" "$env_file" | cut -d'=' -f2- || true)
     fi
 
-    local cf_prompt="y/N"
-    [ -n "$current_cf_id" ] && cf_prompt="Y/n"
-    echo -e "\n${CYAN}Опционально: если Remnawave защищена Cloudflare Zero Trust (Service Token):${NC}"
-    read -r -p "Использовать Cloudflare Zero Trust для подключения к панели? [$cf_prompt]: " cf_choice
-    if [ -n "$current_cf_id" ]; then
-        cf_choice="${cf_choice:-Y}"
-    else
-        cf_choice="${cf_choice:-N}"
-    fi
+    local cf_def_idx=0
+    [ -n "$current_cf_id" ] && cf_def_idx=1
+    local cf_choice_idx
+    cf_choice_idx=$(tui_select "Remnawave защищена Cloudflare Zero Trust?" "$cf_def_idx" \
+        "Нет (прямое подключение)" \
+        "Да (Service Token)")
 
     local cf_env=""
-    if [[ "$cf_choice" =~ ^[YyДд]$ ]]; then
-        read -r -p "CLOUDFLARE_ZERO_TRUST_CLIENT_ID [Enter = ${current_cf_id:-пропустить}]: " input_cf_id
-        input_cf_id="${input_cf_id:-$current_cf_id}"
+    if [ "$cf_choice_idx" -eq 1 ]; then
+        local input_cf_id
+        input_cf_id=$(tui_secret "CLOUDFLARE_ZERO_TRUST_CLIENT_ID" "$current_cf_id")
 
-        read -r -p "CLOUDFLARE_ZERO_TRUST_CLIENT_SECRET [Enter = ${current_cf_secret:-пропустить}]: " input_cf_secret
-        input_cf_secret="${input_cf_secret:-$current_cf_secret}"
+        local input_cf_secret
+        input_cf_secret=$(tui_secret "CLOUDFLARE_ZERO_TRUST_CLIENT_SECRET" "$current_cf_secret")
 
         if [ -n "$input_cf_id" ] && [ -n "$input_cf_secret" ]; then
             cf_env="CLOUDFLARE_ZERO_TRUST_CLIENT_ID=${input_cf_id}
@@ -590,25 +744,23 @@ configure_telegram() {
     echo -e "Текущий THREAD_ID:  ${CYAN}${current_thread:-не задан (основной чат)}${NC}"
     echo -e "Уведомлять при выходе новых баз: ${CYAN}${current_notify:-false}${NC}\n"
 
-    local tg_token_hint="пропустить"
-    [ -n "$current_token" ] && tg_token_hint="оставить текущий"
-    read -r -p "Введите TELEGRAM_BOT_TOKEN [Enter = $tg_token_hint]: " input_token
-    input_token="${input_token:-$current_token}"
+    local input_token
+    input_token=$(tui_secret "TELEGRAM_BOT_TOKEN" "$current_token")
 
-    local tg_chat_hint="пропустить"
-    [ -n "$current_chat" ] && tg_chat_hint="оставить текущий"
-    read -r -p "Введите TELEGRAM_CHAT_ID [Enter = $tg_chat_hint]: " input_chat
+    read -r -p "TELEGRAM_CHAT_ID [${current_chat:-пропустить}]: " input_chat
     input_chat="${input_chat:-$current_chat}"
 
-    read -r -p "Введите TELEGRAM_THREAD_ID (ID темы/топика, если есть) [Enter = ${current_thread:-нет}]: " input_thread
+    read -r -p "TELEGRAM_THREAD_ID (ID темы/топика) [${current_thread:-нет}]: " input_thread
     input_thread="${input_thread:-$current_thread}"
 
-    read -r -p "Присылать уведомление при выходе новых баз? [y/N]: " input_notify
-    if [[ "$input_notify" =~ ^[YyДд]$ ]]; then
-        input_notify="true"
-    else
-        input_notify="false"
-    fi
+    local succ_def_idx=0
+    [ "$current_notify" = "true" ] && succ_def_idx=1
+    local succ_pick
+    succ_pick=$(tui_select "Присылать уведомление при выходе новых баз?" "$succ_def_idx" \
+        "Нет (только критические ошибки)" \
+        "Да (отчёт о каждом обновлении)")
+    local input_notify="false"
+    [ "$succ_pick" -eq 1 ] && input_notify="true"
 
     if [ -n "$input_token" ] && [ -n "$input_chat" ]; then
         test_telegram "$input_token" "$input_chat" "$input_thread" || true
@@ -703,13 +855,10 @@ install_wizard() {
     # ────────────────────────────────────────────────────────────────────────
     echo -e "${BOLD}--- [Шаг 1] Каталог установки ---${NC}"
     if [ -n "$existing_detected" ]; then
-        echo -e "${YELLOW}[i] Обнаружена существующая установка в: ${BOLD}$existing_detected${NC}"
-        echo -e "Вы можете обновить конфигурацию в этой же папке или выбрать новую."
-    else
-        echo -e "Укажите папку для проекта. ${DIM}Подходит любая: /opt/, стеки Arcane, Portainer, Dockge, 1Panel и др.${NC}"
+        echo -e "${YELLOW}[i] Обнаружена существующая установка: ${BOLD}$existing_detected${NC}"
     fi
     
-    read -r -p "Каталог [Enter = $current_suggested_dir]: " input_dir
+    read -r -p "Каталог [${current_suggested_dir}]: " input_dir
     input_dir="$(echo "$input_dir" | tr -d '\r' | sed 's/[^a-zA-Z0-9_\/\.-]//g')"
     INSTALL_DIR="${input_dir:-$current_suggested_dir}"
     INSTALL_DIR="$(echo "$INSTALL_DIR" | tr -d '\r' | sed 's/[^a-zA-Z0-9_\/\.-]//g')"
@@ -742,7 +891,7 @@ install_wizard() {
     fi
 
     if [ -n "$scan_env" ]; then
-        echo -e "${CYAN}[i] Найдены существующие настройки ($scan_env) — они будут предложены по умолчанию.${NC}\n"
+        echo -e "${CYAN}[i] Загружены текущие настройки ($scan_env)${NC}\n"
         prev_domain="$(grep "^DOMAIN=" "$scan_env" | cut -d'=' -f2- || echo "$prev_domain")"
         prev_token="$(grep "^ROUTING_TOKEN=" "$scan_env" | cut -d'=' -f2- || echo "$prev_token")"
         prev_clients="$(grep "^ENABLED_CLIENTS=" "$scan_env" | cut -d'=' -f2- || echo "$prev_clients")"
@@ -764,14 +913,23 @@ install_wizard() {
     # ШАГ 2: Выбор сценария работы сервера
     # ────────────────────────────────────────────────────────────────────────
     echo -e "${BOLD}--- [Шаг 2] Сценарий работы ---${NC}"
-    echo -e "  ${BOLD}1)${NC} Всё в одном (раздача баз + Incy + автообновление Remnawave) [Enter]"
-    echo -e "  ${BOLD}2)${NC} Сервер раздачи (базы geoip/geosite + подписка Incy)"
-    echo -e "  ${BOLD}3)${NC} Только базы (раздача geoip.dat и geosite.dat без правил)"
-    echo -e "  ${BOLD}4)${NC} Только Remnawave (автообновление сквадов, базы на внешнем сервере)"
-    echo -e "  ${BOLD}5)${NC} Только Incy (раздача подписки JSON, базы на внешнем сервере)\n"
-    read -r -p "Вариант [1-5, Enter = 1]: " server_role
-    server_role="${server_role:-1}"
+    local default_role_idx=0
+    case "$prev_clients" in
+        "HAPP_DEEPLINK") default_role_idx=3 ;;
+        "INCY"|"INCY_GEO") [ -n "$prev_public_geo" ] && default_role_idx=4 || default_role_idx=1 ;;
+        "HAPP_GEO"|"HAPP_GEO,INCY_GEO") default_role_idx=2 ;;
+        *) default_role_idx=0 ;;
+    esac
 
+    local role_idx
+    role_idx=$(tui_select "Выберите режим работы сервера:" "$default_role_idx" \
+        "Всё в одном (раздача баз + Incy + автообновление Remnawave)" \
+        "Сервер раздачи (базы geoip/geosite + подписка Incy)" \
+        "Только базы (раздача geoip.dat и geosite.dat без правил)" \
+        "Только Remnawave (автообновление сквадов, базы на внешнем сервере)" \
+        "Только Incy (раздача подписки JSON, базы на внешнем сервере)")
+
+    local server_role=$((role_idx + 1))
     PUBLIC_GEO_BASE_URL=""
     ROUTING_SOURCE_REPO="$prev_routing_repo"
     NEEDS_PUBLIC_DOMAIN=true
@@ -779,30 +937,28 @@ install_wizard() {
 
     case "$server_role" in
         2)
-            echo -e "\n${BOLD}Клиенты:${NC}"
-            echo -e "  1) Happ и Incy [Enter]"
-            echo -e "  2) Только Happ"
-            echo -e "  3) Только Incy"
-            read -r -p "Выбор [1-3, Enter = 1]: " app_pick
-            app_pick="${app_pick:-1}"
-            case "$app_pick" in
-                2) ENABLED_CLIENTS="HAPP" ;;
-                3) ENABLED_CLIENTS="INCY" ;;
+            local client_idx
+            client_idx=$(tui_select "Выберите поддерживаемых клиентов:" 0 \
+                "Happ и Incy" \
+                "Только Happ" \
+                "Только Incy")
+            case "$client_idx" in
+                1) ENABLED_CLIENTS="HAPP" ;;
+                2) ENABLED_CLIENTS="INCY" ;;
                 *) ENABLED_CLIENTS="HAPP,INCY" ;;
             esac
             NEEDS_PUBLIC_DOMAIN=true
             config_remna=false
             ;;
         3)
-            echo -e "\n${BOLD}Клиенты:${NC}"
-            echo -e "  1) Happ и Incy [Enter]"
-            echo -e "  2) Только Happ"
-            echo -e "  3) Только Incy"
-            read -r -p "Выбор [1-3, Enter = 1]: " app_pick
-            app_pick="${app_pick:-1}"
-            case "$app_pick" in
-                2) ENABLED_CLIENTS="HAPP_GEO" ;;
-                3) ENABLED_CLIENTS="INCY_GEO" ;;
+            local client_idx
+            client_idx=$(tui_select "Формат баз:" 0 \
+                "Happ и Incy" \
+                "Только Happ" \
+                "Только Incy")
+            case "$client_idx" in
+                1) ENABLED_CLIENTS="HAPP_GEO" ;;
+                2) ENABLED_CLIENTS="INCY_GEO" ;;
                 *) ENABLED_CLIENTS="HAPP_GEO,INCY_GEO" ;;
             esac
             NEEDS_PUBLIC_DOMAIN=true
@@ -819,15 +975,14 @@ install_wizard() {
             config_remna=false
             ;;
         *)
-            echo -e "\n${BOLD}Клиенты:${NC}"
-            echo -e "  1) Happ и Incy [Enter]"
-            echo -e "  2) Только Happ"
-            echo -e "  3) Только Incy"
-            read -r -p "Выбор [1-3, Enter = 1]: " app_pick
-            app_pick="${app_pick:-1}"
-            case "$app_pick" in
-                2) ENABLED_CLIENTS="HAPP" ;;
-                3) ENABLED_CLIENTS="INCY" ;;
+            local client_idx
+            client_idx=$(tui_select "Поддерживаемые клиенты:" 0 \
+                "Happ и Incy" \
+                "Только Happ" \
+                "Только Incy")
+            case "$client_idx" in
+                1) ENABLED_CLIENTS="HAPP" ;;
+                2) ENABLED_CLIENTS="INCY" ;;
                 *) ENABLED_CLIENTS="HAPP,INCY" ;;
             esac
             NEEDS_PUBLIC_DOMAIN=true
@@ -840,7 +995,7 @@ install_wizard() {
     if [ "$server_role" = "4" ] || [ "$server_role" = "5" ]; then
         local prompt_str="Адрес сервера с базами (например, https://geo.example.com/секретный_токен): "
         if [ -n "$prev_public_geo" ]; then
-            prompt_str="Адрес сервера с базами [Enter = ${prev_public_geo}]: "
+            prompt_str="Адрес сервера с базами [${prev_public_geo}]: "
         fi
 
         while true; do
@@ -881,9 +1036,10 @@ install_wizard() {
             local no_proto="${PUBLIC_GEO_BASE_URL#*://}"
             local path_part="${no_proto#*/}"
             if [ "$path_part" = "$no_proto" ] || [ -z "$path_part" ]; then
-                echo -e "${YELLOW}[!] Вы указали адрес без секретного токена (${PUBLIC_GEO_BASE_URL}).${NC}"
-                read -r -p "    Сервер раздачи действительно настроен без токена? [y/N]: " confirm_no_tok
-                if [[ ! "$confirm_no_tok" =~ ^[YyДд]$ ]]; then
+                echo -e "${YELLOW}[!] Указан адрес без токена (${PUBLIC_GEO_BASE_URL}).${NC}"
+                local conf_tok_idx
+                conf_tok_idx=$(tui_select "Сервер действительно настроен без токена?" 0 "Нет, ввести заново" "Да, продолжить без токена")
+                if [ "$conf_tok_idx" -eq 0 ]; then
                     continue
                 fi
             fi
@@ -902,56 +1058,50 @@ install_wizard() {
 
     if [ "$NEEDS_PUBLIC_DOMAIN" = true ]; then
         echo -e "${BOLD}--- [Шаг 3] Публичный домен для HTTPS ---${NC}"
-        echo -e "${DIM}Домен, на который вы направите реверс-прокси (Caddy / Nginx / NPM).${NC}"
-        read -r -p "Введите домен [Enter = ${prev_domain:-geo.example.com}]: " input_domain
+        read -r -p "Введите домен [${prev_domain:-geo.example.com}]: " input_domain
         DOMAIN="${input_domain:-${prev_domain:-geo.example.com}}"
         DOMAIN="$(echo "$DOMAIN" | tr -d '[:space:]' | sed -e 's~^https\?://~~' -e 's~/*$~~')"
         echo -e "${GREEN}[+] Домен: $DOMAIN${NC}\n"
 
         # ШАГ 4: Токен
         echo -e "${BOLD}--- [Шаг 4] Секретный URL-токен ---${NC}"
-        echo -e "${DIM}Токен — секретная часть URL, которая защищает ваши файлы от сканеров.${NC}"
-        
         local auto_token
         if [ -n "$prev_token" ] && [ "$prev_token" != "local" ]; then
             auto_token="$prev_token"
-            echo -e "Используется токен: ${CYAN}${BOLD}${auto_token}${NC}"
+            echo -e "Текущий токен: ${CYAN}${BOLD}${auto_token}${NC}"
         else
             auto_token="$(openssl rand -hex 16)"
-            echo -e "Сгенерирован случайный токен: ${CYAN}${BOLD}${auto_token}${NC}"
+            echo -e "Сгенерирован токен: ${CYAN}${BOLD}${auto_token}${NC}"
         fi
         
-        read -r -p "Введите свой токен или нажмите Enter для подтверждения: " input_token
+        read -r -p "Секретный токен [${auto_token}]: " input_token
         ROUTING_TOKEN="${input_token:-$auto_token}"
         ROUTING_TOKEN="$(echo "$ROUTING_TOKEN" | tr -d '[:space:]/\\')"
         while [[ ! "$ROUTING_TOKEN" =~ ^[A-Za-z0-9_-]+$ ]] || [ "${#ROUTING_TOKEN}" -lt 8 ]; do
-            echo -e "${RED}[!] Токен должен быть длиной не менее 8 символов и содержать только латинские буквы, цифры, дефис и подчеркивание (без точек)!${NC}"
-            read -r -p "Введите корректный токен [Enter = ${auto_token}]: " input_token
+            echo -e "${RED}[!] Токен должен быть длиной не менее 8 символов (буквы, цифры, дефис, подчеркивание)${NC}"
+            read -r -p "Введите корректный токен [${auto_token}]: " input_token
             ROUTING_TOKEN="${input_token:-$auto_token}"
             ROUTING_TOKEN="$(echo "$ROUTING_TOKEN" | tr -d '[:space:]/\\')"
         done
         echo -e "${GREEN}[+] Токен сохранён.${NC}"
-        echo -e "${CYAN}${BOLD}[i] Базовый URL сервера:${NC} ${CYAN}https://${DOMAIN}/${ROUTING_TOKEN}${NC}"
-        echo -e "${DIM}    • Путь для Happ: /HAPP/ (geoip.dat, geosite.dat, JSONSUB.DEEPLINK, WHITELIST.DEEPLINK)${NC}"
-        echo -e "${DIM}    • Путь для Incy: /INCY/ (geoip.dat, geosite.dat, JSONSUB.JSON, WHITELIST.JSON)${NC}\n"
+        echo -e "${CYAN}${BOLD}[i] Базовый URL:${NC} ${CYAN}https://${DOMAIN}/${ROUTING_TOKEN}${NC}\n"
 
         # ШАГ 5: Локальный порт
         echo -e "${BOLD}--- [Шаг 5] Локальный порт веб-сервера ---${NC}"
-        echo -e "${DIM}На этот порт ваш реверс-прокси будет перенаправлять трафик.${NC}"
         local suggested_port="${prev_port:-8080}"
         if is_port_in_use "$suggested_port"; then
             local free_p
             free_p="$(find_free_port 8081)"
-            echo -e "${YELLOW}[!] Порт $suggested_port уже занят на сервере. Предлагаем свободный порт: ${BOLD}${free_p}${NC}"
+            echo -e "${YELLOW}[!] Порт $suggested_port занят. Предлагаем свободный порт: ${BOLD}${free_p}${NC}"
             suggested_port="$free_p"
         fi
-        read -r -p "Порт [Enter = ${suggested_port}]: " input_port
+        read -r -p "Порт [${suggested_port}]: " input_port
         HTTP_PORT="${input_port:-$suggested_port}"
         while is_port_in_use "$HTTP_PORT"; do
-            echo -e "${RED}[!] Порт $HTTP_PORT уже занят другим процессом на сервере!${NC}"
+            echo -e "${RED}[!] Порт $HTTP_PORT занят другим процессом!${NC}"
             local next_free
             next_free="$(find_free_port $((HTTP_PORT + 1)))"
-            read -r -p "Введите другой порт [Enter = ${next_free}]: " input_port
+            read -r -p "Введите другой порт [${next_free}]: " input_port
             HTTP_PORT="${input_port:-$next_free}"
         done
         echo -e "${GREEN}[+] Порт: $HTTP_PORT${NC}\n"
@@ -969,29 +1119,24 @@ install_wizard() {
     REMNA_BLOCK=""
     if [ "$config_remna" = true ]; then
         echo -e "${BOLD}--- [Шаг 6] Прямая интеграция с Remnawave ---${NC}"
-        echo -e "${DIM}Сервер сам отправляет правила маршрутизации прямо в API вашей панели Remnawave.${NC}\n"
 
-        local remna_choice="Y"
+        local remna_proceed=true
         if [ "$server_role" != "1" ] && [ "$server_role" != "4" ]; then
-            local default_remna_prompt="y/N"
-            [ -n "$prev_remna_token" ] && default_remna_prompt="Y/n"
-            read -r -p "Настроить отправку правил Happ в сквады Remnawave? [$default_remna_prompt]: " remna_choice
-            if [ -n "$prev_remna_token" ]; then
-                remna_choice="${remna_choice:-Y}"
-            else
-                remna_choice="${remna_choice:-N}"
-            fi
+            local remna_conf_idx
+            remna_conf_idx=$(tui_select "Настроить отправку правил Happ в сквады Remnawave?" 0 "Да" "Нет")
+            [ "$remna_conf_idx" -ne 0 ] && remna_proceed=false
         fi
 
-        if [[ "$remna_choice" =~ ^[YyДд]$ ]]; then
-            echo ""
-            read -r -p "URL API панели Remnawave [Enter = ${prev_remna_base:-http://remnawave:3000/api}]: " r_base
+        if [ "$remna_proceed" = true ]; then
+            if detect_remnawave_running; then
+                echo -e "${CYAN}[i] Обнаружен локальный контейнер Remnawave в Docker.${NC}"
+            fi
+
+            read -r -p "URL API панели Remnawave [${prev_remna_base:-http://remnawave:3000/api}]: " r_base
             r_base="${r_base:-${prev_remna_base:-http://remnawave:3000/api}}"
-            local r_token_hint="пропустить"
-            [ -n "$prev_remna_token" ] && r_token_hint="сохранить текущий"
-            read -r -p "JWT токен администратора [Enter = $r_token_hint]: " r_token
-            r_token="${r_token:-$prev_remna_token}"
-            echo ""
+
+            local r_token
+            r_token=$(tui_secret "JWT токен администратора Remnawave" "$prev_remna_token")
 
             local existing_squads=0
             if [ -n "$scan_env" ] && [ -f "$scan_env" ]; then
@@ -999,19 +1144,13 @@ install_wizard() {
             fi
             local default_sq_count="${existing_squads:-1}"
             [ "$default_sq_count" -le 0 ] && default_sq_count=1
-            read -r -p "Сколько сквадов привязать? [1-10, Enter = $default_sq_count]: " r_count
+            read -r -p "Сколько сквадов привязать? [${default_sq_count}]: " r_count
             r_count="${r_count:-$default_sq_count}"
             
             REMNA_BLOCK="REMNAWAVE_BASE_URL=${r_base}
 REMNAWAVE_TOKEN=${r_token}
 "
-            echo -e "\n${CYAN}${BOLD}[i] Источник правил маршрутизации:${NC} ${CYAN}https://github.com/hydraponique/roscomvpn-routing${NC}"
-            echo -e "${DIM}Сервер берет готовые правила из папки HAPP этого репозитория.${NC}"
-            echo -e "Доступные варианты правил:"
-            echo -e "  ${BOLD}1) JSONSUB.JSON${NC}   [Рекомендуется]"
-            echo -e "  ${BOLD}2) WHITELIST.JSON${NC}"
-            echo -e "  ${BOLD}3) DEFAULT.JSON${NC}"
-            echo -e "  ${DIM}(или введите имя любого другого .JSON файла из репозитория)${NC}"
+            echo -e "\n${CYAN}${BOLD}[i] Источник правил:${NC} ${CYAN}https://github.com/hydraponique/roscomvpn-routing${NC}"
 
             for ((i=1; i<=r_count; i++)); do
                 local prev_s_uuid=""
@@ -1022,21 +1161,30 @@ REMNAWAVE_TOKEN=${r_token}
                 fi
                 echo -e "\n${CYAN}── Сквад #$i ──${NC}"
                 local s_hint="из панели Remnawave → Сквады"
-                [ -n "$prev_s_uuid" ] && s_hint="Enter = оставить $prev_s_uuid"
-                read -r -p "  UUID сквада [$s_hint]: " s_uuid
+                [ -n "$prev_s_uuid" ] && s_hint="$prev_s_uuid"
+                read -r -p "  UUID сквада [${s_hint}]: " s_uuid
                 s_uuid="${s_uuid:-$prev_s_uuid}"
 
-                echo -e "  Правило маршрутизации для сквада $i:"
-                echo -e "    ${BOLD}1)${NC} JSONSUB.JSON [Enter]"
-                echo -e "    ${BOLD}2)${NC} WHITELIST.JSON"
-                echo -e "    ${BOLD}3)${NC} Свой файл из репозитория"
-                read -r -p "  Выберите [1-3, Enter = 1]: " s_rule_pick
-                s_rule_pick="${s_rule_pick:-1}"
-                local s_rule="${prev_s_rule:-JSONSUB.JSON}"
+                local def_rule_idx=0
+                case "${prev_s_rule:-JSONSUB.JSON}" in
+                    "WHITELIST.JSON") def_rule_idx=1 ;;
+                    "DEFAULT.JSON") def_rule_idx=2 ;;
+                    *) def_rule_idx=0 ;;
+                esac
+
+                local s_rule_pick
+                s_rule_pick=$(tui_select "  Правило для сквада #$i:" "$def_rule_idx" \
+                    "JSONSUB.JSON" \
+                    "WHITELIST.JSON" \
+                    "DEFAULT.JSON" \
+                    "Свой файл из репозитория")
+
+                local s_rule="JSONSUB.JSON"
                 case "$s_rule_pick" in
-                    2) s_rule="WHITELIST.JSON" ;;
+                    1) s_rule="WHITELIST.JSON" ;;
+                    2) s_rule="DEFAULT.JSON" ;;
                     3)
-                        read -r -p "  Введите имя файла [например, DEFAULT.JSON]: " custom_s_rule
+                        read -r -p "  Имя файла [например, CUSTOM.JSON]: " custom_s_rule
                         custom_s_rule="${custom_s_rule:-JSONSUB.JSON}"
                         if [[ ! "$custom_s_rule" =~ \.[Jj][Ss][Oo][Nn]$ ]]; then
                             custom_s_rule="${custom_s_rule}.JSON"
@@ -1045,27 +1193,26 @@ REMNAWAVE_TOKEN=${r_token}
                         ;;
                     *) s_rule="JSONSUB.JSON" ;;
                 esac
+                echo -e "  ${GREEN}[+] Сквад #$i: ${s_uuid} → ${s_rule}${NC}"
+
                 REMNA_BLOCK="${REMNA_BLOCK}REMNAWAVE_SQUAD_${i}_UUID=${s_uuid}
 REMNAWAVE_SQUAD_${i}_RULE=${s_rule}
 "
             done
 
-            local cf_prompt="y/N"
-            [ -n "$prev_cf_id" ] && cf_prompt="Y/n"
-            echo -e "\n${CYAN}Опционально: если Remnawave защищена Cloudflare Zero Trust (Service Token):${NC}"
-            read -r -p "Использовать Cloudflare Zero Trust для подключения к панели? [$cf_prompt]: " cf_choice
-            if [ -n "$prev_cf_id" ]; then
-                cf_choice="${cf_choice:-Y}"
-            else
-                cf_choice="${cf_choice:-N}"
-            fi
+            local cf_def_idx=0
+            [ -n "$prev_cf_id" ] && cf_def_idx=1
+            local cf_choice_idx
+            cf_choice_idx=$(tui_select "Remnawave защищена Cloudflare Zero Trust?" "$cf_def_idx" \
+                "Нет (прямой доступ)" \
+                "Да (Service Token)")
 
-            if [[ "$cf_choice" =~ ^[YyДд]$ ]]; then
-                read -r -p "CLOUDFLARE_ZERO_TRUST_CLIENT_ID [Enter = ${prev_cf_id:-пропустить}]: " r_cf_id
-                r_cf_id="${r_cf_id:-$prev_cf_id}"
+            if [ "$cf_choice_idx" -eq 1 ]; then
+                local r_cf_id
+                r_cf_id=$(tui_secret "CLOUDFLARE_ZERO_TRUST_CLIENT_ID" "$prev_cf_id")
 
-                read -r -p "CLOUDFLARE_ZERO_TRUST_CLIENT_SECRET [Enter = ${prev_cf_secret:-пропустить}]: " r_cf_secret
-                r_cf_secret="${r_cf_secret:-$prev_cf_secret}"
+                local r_cf_secret
+                r_cf_secret=$(tui_secret "CLOUDFLARE_ZERO_TRUST_CLIENT_SECRET" "$prev_cf_secret")
 
                 if [ -n "$r_cf_id" ] && [ -n "$r_cf_secret" ]; then
                     REMNA_BLOCK="${REMNA_BLOCK}CLOUDFLARE_ZERO_TRUST_CLIENT_ID=${r_cf_id}
@@ -1078,12 +1225,12 @@ CLOUDFLARE_ZERO_TRUST_CLIENT_SECRET=${prev_cf_secret}
 "
             fi
 
-            echo -e "\n${GREEN}[+] Интеграция с Remnawave настроена.${NC}\n"
+            echo -e "${GREEN}[+] Интеграция с Remnawave настроена.${NC}\n"
         fi
     fi
 
     # ────────────────────────────────────────────────────────────────────────
-    # ШАГ 7: Docker-сеть (только если есть смысл)
+    # ШАГ 7: Docker-сеть (умный автодетект)
     # ────────────────────────────────────────────────────────────────────────
     EXT_NETWORK=""
     NEEDS_NETWORK=false
@@ -1094,20 +1241,50 @@ CLOUDFLARE_ZERO_TRUST_CLIENT_SECRET=${prev_cf_secret}
 
     if [ "$NEEDS_NETWORK" = true ]; then
         echo -e "${BOLD}--- [Шаг 7] Подключение к Docker-сети ---${NC}"
-        echo -e "${DIM}Нужно, если Remnawave и этот сервер запущены на одной машине через Docker.${NC}"
-        echo -e "${DIM}Объединение в общую сеть позволяет им общаться напрямую без открытия портов наружу.${NC}"
-        echo -e "${DIM}Если не уверены — нажмите Enter (пропустить).${NC}"
-        read -r -p "Подключить к Docker-сети? [y/N]: " net_choice
-        if [[ "$net_choice" =~ ^[YyДд]$ ]]; then
-            read -r -p "Имя сети [Enter = remnawave-network]: " input_net
-            EXT_NETWORK="${input_net:-remnawave-network}"
+        
+        # Получаем список сетей Docker
+        local detected_nets
+        detected_nets=$(detect_docker_networks)
+        local net_options=()
+        local remna_found_net=""
+
+        if [ -n "$detected_nets" ]; then
+            while IFS= read -r net_name; do
+                [ -z "$net_name" ] && continue
+                if [[ "$net_name" =~ remna ]]; then
+                    remna_found_net="$net_name"
+                fi
+                net_options+=("$net_name")
+            done <<< "$detected_nets"
+        fi
+
+        # Если не нашли remnawave-network в списке, добавим ее как вариант
+        if [ -z "$remna_found_net" ]; then
+            net_options=("remnawave-network" "${net_options[@]}")
+        fi
+        net_options+=("Ввести другое имя сети" "Не подключать к внешней сети")
+
+        local net_pick_idx
+        net_pick_idx=$(tui_select "Выберите Docker-сеть для связи с Remnawave:" 0 "${net_options[@]}")
+        local chosen_net="${net_options[$net_pick_idx]}"
+
+        if [ "$chosen_net" = "Не подключать к внешней сети" ]; then
+            echo -e "${DIM}Пропущено. Используется стандартная сеть.${NC}\n"
+        elif [ "$chosen_net" = "Ввести другое имя сети" ]; then
+            read -r -p "Имя Docker-сети: " input_custom_net
+            EXT_NETWORK="${input_custom_net:-remnawave-network}"
             if ! docker network inspect "$EXT_NETWORK" &>/dev/null; then
-                echo -e "${YELLOW}[*] Сеть $EXT_NETWORK не найдена. Создаём...${NC}"
+                echo -e "${YELLOW}[*] Создаём Docker-сеть $EXT_NETWORK...${NC}"
                 docker network create "$EXT_NETWORK" || true
             fi
             echo -e "${GREEN}[+] Сеть: $EXT_NETWORK${NC}\n"
         else
-            echo -e "${DIM}Пропущено. Используется стандартная изолированная сеть.${NC}\n"
+            EXT_NETWORK="$chosen_net"
+            if ! docker network inspect "$EXT_NETWORK" &>/dev/null; then
+                echo -e "${YELLOW}[*] Создаём Docker-сеть $EXT_NETWORK...${NC}"
+                docker network create "$EXT_NETWORK" || true
+            fi
+            echo -e "${GREEN}[+] Сеть: $EXT_NETWORK${NC}\n"
         fi
     fi
 
@@ -1115,22 +1292,27 @@ CLOUDFLARE_ZERO_TRUST_CLIENT_SECRET=${prev_cf_secret}
     # ШАГ 8: Расписание обновления (Cron)
     # ────────────────────────────────────────────────────────────────────────
     echo -e "${BOLD}--- [Шаг 8] Расписание автоматического обновления ---${NC}"
-    echo -e "${DIM}Как часто обновлять базы и отправлять правила в сквады?${NC}\n"
-    echo -e "  ${BOLD}1)${NC} Раз в сутки в 10:00 UTC / 13:00 МСК [Enter — Рекомендуется]"
-    echo -e "     ${DIM}(Гарантированно после утреннего обновления репозитория roscomvpn-routing)${NC}"
-    echo -e "  ${BOLD}2)${NC} Каждые 6 часов (4 раза в день)"
-    echo -e "  ${BOLD}3)${NC} Каждые 12 часов (2 раза в день)"
-    echo -e "  ${BOLD}4)${NC} Указать свое cron-расписание"
-    echo ""
-    read -r -p "Выберите вариант [1-4, Enter = 1]: " sched_choice
-    sched_choice="${sched_choice:-1}"
+    local def_sched_idx=0
+    case "${prev_schedule:-0 10 * * *}" in
+        "0 */6 * * *") def_sched_idx=1 ;;
+        "0 */12 * * *") def_sched_idx=2 ;;
+        "0 10 * * *") def_sched_idx=0 ;;
+        *) def_sched_idx=3 ;;
+    esac
+
+    local sched_idx
+    sched_idx=$(tui_select "Как часто обновлять базы и правила?" "$def_sched_idx" \
+        "Раз в сутки в 10:00 UTC / 13:00 МСК (Рекомендуется)" \
+        "Каждые 6 часов (4 раза в день)" \
+        "Каждые 12 часов (2 раза в день)" \
+        "Указать свое cron-расписание")
 
     SCHEDULE="0 10 * * *"
-    case "$sched_choice" in
-        2) SCHEDULE="0 */6 * * *" ;;
-        3) SCHEDULE="0 */12 * * *" ;;
-        4)
-            read -r -p "Введите cron-выражение [Enter = ${prev_schedule:-0 10 * * *}]: " custom_sched
+    case "$sched_idx" in
+        1) SCHEDULE="0 */6 * * *" ;;
+        2) SCHEDULE="0 */12 * * *" ;;
+        3)
+            read -r -p "Введите cron-выражение [${prev_schedule:-0 10 * * *}]: " custom_sched
             SCHEDULE="${custom_sched:-${prev_schedule:-0 10 * * *}}"
             ;;
         *) SCHEDULE="0 10 * * *" ;;
@@ -1138,45 +1320,44 @@ CLOUDFLARE_ZERO_TRUST_CLIENT_SECRET=${prev_cf_secret}
     echo -e "${GREEN}[+] Расписание: $SCHEDULE${NC}\n"
 
     # ────────────────────────────────────────────────────────────────────────
-    # ШАГ 9: Telegram (всегда опционален)
+    # ШАГ 9: Telegram (опционально)
     # ────────────────────────────────────────────────────────────────────────
-    echo -e "${BOLD}--- [Последний шаг] Telegram-уведомления (опционально) ---${NC}"
-    echo -e "${DIM}Бот будет присылать алерты при ошибках синхронизации и (по желанию) отчёты о новых базах.${NC}"
-    
-    local default_tg_prompt="y/N"
-    [ -n "$prev_tg_token" ] && default_tg_prompt="Y/n"
-    read -r -p "Настроить Telegram? [$default_tg_prompt]: " tg_choice
-    if [ -n "$prev_tg_token" ]; then
-        tg_choice="${tg_choice:-Y}"
-    fi
+    echo -e "${BOLD}--- [Последний шаг] Telegram-уведомления ---${NC}"
+    local def_tg_idx=0
+    [ -n "$prev_tg_token" ] && def_tg_idx=1
+
+    local tg_opt_idx
+    tg_opt_idx=$(tui_select "Настроить Telegram-уведомления об ошибках/обновлениях?" "$def_tg_idx" \
+        "Пропустить (без Telegram)" \
+        "Настроить Telegram бота")
 
     TG_BOT_TOKEN=""
     TG_CHAT_ID=""
     TG_THREAD_ID=""
     TG_NOTIFY_SUCCESS="false"
 
-    if [[ "$tg_choice" =~ ^[YyДд]$ ]]; then
-        read -r -p "TELEGRAM_BOT_TOKEN [Enter = ${prev_tg_token:-пропустить}]: " TG_BOT_TOKEN
-        TG_BOT_TOKEN="${TG_BOT_TOKEN:-$prev_tg_token}"
+    if [ "$tg_opt_idx" -eq 1 ]; then
+        TG_BOT_TOKEN=$(tui_secret "TELEGRAM_BOT_TOKEN" "$prev_tg_token")
+        
+        read -r -p "TELEGRAM_CHAT_ID [${prev_tg_chat:-пропустить}]: " input_chat
+        TG_CHAT_ID="${input_chat:-$prev_tg_chat}"
 
-        read -r -p "TELEGRAM_CHAT_ID [Enter = ${prev_tg_chat:-пропустить}]: " TG_CHAT_ID
-        TG_CHAT_ID="${TG_CHAT_ID:-$prev_tg_chat}"
+        read -r -p "TELEGRAM_THREAD_ID (ID темы) [${prev_tg_thread:-нет}]: " input_thread
+        TG_THREAD_ID="${input_thread:-$prev_tg_thread}"
 
-        read -r -p "TELEGRAM_THREAD_ID (ID темы) [Enter = ${prev_tg_thread:-нет}]: " TG_THREAD_ID
-        TG_THREAD_ID="${TG_THREAD_ID:-$prev_tg_thread}"
-
-        read -r -p "Присылать уведомление при выходе новых баз? [y/N]: " tg_success
-        if [[ "$tg_success" =~ ^[YyДд]$ ]]; then
-            TG_NOTIFY_SUCCESS="true"
-        else
-            TG_NOTIFY_SUCCESS="false"
-        fi
+        local tg_succ_idx
+        tg_succ_idx=$(tui_select "Присылать уведомление при успешном выходе новых баз?" 0 \
+            "Нет (только критические ошибки)" \
+            "Да (отчёт о каждом обновлении)")
+        [ "$tg_succ_idx" -eq 1 ] && TG_NOTIFY_SUCCESS="true" || TG_NOTIFY_SUCCESS="false"
 
         if [ -n "$TG_BOT_TOKEN" ] && [ -n "$TG_CHAT_ID" ]; then
             test_telegram "$TG_BOT_TOKEN" "$TG_CHAT_ID" "$TG_THREAD_ID" || true
         fi
+        echo -e "${GREEN}[+] Telegram настроен.${NC}\n"
+    else
+        echo -e "${DIM}Уведомления Telegram отключены.${NC}\n"
     fi
-    echo -e "${GREEN}[+] Telegram настроен.${NC}\n"
 
     # ────────────────────────────────────────────────────────────────────────
     # ГЕНЕРАЦИЯ КОНФИГУРАЦИИ
@@ -1316,72 +1497,75 @@ main_menu() {
         local target_dir
         target_dir="$(get_install_dir)"
         
-        if [ "${UI_LANG:-ru}" = "en" ]; then
-            echo -e "Project directory: ${CYAN}$target_dir${NC}"
-            if docker ps --format '{{.Names}}' | grep -q "^geo-routing-server$"; then
-                echo -e "Container status: ${GREEN}[+] Running & Active${NC}\n"
-            else
-                echo -e "Container status: ${RED}[-] Stopped or Not Found${NC}\n"
-            fi
-
-            echo -e "${BOLD}Choose an action:${NC}"
-            printf " %-4s %s\n" "1)"  "Sync geo-databases right now"
-            printf " %-4s %s\n" "2)"  "Show public links and autorouting header"
-            printf " %-4s %s\n" "3)"  "Show ready reverse-proxy configs (Caddy / Nginx / NPM)"
-            printf " %-4s %s\n" "4)"  "Configure Remnawave API sync"
-            printf " %-4s %s\n" "5)"  "Configure Telegram notifications"
-            printf " %-4s %s\n" "6)"  "Reconfigure server (run wizard)"
-            printf " %-4s %s\n" "7)"  "Update Docker image (pull & restart)"
-            printf " %-4s %s\n" "8)"  "Update management script from GitHub"
-            printf " %-4s %s\n" "9)"  "View container logs"
-            printf " %-4s %s\n" "10)" "Restart server"
-            printf " %-4s %s\n" "11)" "Stop server"
-            printf " %-4s %s\n" "12)" "Uninstall project from server"
-            printf " %-4s %s\n" "13)" "Сменить язык / Change language (RU/EN)"
-            printf " %-4s %s\n" "0)"  "Exit"
-            echo ""
-            read -r -p "Enter choice [0-13]: " menu_choice
+        local status_msg=""
+        if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^geo-routing-server$"; then
+            status_msg="${GREEN}[+] Запущен и активен${NC}"
         else
-            echo -e "Каталог проекта: ${CYAN}$target_dir${NC}"
-            if docker ps --format '{{.Names}}' | grep -q "^geo-routing-server$"; then
-                echo -e "Статус контейнера: ${GREEN}[+] Запущен и активен${NC}\n"
-            else
-                echo -e "Статус контейнера: ${RED}[-] Остановлен или не существует${NC}\n"
-            fi
-
-            echo -e "${BOLD}Выберите действие:${NC}"
-            printf " %-4s %s\n" "1)"  "Синхронизировать базы прямо сейчас"
-            printf " %-4s %s\n" "2)"  "Показать публичные ссылки и заголовок autorouting"
-            printf " %-4s %s\n" "3)"  "Показать готовые конфиги для Caddy / Nginx / NPM"
-            printf " %-4s %s\n" "4)"  "Настроить прямую синхронизацию с Remnawave API"
-            printf " %-4s %s\n" "5)"  "Настроить / Изменить Telegram-уведомления"
-            printf " %-4s %s\n" "6)"  "Перенастроить сервер заново (мастер установки)"
-            printf " %-4s %s\n" "7)"  "Обновить Docker-образ сервера (pull & restart)"
-            printf " %-4s %s\n" "8)"  "Обновить скрипт управления (меню и CLI из GitHub)"
-            printf " %-4s %s\n" "9)"  "Посмотреть логи контейнера"
-            printf " %-4s %s\n" "10)" "Перезапустить сервер"
-            printf " %-4s %s\n" "11)" "Остановить сервер"
-            printf " %-4s %s\n" "12)" "Удалить проект с сервера"
-            printf " %-4s %s\n" "13)" "Сменить язык / Change language (RU/EN)"
-            printf " %-4s %s\n" "0)"  "Выход"
-            echo ""
-            read -r -p "Введите номер [0-13]: " menu_choice
+            status_msg="${RED}[-] Остановлен или не найден${NC}"
         fi
 
-        case "$menu_choice" in
-            1) run_sync_now ;;
-            2) show_links ;;
-            3) show_proxy_snippets; read -r -p "Нажмите Enter для возврата в меню..." ;;
-            4) configure_remnawave ;;
-            5) configure_telegram ;;
-            6) install_wizard ;;
-            7) update_project ;;
-            8) update_script_only ;;
-            9) view_logs ;;
-            10) restart_server ;;
-            11) stop_server ;;
-            12) uninstall_project ;;
-            13)
+        if [ "${UI_LANG:-ru}" = "en" ]; then
+            echo -e "Project directory: ${CYAN}$target_dir${NC}"
+            echo -e "Container status:  $status_msg\n"
+
+            local en_options=(
+                "Sync geo-databases right now"
+                "Show public links and autorouting header"
+                "Show reverse-proxy configs (Caddy / Nginx / NPM)"
+                "Configure Remnawave API sync"
+                "Configure Telegram notifications"
+                "Reconfigure server (run wizard)"
+                "Update Docker image (pull & restart)"
+                "Update management script from GitHub"
+                "View container logs"
+                "Restart server"
+                "Stop server"
+                "Uninstall project from server"
+                "Сменить язык / Change language (RU/EN)"
+                "Exit"
+            )
+
+            local menu_idx
+            menu_idx=$(tui_select "Choose an action:" 0 "${en_options[@]}")
+        else
+            echo -e "Каталог проекта:  ${CYAN}$target_dir${NC}"
+            echo -e "Статус сервера:   $status_msg\n"
+
+            local ru_options=(
+                "Синхронизировать базы прямо сейчас"
+                "Показать публичные ссылки и диплинки"
+                "Готовые конфиги для Caddy / Nginx / NPM"
+                "Настроить прямую синхронизацию с Remnawave"
+                "Настроить / Изменить Telegram-уведомления"
+                "Перенастроить сервер (мастер установки)"
+                "Обновить Docker-образ сервера"
+                "Обновить скрипт управления из GitHub"
+                "Посмотреть логи контейнера"
+                "Перезапустить сервер"
+                "Остановить сервер"
+                "Удалить проект с сервера"
+                "Сменить язык / Change language (RU/EN)"
+                "Выход"
+            )
+
+            local menu_idx
+            menu_idx=$(tui_select "Выберите действие:" 0 "${ru_options[@]}")
+        fi
+
+        case "$menu_idx" in
+            0) run_sync_now ;;
+            1) show_links ;;
+            2) show_proxy_snippets; read -r -p "Нажмите Enter для возврата в меню..." ;;
+            3) configure_remnawave ;;
+            4) configure_telegram ;;
+            5) install_wizard ;;
+            6) update_project ;;
+            7) update_script_only ;;
+            8) view_logs ;;
+            9) restart_server ;;
+            10) stop_server ;;
+            11) uninstall_project ;;
+            12)
                 if [ "${UI_LANG:-ru}" = "ru" ]; then
                     UI_LANG="en"
                 else
@@ -1391,8 +1575,8 @@ main_menu() {
                 echo -e "${GREEN}[+] Language / Язык: $UI_LANG${NC}"
                 sleep 1
                 ;;
-            0) exit 0 ;;
-            *) echo -e "${RED}[!] Неверный пункт меню / Invalid option${NC}"; sleep 1 ;;
+            13) exit 0 ;;
+            *) echo -e "${RED}[!] Неверный пункт меню${NC}"; sleep 1 ;;
         esac
     done
 }
@@ -1443,28 +1627,26 @@ main() {
         main_menu
     elif [ -d "$target_dir" ]; then
         print_header
+        local init_idx
         if [ "${UI_LANG:-ru}" = "en" ]; then
-            echo -e "${YELLOW}[!] An incomplete or previous installation was detected in $target_dir${NC}\n"
-            echo "  1) Run installer wizard (resume / reconfigure)"
-            echo "  2) Reset and start fresh (clean all files)"
-            echo "  3) Completely uninstall project from server"
-            read -r -p "Select option [1-3, Enter = 1]: " init_choice
+            init_idx=$(tui_select "${YELLOW}[!] Incomplete installation detected in $target_dir${NC}" 0 \
+                "Resume / reconfigure installation" \
+                "Reset and start fresh (clean all files)" \
+                "Completely uninstall project from server")
         else
-            echo -e "${YELLOW}[!] Обнаружена незавершенная или прерванная установка в $target_dir${NC}\n"
-            echo "  1) Начать установку заново (сохранив старые данные)"
-            echo "  2) Очистить все файлы и начать с чистого листа"
-            echo "  3) Полностью удалить проект с сервера"
-            read -r -p "Выберите вариант [1-3, Enter = 1]: " init_choice
+            init_idx=$(tui_select "${YELLOW}[!] Обнаружена незавершенная установка в $target_dir${NC}" 0 \
+                "Продолжить настройку (сохранить старые данные)" \
+                "Очистить все файлы и начать с чистого листа" \
+                "Полностью удалить проект с сервера")
         fi
-        init_choice="${init_choice:-1}"
-        case "$init_choice" in
-            2) 
+        case "$init_idx" in
+            1) 
                 if [ -n "$target_dir" ] && [ "$target_dir" != "/" ] && [ "$target_dir" != "/root" ] && [ -d "$target_dir" ]; then
                     rm -rf "$target_dir"
                 fi
                 install_wizard
                 ;;
-            3) uninstall_project ;;
+            2) uninstall_project ;;
             *) install_wizard ;;
         esac
     else
