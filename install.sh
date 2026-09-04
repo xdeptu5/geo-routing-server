@@ -567,6 +567,7 @@ show_proxy_snippets() {
     if [ "$clients" = "HAPP_DEEPLINK" ] || [ "$clients" = "HAPP_LOCAL" ]; then
         echo -e "${GREEN}${BOLD}[i] Режим «Только генератор для Remnawave»: сервер работает локально внутри Docker-сети.${NC}"
         echo -e "Настройка внешнего реверс-прокси не требуется, если вы не планируете открывать сервер наружу.\n"
+        pause_menu
         return 0
     fi
 
@@ -603,6 +604,7 @@ show_proxy_snippets() {
     echo -e "Forward Port:          ${BOLD}${port}${NC}"
     echo -e "SSL:                   ${BOLD}Request a new SSL Certificate (Force SSL: ON)${NC}"
     echo -e "${CYAN}===============================================================================${NC}\n"
+    pause_menu
 }
 
 configure_remnawave() {
@@ -768,7 +770,7 @@ update_script_only() {
     else
         echo -e "${RED}[!] Не удалось загрузить скрипт. Проверьте интернет-соединение.${NC}\n"
     fi
-    read -r -p "Нажмите Enter для перезапуска меню..."
+    pause_menu "Нажмите Enter для перезапуска меню..."
     exec bash "$target_dir/install.sh"
 }
 
@@ -808,7 +810,7 @@ update_project() {
 
     docker compose up -d
     echo -e "${GREEN}[+] Контейнер и скрипт успешно обновлены до последней версии!${NC}\n"
-    read -r -p "Нажмите Enter для перезапуска меню..."
+    pause_menu "Нажмите Enter для перезапуска меню..."
     exec bash "$target_dir/install.sh"
 }
 
@@ -1732,7 +1734,7 @@ main_menu() {
         case "$menu_idx" in
             0) run_sync_now ;;
             1) show_links ;;
-            2) show_proxy_snippets; pause_menu ;;
+            2) show_proxy_snippets ;;
             3) configure_remnawave ;;
             4) configure_telegram ;;
             5) install_wizard ;;
