@@ -763,26 +763,13 @@ install_wizard() {
     # ────────────────────────────────────────────────────────────────────────
     # ШАГ 2: Выбор сценария работы сервера
     # ────────────────────────────────────────────────────────────────────────
-    echo -e "${BOLD}--- [Шаг 2] Выберите сценарий работы сервера ---${NC}"
-    echo -e "${CYAN}${BOLD}[i] Источник правил:${NC} ${CYAN}https://github.com/hydraponique/roscomvpn-routing${NC}\n"
-    echo -e "  ${BOLD}1)${NC} Всё в одном (раздача баз и правил + автопатч Happ в Remnawave) [Enter — Рекомендуется]"
-    echo -e "     ${DIM}Раздает базы и JSON по HTTPS + сам отправляет свежие правила Happ в сквады Remnawave.${NC}"
-    echo ""
-    echo -e "  ${BOLD}2)${NC} Сервер раздачи баз и правил (Pull-модель для любых панелей и клиентов)"
-    echo -e "     ${DIM}Раздает базы (geoip/geosite) для Happ и Incy, а также JSON-подписку для Incy с вашего домена.${NC}"
-    echo -e "     ${DIM}Подходит для Remnawave, Marzban, 3x-ui. API-токен панели серверу не нужен.${NC}"
-    echo ""
-    echo -e "  ${BOLD}3)${NC} Только узел раздачи geo-баз (чистые файлы geoip.dat и geosite.dat)"
-    echo -e "     ${DIM}Сервер только раздает базы по HTTPS (например, быстрый узел в РФ). Без правил и Remnawave.${NC}"
-    echo ""
-    echo -e "  ${BOLD}4)${NC} Контейнер синхронизации с Remnawave API (домен на этой машине не нужен)"
-    echo -e "     ${DIM}Базы уже раздаются на другом сервере. Контейнер работает в Docker${NC}"
-    echo -e "     ${DIM}и передает правила напрямую в API сквадов Remnawave.${NC}"
-    echo ""
-    echo -e "  ${BOLD}5)${NC} Раздача JSON для Incy (базы на внешнем сервере)"
-    echo -e "     ${DIM}Сервер раздает только JSON подписки для Incy, а базы скачиваются с внешнего узла.${NC}"
-    echo ""
-    read -r -p "Выберите вариант [1-5, Enter = 1]: " server_role
+    echo -e "${BOLD}--- [Шаг 2] Сценарий работы ---${NC}"
+    echo -e "  ${BOLD}1)${NC} Всё в одном (раздача баз + Incy + автообновление Remnawave) [Enter]"
+    echo -e "  ${BOLD}2)${NC} Сервер раздачи (базы geoip/geosite + подписка Incy)"
+    echo -e "  ${BOLD}3)${NC} Только базы (раздача geoip.dat и geosite.dat без правил)"
+    echo -e "  ${BOLD}4)${NC} Только Remnawave (автообновление сквадов, базы на внешнем сервере)"
+    echo -e "  ${BOLD}5)${NC} Только Incy (раздача подписки JSON, базы на внешнем сервере)\n"
+    read -r -p "Вариант [1-5, Enter = 1]: " server_role
     server_role="${server_role:-1}"
 
     PUBLIC_GEO_BASE_URL=""
@@ -792,11 +779,11 @@ install_wizard() {
 
     case "$server_role" in
         2)
-            echo -e "\n${BOLD}Для каких приложений готовить правила?${NC}"
-            echo -e "  ${BOLD}1)${NC} Happ и Incy (Оба) [Enter]"
-            echo -e "  ${BOLD}2)${NC} Только Happ"
-            echo -e "  ${BOLD}3)${NC} Только Incy"
-            read -r -p "Выберите [1-3, Enter = 1]: " app_pick
+            echo -e "\n${BOLD}Клиенты:${NC}"
+            echo -e "  1) Happ и Incy [Enter]"
+            echo -e "  2) Только Happ"
+            echo -e "  3) Только Incy"
+            read -r -p "Выбор [1-3, Enter = 1]: " app_pick
             app_pick="${app_pick:-1}"
             case "$app_pick" in
                 2) ENABLED_CLIENTS="HAPP" ;;
@@ -807,11 +794,11 @@ install_wizard() {
             config_remna=false
             ;;
         3)
-            echo -e "\n${BOLD}Для каких приложений раздавать базы?${NC}"
-            echo -e "  ${BOLD}1)${NC} Happ и Incy (Оба) [Enter]"
-            echo -e "  ${BOLD}2)${NC} Только Happ"
-            echo -e "  ${BOLD}3)${NC} Только Incy"
-            read -r -p "Выберите [1-3, Enter = 1]: " app_pick
+            echo -e "\n${BOLD}Клиенты:${NC}"
+            echo -e "  1) Happ и Incy [Enter]"
+            echo -e "  2) Только Happ"
+            echo -e "  3) Только Incy"
+            read -r -p "Выбор [1-3, Enter = 1]: " app_pick
             app_pick="${app_pick:-1}"
             case "$app_pick" in
                 2) ENABLED_CLIENTS="HAPP_GEO" ;;
@@ -832,11 +819,11 @@ install_wizard() {
             config_remna=false
             ;;
         *)
-            echo -e "\n${BOLD}Для каких приложений готовить правила?${NC}"
-            echo -e "  ${BOLD}1)${NC} Happ и Incy (Оба) [Enter]"
-            echo -e "  ${BOLD}2)${NC} Только Happ"
-            echo -e "  ${BOLD}3)${NC} Только Incy"
-            read -r -p "Выберите [1-3, Enter = 1]: " app_pick
+            echo -e "\n${BOLD}Клиенты:${NC}"
+            echo -e "  1) Happ и Incy [Enter]"
+            echo -e "  2) Только Happ"
+            echo -e "  3) Только Incy"
+            read -r -p "Выбор [1-3, Enter = 1]: " app_pick
             app_pick="${app_pick:-1}"
             case "$app_pick" in
                 2) ENABLED_CLIENTS="HAPP" ;;
@@ -851,16 +838,9 @@ install_wizard() {
 
     # Если базы на внешнем сервере (варианты 4 и 5)
     if [ "$server_role" = "4" ] || [ "$server_role" = "5" ]; then
-        echo -e "${BOLD}--- Внешний сервер geo-баз (где хранятся geoip.dat и geosite.dat) ---${NC}"
-        echo -e "Укажите полный адрес вашего сервера раздачи баз (домен + секретный токен)."
-        echo -e "${DIM}Можно вставить в любом формате или скопировать любую ссылку из баннера сервера баз:${NC}"
-        echo -e "${DIM}  • Базовый адрес с токеном:   https://geo.example.com/секретный_токен${NC}"
-        echo -e "${DIM}  • Прямую ссылку на базу:     https://geo.example.com/секретный_токен/HAPP/geoip.dat${NC}"
-        echo -e "${DIM}  • Или адрес без https://:    geo.example.com/секретный_токен${NC}\n"
-
-        local prompt_str="Полный URL к базам с токеном: "
+        local prompt_str="Адрес сервера с базами (например, https://geo.example.com/секретный_токен): "
         if [ -n "$prev_public_geo" ]; then
-            prompt_str="Полный URL к базам с токеном [Enter = ${prev_public_geo}]: "
+            prompt_str="Адрес сервера с базами [Enter = ${prev_public_geo}]: "
         fi
 
         while true; do
@@ -869,29 +849,28 @@ install_wizard() {
             PUBLIC_GEO_BASE_URL="${input_geo_url:-$prev_public_geo}"
             
             if [ -z "$PUBLIC_GEO_BASE_URL" ]; then
-                echo -e "${RED}[!] Адрес сервера баз обязателен для этого сценария!${NC}"
+                echo -e "${RED}[!] Укажите адрес сервера раздачи баз!${NC}"
                 continue
             fi
 
-            # Автоматически добавляем https://, если протокол не указан
+            # Автоматически добавляем https://, если указан без схемы
             if [[ ! "$PUBLIC_GEO_BASE_URL" =~ ^https?:// ]]; then
                 PUBLIC_GEO_BASE_URL="https://${PUBLIC_GEO_BASE_URL}"
             fi
 
-            # Удаляем хвостовые слеши
+            # Удаляем хвостовой слеш
             PUBLIC_GEO_BASE_URL="$(echo "$PUBLIC_GEO_BASE_URL" | sed 's:/*$::')"
 
-            # Если скопирована прямая ссылка на файл, автоматически отрезаем имя файла
+            # Если скопирована ссылка на файл, отрезаем имя файла
             PUBLIC_GEO_BASE_URL="$(echo "$PUBLIC_GEO_BASE_URL" | sed 's:/[gG][eE][oO][iI][pP]\.dat$::' | sed 's:/[gG][eE][oO][sS][iI][tT][eE]\.dat$::')"
             PUBLIC_GEO_BASE_URL="$(echo "$PUBLIC_GEO_BASE_URL" | sed 's:/*$::')"
 
-            # Проверяем наличие токена после домена (хотя бы один слеш после хоста)
+            # Проверяем наличие токена в пути
             local path_part
             path_part="$(echo "$PUBLIC_GEO_BASE_URL" | sed 's:^https*://[^/]*/*::')"
             if [ -z "$path_part" ]; then
-                echo -e "${YELLOW}[!] Внимание: вы указали только домен без токена (${PUBLIC_GEO_BASE_URL}).${NC}"
-                echo -e "${YELLOW}    На сервере раздачи файлы баз защищены токеном в пути URL!${NC}"
-                read -r -p "    Вы уверены, что сервер раздачи настроен без токена? [y/N]: " confirm_no_tok
+                echo -e "${YELLOW}[!] Вы указали адрес без секретного токена (${PUBLIC_GEO_BASE_URL}).${NC}"
+                read -r -p "    Сервер раздачи действительно настроен без токена? [y/N]: " confirm_no_tok
                 if [[ ! "$confirm_no_tok" =~ ^[YyДд]$ ]]; then
                     continue
                 fi
@@ -899,7 +878,7 @@ install_wizard() {
 
             break
         done
-        echo -e "${GREEN}[+] Базы будут загружаться по адресу: $PUBLIC_GEO_BASE_URL${NC}\n"
+        echo -e "${GREEN}[+] Базы: $PUBLIC_GEO_BASE_URL${NC}\n"
     fi
 
     # ────────────────────────────────────────────────────────────────────────
