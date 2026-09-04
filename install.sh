@@ -1572,43 +1572,86 @@ CLOUDFLARE_ZERO_TRUST_CLIENT_SECRET=${prev_cf_secret}
     echo -e "  ${GREEN}[+] Расписание: ${BOLD}$SCHEDULE${NC}\n"
 
     # ────────────────────────────────────────────────────────────────────────
+    # ────────────────────────────────────────────────────────────────────────
     # ШАГ 9: Telegram (опционально)
     # ────────────────────────────────────────────────────────────────────────
     ui_step "Дополнительно" "Telegram-уведомления"
-    local def_tg_idx=0
-    [ -n "$prev_tg_token" ] && def_tg_idx=1
-
-    local tg_opt_idx
-    tg_opt_idx=$(tui_select "Настроить Telegram-уведомления об ошибках/обновлениях?" "$def_tg_idx" \
-        "Пропустить (без Telegram)" \
-        "Настроить Telegram бота")
-
+    
     TG_BOT_TOKEN=""
     TG_CHAT_ID=""
     TG_THREAD_ID=""
     TG_NOTIFY_SUCCESS="false"
 
-    if [ "$tg_opt_idx" -eq 1 ]; then
-        TG_BOT_TOKEN=$(tui_secret "TELEGRAM_BOT_TOKEN" "$prev_tg_token")
-        
-        read -r -p "  ▸ TELEGRAM_CHAT_ID [${prev_tg_chat:-пропустить}]: " input_chat
-        TG_CHAT_ID="${input_chat:-$prev_tg_chat}"
+    if [ -n "$prev_tg_token" ]; then
+        local tg_chat_hint="${prev_tg_chat:-настроен}"
+        local tg_opt_idx
+        tg_opt_idx=$(tui_select "Telegram-уведомления уже настроены. Что сделать?" 0 \
+            "Оставить текущие настройки Telegram (Chat ID: ${tg_chat_hint})" \
+            "Изменить настройки Telegram бота" \
+            "Отключить Telegram-уведомления")
 
-        read -r -p "  ▸ TELEGRAM_THREAD_ID (ID темы) [${prev_tg_thread:-нет}]: " input_thread
-        TG_THREAD_ID="${input_thread:-$prev_tg_thread}"
+        case "$tg_opt_idx" in
+            0)
+                TG_BOT_TOKEN="$prev_tg_token"
+                TG_CHAT_ID="$prev_tg_chat"
+                TG_THREAD_ID="$prev_tg_thread"
+                TG_NOTIFY_SUCCESS="${prev_tg_notify:-false}"
+                echo -e "  ${GREEN}[+] Сохранены текущие настройки Telegram (Chat ID: ${tg_chat_hint}).${NC}\n"
+                ;;
+            1)
+                TG_BOT_TOKEN=$(tui_secret "TELEGRAM_BOT_TOKEN" "$prev_tg_token")
+                
+                read -r -p "  ▸ TELEGRAM_CHAT_ID [${prev_tg_chat:-пропустить}]: " input_chat
+                TG_CHAT_ID="${input_chat:-$prev_tg_chat}"
 
-        local tg_succ_idx
-        tg_succ_idx=$(tui_select "Присылать уведомление при успешном выходе новых баз?" 0 \
-            "Нет (только критические ошибки)" \
-            "Да (отчёт о каждом обновлении)")
-        [ "$tg_succ_idx" -eq 1 ] && TG_NOTIFY_SUCCESS="true" || TG_NOTIFY_SUCCESS="false"
+                read -r -p "  ▸ TELEGRAM_THREAD_ID (ID темы) [${prev_tg_thread:-нет}]: " input_thread
+                TG_THREAD_ID="${input_thread:-$prev_tg_thread}"
 
-        if [ -n "$TG_BOT_TOKEN" ] && [ -n "$TG_CHAT_ID" ]; then
-            test_telegram "$TG_BOT_TOKEN" "$TG_CHAT_ID" "$TG_THREAD_ID" || true
-        fi
-        echo -e "${GREEN}[+] Telegram настроен.${NC}\n"
+                local tg_succ_idx
+                local def_succ=0
+                [ "${prev_tg_notify:-false}" = "true" ] && def_succ=1
+                tg_succ_idx=$(tui_select "Присылать уведомление при успешном выходе новых баз?" "$def_succ" \
+                    "Нет (только критические ошибки)" \
+                    "Да (отчёт о каждом обновлении)")
+                [ "$tg_succ_idx" -eq 1 ] && TG_NOTIFY_SUCCESS="true" || TG_NOTIFY_SUCCESS="false"
+
+                if [ -n "$TG_BOT_TOKEN" ] && [ -n "$TG_CHAT_ID" ]; then
+                    test_telegram "$TG_BOT_TOKEN" "$TG_CHAT_ID" "$TG_THREAD_ID" || true
+                fi
+                echo -e "  ${GREEN}[+] Telegram настроен.${NC}\n"
+                ;;
+            2)
+                echo -e "  ${DIM}Уведомления Telegram отключены.${NC}\n"
+                ;;
+        esac
     else
-        echo -e "${DIM}Уведомления Telegram отключены.${NC}\n"
+        local tg_opt_idx
+        tg_opt_idx=$(tui_select "Настроить Telegram-уведомления об ошибках/обновлениях?" 0 \
+            "Пропустить (без Telegram)" \
+            "Настроить Telegram бота")
+
+        if [ "$tg_opt_idx" -eq 1 ]; then
+            TG_BOT_TOKEN=$(tui_secret "TELEGRAM_BOT_TOKEN" "")
+            
+            read -r -p "  ▸ TELEGRAM_CHAT_ID [пропустить]: " input_chat
+            TG_CHAT_ID="${input_chat:-}"
+
+            read -r -p "  ▸ TELEGRAM_THREAD_ID (ID темы) [нет]: " input_thread
+            TG_THREAD_ID="${input_thread:-}"
+
+            local tg_succ_idx
+            tg_succ_idx=$(tui_select "Присылать уведомление при успешном выходе новых баз?" 0 \
+                "Нет (только критические ошибки)" \
+                "Да (отчёт о каждом обновлении)")
+            [ "$tg_succ_idx" -eq 1 ] && TG_NOTIFY_SUCCESS="true" || TG_NOTIFY_SUCCESS="false"
+
+            if [ -n "$TG_BOT_TOKEN" ] && [ -n "$TG_CHAT_ID" ]; then
+                test_telegram "$TG_BOT_TOKEN" "$TG_CHAT_ID" "$TG_THREAD_ID" || true
+            fi
+            echo -e "  ${GREEN}[+] Telegram настроен.${NC}\n"
+        else
+            echo -e "  ${DIM}Уведомления Telegram отключены.${NC}\n"
+        fi
     fi
 
     # ────────────────────────────────────────────────────────────────────────
