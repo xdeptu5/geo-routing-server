@@ -81,6 +81,7 @@ class RemnawaveSync:
 
     UUID_REGEX = re.compile(r"^[A-Za-z0-9_-]+$")
     cached_squad_names: Dict[str, str] = {}
+    last_errors: List[str] = []
 
     @classmethod
     def get_squad_name(cls, squad_uuid: str) -> str:
@@ -192,6 +193,7 @@ class RemnawaveSync:
         
         logger.info("[Remnawave] Starting direct Remnawave API synchronization...")
         
+        cls.last_errors = []
         success = True
         squads = cls.load_squad_configs()
         global_rule = os.getenv("REMNAWAVE_GLOBAL_RULE", "").strip() or os.getenv("GITHUB_RAW_URL", "").strip()
@@ -217,11 +219,13 @@ class RemnawaveSync:
                         if cls._api_request("PATCH", settings_url, patch_payload):
                             logger.info("[Remnawave] Successfully updated global subscription-settings routing header!")
                         else:
+                            cls.last_errors.append("Не удалось обновить глобальные subscription-settings в Remnawave")
                             success = False
                     else:
                         logger.info("[Remnawave] Global subscription-settings routing is already up to date.")
                 else:
                     logger.error("[Remnawave] Failed to fetch subscription-settings from Remnawave API")
+                    cls.last_errors.append("Не удалось загрузить subscription-settings из Remnawave API")
                     success = False
             else:
                 logger.warning(f"[Remnawave] Deeplink for global rule {rule_file} not found in {happ_dir}")
@@ -266,11 +270,13 @@ class RemnawaveSync:
                     continue
 
                 if known_squads and squad_uuid not in known_squads:
+                    err_msg = f"{s_desc} не найден во внешних сквадах (возможно, удалён в панели)"
                     logger.error(
-                        f"[Remnawave] {s_desc} не найден во вкладке 'ВНЕШНИЕ сквады' (External Squads) Remnawave!\n"
+                        f"[Remnawave] {err_msg}!\n"
                         f"   -> Проверьте: в панели Remnawave должен быть создан сквад в меню 'Внешние сквады' (не 'Внутренние').\n"
                         f"   -> Доступные внешние сквады в панели: {list(known_squads.keys())}"
                     )
+                    cls.last_errors.append(err_msg)
                     success = False
                     continue
 
@@ -281,6 +287,7 @@ class RemnawaveSync:
                     squad_url = f"{base_api_url}/external-squads/{squad_uuid}"
                     squad_res = cls._api_request("GET", squad_url)
                     if not squad_res:
+                        cls.last_errors.append(f"Не удалось получить данные для {s_desc}")
                         success = False
                         continue
                     squad_data = squad_res.get("response", squad_res)
@@ -302,6 +309,7 @@ class RemnawaveSync:
                     if cls._api_request("PATCH", patch_url, patch_payload):
                         logger.info(f"[Remnawave] Successfully updated {s_desc} with rule '{rule_name}'!")
                     else:
+                        cls.last_errors.append(f"Не удалось отправить PATCH для {s_desc}")
                         success = False
                 else:
                     logger.info(f"[Remnawave] {s_desc} routing is already up to date.")

@@ -208,8 +208,9 @@ def main():
     if RemnawaveSync.is_configured():
         if not RemnawaveSync.sync(token):
             remna_ok = False
-            logger.warning("[Remnawave] Synchronization with Remnawave API completed with errors!")
-            TelegramNotifier.alert_failure("Remnawave API sync failed for one or more squads. Check container logs.")
+            err_details = "\n• ".join(RemnawaveSync.last_errors) if RemnawaveSync.last_errors else "Не удалось обновить сквады в Remnawave API"
+            logger.warning(f"[Remnawave] Synchronization with Remnawave API completed with errors:\n{err_details}")
+            TelegramNotifier.alert_failure(f"Ошибка Remnawave API:\n• {err_details}")
     
     if remna_ok:
         logger.info("Synchronization completed successfully.")
