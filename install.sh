@@ -111,16 +111,24 @@ tui_select() {
     }
     trap cleanup_tui_cursor EXIT INT TERM
 
+    local num_fmt="%d"
+    [ "$count" -ge 10 ] && num_fmt="%2d"
+
     draw_tui_menu() {
         echo -e "$prompt_title" >&2
         for i in "${!options[@]}"; do
+            local num=$((i + 1))
             if [ "$i" -eq "$selected" ]; then
-                printf "  \033[1;36m▸ \033[1;36m%s\033[0m\n" "${options[i]}" >&2
+                printf "  \033[1;36m▸ ${num_fmt}) \033[1;36m%s\033[0m\n" "$num" "${options[i]}" >&2
             else
-                printf "    \033[0;37m%s\033[0m\n" "${options[i]}" >&2
+                printf "    \033[0;36m${num_fmt})\033[0;37m %s\033[0m\n" "$num" "${options[i]}" >&2
             fi
         done
-        printf "  \033[2m[↑/↓] Выбор   [Enter] Подтвердить   [1-%d] Быстрый ввод\033[0m\n" "$count" >&2
+        if [ "${UI_LANG:-ru}" = "en" ]; then
+            printf "  \033[2m[↑/↓] Navigate   [Enter] Select   [1-%d] Quick jump\033[0m\n" "$count" >&2
+        else
+            printf "  \033[2m[↑/↓] Выбор   [Enter] Подтвердить   [1-%d] Быстрый ввод\033[0m\n" "$count" >&2
+        fi
     }
 
     draw_tui_menu
@@ -148,8 +156,17 @@ tui_select() {
                 break
                 ;;
             [1-9]) # Быстрый выбор по цифре
-                local num_pick=$((key - 1))
-                if [ "$num_pick" -lt "$count" ]; then
+                local num_typed="$key"
+                if [ "$count" -ge 10 ] && [ "$key" -le $((count / 10)) ]; then
+                    local next_char=""
+                    if read -rsn1 -t 0.4 next_char < "$tty_in" 2>/dev/null; then
+                        if [[ "$next_char" =~ ^[0-9]$ ]]; then
+                            num_typed="${key}${next_char}"
+                        fi
+                    fi
+                fi
+                local num_pick=$((num_typed - 1))
+                if [ "$num_pick" -ge 0 ] && [ "$num_pick" -lt "$count" ]; then
                     selected=$num_pick
                     break
                 fi
