@@ -769,7 +769,7 @@ install_wizard() {
     echo -e "     ${DIM}Раздает базы и JSON по HTTPS + сам отправляет свежие правила Happ в сквады Remnawave.${NC}"
     echo ""
     echo -e "  ${BOLD}2)${NC} Сервер раздачи баз и правил (Pull-модель для любых панелей и клиентов)"
-    echo -e "     ${DIM}Раздает базы geoip/geosite, диплинки Happ и JSON для Incy с вашего домена.${NC}"
+    echo -e "     ${DIM}Раздает базы (geoip/geosite) для Happ и Incy, а также JSON-подписку для Incy с вашего домена.${NC}"
     echo -e "     ${DIM}Подходит для Remnawave, Marzban, 3x-ui. API-токен панели серверу не нужен.${NC}"
     echo ""
     echo -e "  ${BOLD}3)${NC} Только узел раздачи geo-баз (чистые файлы geoip.dat и geosite.dat)"

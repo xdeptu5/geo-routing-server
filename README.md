@@ -1,4 +1,4 @@
-﻿<div align="center">
+<div align="center">
 
 # 🚀 Geo Routing Server
 
@@ -121,7 +121,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/xdeptu5/geo-routing-server/m
 Вся настройка задаётся через переменные в файле `.env`:
 
 ### 1. Универсальный сервер раздачи (Pull-модель)
-Сервер раздает базы, диплинки Happ и JSON Incy по HTTPS. Панели (Remnawave, Marzban, 3x-ui) и клиенты забирают файлы по ссылкам:
+Сервер раздает базы (geoip/geosite) для Happ и Incy, а также JSON-подписку для Incy по HTTPS. Панели (Remnawave, Marzban, 3x-ui) и клиенты забирают файлы по ссылкам:
 ```env
 DOMAIN=geo.example.com
 ROUTING_TOKEN=секретный_токен
