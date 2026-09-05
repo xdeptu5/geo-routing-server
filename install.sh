@@ -2312,10 +2312,19 @@ main_menu() {
         target_dir="$(get_install_dir)"
         
         local status_msg=""
+        local sync_msg=""
         if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^geo-routing-server$"; then
             status_msg="${GREEN}[+] Запущен и активен${NC}"
+            local sync_status
+            sync_status=$(docker exec geo-routing-server sh -c 'cat "/app/www/${ROUTING_TOKEN:-local}/.sync-status.json"' 2>/dev/null || true)
+            case "$sync_status" in
+                *'"state":"success"'*) sync_msg="${GREEN}[+] Успешна${NC}" ;;
+                *'"state":"failed"'*) sync_msg="${RED}[-] Ошибка${NC}" ;;
+                *) sync_msg="${YELLOW}[~] Нет результата${NC}" ;;
+            esac
         else
             status_msg="${RED}[-] Остановлен или не найден${NC}"
+            sync_msg="${DIM}—${NC}"
         fi
 
         local env_file="$target_dir/.env"
@@ -2401,6 +2410,7 @@ main_menu() {
         if [ "${UI_LANG:-ru}" = "en" ]; then
             echo -e "Installation directory: ${CYAN}$target_dir${NC}"
             echo -e "Container status:       $status_msg"
+            echo -e "Last synchronization:   $sync_msg"
             echo -e "Active modules:         ${GREEN}$modules_en${NC}"
             if [ "$is_local" -eq 0 ] && [ -n "$domain_val" ] && [ "$domain_val" != "geo.example.com" ]; then
                 echo -e "Public domain:          ${CYAN}$domain_val${NC}"
@@ -2441,6 +2451,7 @@ main_menu() {
         else
             echo -e "Каталог установки: ${CYAN}$target_dir${NC}"
             echo -e "Статус контейнера: $status_msg"
+            echo -e "Последняя синхронизация: $sync_msg"
             echo -e "Активные модули:   ${GREEN}$modules_ru${NC}"
             if [ "$is_local" -eq 0 ] && [ -n "$domain_val" ] && [ "$domain_val" != "geo.example.com" ]; then
                 echo -e "Публичный домен:   ${CYAN}$domain_val${NC}"
