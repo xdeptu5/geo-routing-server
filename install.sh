@@ -810,8 +810,9 @@ create_cli_shortcut() {
 #!/usr/bin/env bash
 TARGET_SCRIPT="$target_dir/install.sh"
 if [ ! -s "\$TARGET_SCRIPT" ] || ! grep -q "Geo Routing Server" "\$TARGET_SCRIPT" 2>/dev/null; then
-    echo "geo-routing-server: install.sh is missing; reinstall it from a reviewed release." >&2
-    exit 1
+    mkdir -p "$target_dir"
+    curl -fsSL "https://raw.githubusercontent.com/xdeptu5/geo-routing-server/main/install.sh" -o "\$TARGET_SCRIPT" 2>/dev/null || true
+    chmod +x "\$TARGET_SCRIPT" 2>/dev/null || true
 fi
 exec bash "\$TARGET_SCRIPT" "\$@"
 EOF
@@ -1113,15 +1114,25 @@ EOF
 }
 
 update_script_only() {
+    local target_dir
+    target_dir="$(get_install_dir)"
     print_header
-    if [ "${UI_LANG:-ru}" = "en" ]; then
-        echo -e "${YELLOW}[!] Automatic management-script updates are disabled.${NC}"
-        echo -e "Download a reviewed release manually, inspect install.sh, then replace the local file.\n"
+    echo -e "${BOLD}[>] Обновление скрипта управления из GitHub...${NC}\n"
+    local cur_v="${SCRIPT_VERSION}"
+    if curl -fsSL "https://raw.githubusercontent.com/xdeptu5/geo-routing-server/main/install.sh" -o "$target_dir/install.sh.new" 2>/dev/null && bash -n "$target_dir/install.sh.new" 2>/dev/null; then
+        local new_v
+        new_v=$(grep -E '^SCRIPT_VERSION=' "$target_dir/install.sh.new" | head -n 1 | cut -d'"' -f2 || true)
+        mv "$target_dir/install.sh.new" "$target_dir/install.sh"
+        chmod +x "$target_dir/install.sh"
+        create_cli_shortcut "$target_dir"
+        rm -f /tmp/.geoserver_ver_cache 2>/dev/null || true
+        echo -e "${GREEN}[+] Скрипт обновлён:${NC} v${cur_v} → ${BOLD}${new_v:-$cur_v}${NC}\n"
     else
-        echo -e "${YELLOW}[!] Автоматическое обновление скрипта управления отключено.${NC}"
-        echo -e "Скачайте проверенный релиз вручную, изучите install.sh и только затем замените локальный файл.\n"
+        rm -f "$target_dir/install.sh.new"
+        echo -e "${RED}[!] Не удалось скачать или проверить скрипт обновления.${NC}\n"
     fi
-    pause_menu
+    pause_menu "Нажмите Enter для перезапуска меню..."
+    exec bash "$target_dir/install.sh"
 }
 
 update_project() {
@@ -1134,14 +1145,21 @@ update_project() {
         echo -e "${BOLD}[>] Комплексное обновление geo-routing-server...${NC}\n"
     fi
 
-    # [1/3] Скрипт управления остаётся без изменений: автозагрузка кода отключена.
-    if [ "${UI_LANG:-ru}" = "en" ]; then
-        echo -e "${CYAN}${BOLD}[1/3] Keeping the installed management script...${NC}"
+    # [1/3] Проверка и обновление скрипта управления
+    echo -e "${CYAN}${BOLD}[1/3] Проверка и обновление скрипта управления...${NC}"
+    local cur_v="${SCRIPT_VERSION}"
+    if curl -fsSL -m 3 "https://raw.githubusercontent.com/xdeptu5/geo-routing-server/main/install.sh" -o "$target_dir/install.sh.new" 2>/dev/null && bash -n "$target_dir/install.sh.new" 2>/dev/null; then
+        local new_v
+        new_v=$(grep -E '^SCRIPT_VERSION=' "$target_dir/install.sh.new" | head -n 1 | cut -d'"' -f2 || true)
+        mv "$target_dir/install.sh.new" "$target_dir/install.sh"
+        chmod +x "$target_dir/install.sh"
+        create_cli_shortcut "$target_dir"
+        rm -f /tmp/.geoserver_ver_cache 2>/dev/null || true
+        echo -e "      ${GREEN}[+] Скрипт обновлён:${NC} v${cur_v} → ${BOLD}${new_v:-$cur_v}${NC}"
     else
-        echo -e "${CYAN}${BOLD}[1/3] Скрипт управления остаётся без изменений...${NC}"
+        rm -f "$target_dir/install.sh.new"
+        echo -e "      ${YELLOW}[!] Не удалось скачать или проверить install.sh; образ будет обновлён отдельно.${NC}"
     fi
-
-    echo -e "      ${YELLOW}[i] Автозагрузка install.sh из ветки main отключена.${NC}"
 
     # [2/3] Загрузка свежего Docker-образа
     if [ "${UI_LANG:-ru}" = "en" ]; then
@@ -2182,13 +2200,14 @@ EOF
     [ -f "$INSTALL_DIR/.env.backup" ] && chmod 600 "$INSTALL_DIR/.env.backup" 2>/dev/null || true
     rm -f "$INSTALL_DIR/docker-compose.yml" 2>/dev/null || true
 
-    # Сохраняем именно выполняемый скрипт; не подменяем его новым кодом из сети.
-    if grep -q "Geo Routing Server" "$0" 2>/dev/null && cat "$0" > "$INSTALL_DIR/install.sh"; then
-        chmod +x "$INSTALL_DIR/install.sh"
-        create_cli_shortcut "$INSTALL_DIR"
+    # Сохраняем скрипт установщика в каталог проекта для работы команды geoserver.
+    if [ -f "$0" ] && grep -q "Geo Routing Server" "$0" 2>/dev/null; then
+        cp "$0" "$INSTALL_DIR/install.sh" 2>/dev/null || true
     else
-        echo -e "${YELLOW}[!] Не удалось сохранить запущенный install.sh. Контейнер будет установлен, но команда geoserver не создана.${NC}"
+        curl -fsSL "https://raw.githubusercontent.com/xdeptu5/geo-routing-server/main/install.sh" -o "$INSTALL_DIR/install.sh" 2>/dev/null || true
     fi
+    chmod +x "$INSTALL_DIR/install.sh" 2>/dev/null || true
+    create_cli_shortcut "$INSTALL_DIR"
 
     echo -e "${BLUE}[*] Загрузка и запуск контейнера Geo Routing Server...${NC}"
     cd "$INSTALL_DIR"
