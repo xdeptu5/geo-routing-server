@@ -55,26 +55,30 @@
 
 ---
 
-## 🚀 Быстрый запуск
+## 🚀 Установка и запуск
 
-### Способ 1. Автоматический мастер установки (Рекомендуется)
+### ⭐️ Способ 1. Автоматический мастер установки (Рекомендуется)
 
-Запустите установку одной командой в терминале сервера:
+Самый быстрый и надёжный способ развёртывания. Скрипт проверит окружение, сгенерирует криптографически стойкий токен, настроит конфигурацию и запустит сервис:
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/xdeptu5/geo-routing-server/main/install.sh)
 ```
 
-Интерактивный мастер задаст несколько простых вопросов (сценарий работы, домен, порт, токен) и автоматически настроит и запустит контейнер.
-
-> 💡 **Управление после установки:**  
-> В любой момент введите команду `geoserver` для открытия интерактивного меню управления (логи, перезапуск, смена настроек, обновление образа и скрипта). Меню автоматически проверяет и показывает наличие обновлений прямо в интерфейсе.
+> 💡 **Удобное управление через команду `geoserver`:**  
+> После установки в любой момент введите `geoserver` в терминале для вызова интерактивной панели:
+> * 📊 **Мониторинг:** просмотр статуса, логов в реальном времени и публичных ссылок на файлы
+> * ⚙️ **Настройки:** управление выборочной раздачей правил (`JSONSUB`, `WHITELIST`) и форматов (`CLIENT_OPTIMIZED`)
+> * 🌐 **HTTPS Реверс-прокси:** встроенный генератор готовых конфигов для **Caddy**, **Nginx** и **Nginx Proxy Manager**
+> * 🔄 **Обновления:** автоматическое отслеживание и установка новых версий скрипта и Docker-образа в 1 клик
 
 ---
 
-### Способ 2. Запуск через Docker Compose (Ручной / Dockge / Portainer / 1Panel)
+### 🛠️ Способ 2. Ручной запуск через Docker Compose (для опытных пользователей / Portainer / Dockge / 1Panel)
 
-1. Создайте `compose.yaml`:
+Если вы управляете стеками через **Dockge**, **Portainer**, **1Panel**, **Coolify** или разворачиваете сервис через CI/CD:
+
+1. **Создайте `compose.yaml`:**
    ```yaml
    services:
      geo-routing-server:
@@ -83,9 +87,6 @@ bash <(curl -fsSL https://raw.githubusercontent.com/xdeptu5/geo-routing-server/m
        restart: unless-stopped
        env_file:
          - .env
-       # Для прямого вызова Remnawave API раскомментируйте этот блок:
-       # networks:
-       #   - remnawave
        ports:
          - "${HTTP_BIND:-127.0.0.1}:${HTTP_PORT:-8080}:80"
        volumes:
@@ -102,94 +103,89 @@ bash <(curl -fsSL https://raw.githubusercontent.com/xdeptu5/geo-routing-server/m
    volumes:
      routing_data:
 
-   # Сеть должна существовать до запуска: docker network ls
+   # Для прямого подключения к сети панели Remnawave раскомментируйте:
    # networks:
    #   remnawave:
    #     external: true
    #     name: "${DOCKER_NETWORK:-remnawave-network}"
    ```
 
-2. Создайте файл `.env` на основе [`.env.example`](./.env.example):
+2. **Создайте файл конфигурации `.env`:**  
+   Скопируйте шаблон из [`.env.example`](./.env.example) и настройте базовые параметры:
    ```env
    DOMAIN=geo.example.com
-   # Выполните `openssl rand -hex 16` и вставьте результат вместо этого значения.
-   ROUTING_TOKEN=replace_with_a_random_token
+   ROUTING_TOKEN=сгенерируйте_случайный_токен_openssl_rand_hex_16
    ENABLED_CLIENTS=HAPP,INCY
+   ROUTING_RULES=JSONSUB,WHITELIST
+   SERVE_FORMATS=CLIENT_OPTIMIZED
    HTTP_PORT=8080
    SCHEDULE=0 10 * * *
    SYNC_ON_START=true
    ```
-   Не запускайте контейнер, пока не замените `ROUTING_TOKEN` на случайное значение.
 
-3. Запустите:
+3. **Запустите контейнер:**
    ```bash
    docker compose up -d
    ```
 
-4. Проверьте запуск:
+4. **Проверьте работоспособность:**
    ```bash
    docker compose ps
    curl -fsS http://127.0.0.1:8080/health
-   docker compose logs --tail=100
+   docker compose logs --tail=50
    ```
-   `healthy` подтверждает работу контейнера. Строка
-   `Synchronization completed successfully.` в логах подтверждает, что базы и правила
-   уже загружены.
-
-Для прямого доступа к Remnawave API узнайте имя сети панели командой
-`docker network ls`, задайте `DOCKER_NETWORK` в `.env` и раскомментируйте оба
-блока `networks` в `compose.yaml`. Compose завершится с ошибкой, если указанная
-внешняя сеть не существует.
+   > Статус `healthy` и строка `Synchronization completed successfully.` в логах подтверждают успешный запуск.
 
 ---
 
 ## 🗺️ Сценарии развертывания
 
-Вся настройка задаётся через переменные в файле `.env`:
+Сервис гибко настраивается под любую архитектуру сети через файл `.env` (или интерактивно в мастере `install.sh`):
 
-| Если нужно | Выберите сценарий | Основной модуль |
-|---|---:|---|
-| Раздавать базы и правила для Happ и Incy | 1 | `HAPP,INCY` |
-| Раздавать файлы и обновлять сквады Remnawave | 2 | `HAPP,INCY` + Remnawave API |
-| Отдельный узел раздачи только для GeoIP/GeoSite | 3 | `HAPP_GEO,INCY_GEO` |
-| Генерировать Happ-правила рядом с Remnawave, базы брать с другого узла | 4 | `HAPP_DEEPLINK` |
-| Раздавать только Incy-правила, базы брать с другого узла | 5 | `INCY` |
+| Сценарий | Название режима | Когда использовать | Основной модуль (`ENABLED_CLIENTS`) |
+| :---: | :--- | :--- | :--- |
+| **1** | **Всё в одном** | Раздача баз и правил по HTTPS + автопатч сквадов Remnawave | `HAPP,INCY` + Remnawave API |
+| **2** | **Сервер раздачи** | Автономная раздача баз и правил по HTTPS (без Remnawave) | `HAPP,INCY` (или только один клиент) |
+| **3** | **Выделенный узел баз (Geo-Node)** | Раздача только файлов `geoip.dat` и `geosite.dat` на высокой скорости | `HAPP_GEO,INCY_GEO` |
+| **4** | **Интеграция с Remnawave** | Генератор диплинков для сквадов Remnawave (базы на внешнем сервере) | `HAPP_DEEPLINK` (домен не требуется) |
+| **5** | **Только правила Incy** | Раздача JSON-подписки Incy по HTTPS, базы на внешнем узле | `INCY` + `PUBLIC_GEO_BASE_URL` |
 
-Каждый сценарий ниже содержит минимальный `.env`. Для первого запуска достаточно
-выбрать один из них и пройти раздел «Быстрый запуск» выше.
+### Примеры конфигураций `.env` под каждый сценарий:
 
-### 1. Универсальный сервер раздачи (Pull-модель)
-Сервер раздает базы (geoip/geosite) для Happ и Incy, а также JSON-подписку для Incy по HTTPS. Панели (Remnawave, Marzban, 3x-ui) и клиенты забирают файлы по ссылкам:
+#### 1. Всё в одном (Раздача файлов + Remnawave API)
+Раздаёт базы и правила по HTTPS, а также автоматически обновляет правила маршрутизации в сквадах панели Remnawave:
 ```env
 DOMAIN=geo.example.com
 ROUTING_TOKEN=секретный_токен
 ENABLED_CLIENTS=HAPP,INCY
-```
-
-### 2. Сервер раздачи + синхронизация с Remnawave API для Happ
-Всё из Сценария 1 + сервер сам отправляет правила Happ в сквады Remnawave:
-```env
-DOMAIN=geo.example.com
-ROUTING_TOKEN=секретный_токен
-ENABLED_CLIENTS=HAPP,INCY
+ROUTING_RULES=JSONSUB,WHITELIST
+SERVE_FORMATS=CLIENT_OPTIMIZED
 REMNAWAVE_BASE_URL=http://remnawave:3000/api
 REMNAWAVE_TOKEN=jwt_токен_администратора
 REMNAWAVE_SQUAD_1_UUID=uuid_первого_сквада
 REMNAWAVE_SQUAD_1_RULE=JSONSUB.JSON
-REMNAWAVE_SQUAD_2_UUID=uuid_второго_сквада
-REMNAWAVE_SQUAD_2_RULE=WHITELIST.JSON
 ```
 
-### 3. Выделенный узел раздачи geo-баз (Geo-Node)
-Сервер раздаёт только файлы `geoip.dat` и `geosite.dat` на максимальной скорости из ближайшей к клиентам локации (например, локальный VPS):
+#### 2. Сервер раздачи (Pull-модель без Remnawave)
+Классический файловый сервер. Базы и конфигурации забираются клиентами и панелями (Marzban, 3x-ui, Remnawave) по прямым HTTPS-ссылкам:
+```env
+DOMAIN=geo.example.com
+ROUTING_TOKEN=секретный_токен
+ENABLED_CLIENTS=HAPP,INCY
+ROUTING_RULES=JSONSUB,WHITELIST
+SERVE_FORMATS=CLIENT_OPTIMIZED
+```
+
+#### 3. Выделенный узел раздачи geo-баз (Geo-Node)
+Сервер раздаёт только базы `geoip.dat` и `geosite.dat` без генерации правил маршрутизации (минимальная нагрузка):
 ```env
 DOMAIN=geo-node.example.com
 ROUTING_TOKEN=секретный_токен
 ENABLED_CLIENTS=HAPP_GEO,INCY_GEO
 ```
 
-### 4. Контейнер интеграции с Remnawave (базы на внешнем узле)
-Работает в Docker на сервере с Remnawave. **Публичный домен и открытые порты не требуются.** Сервер связывает базы с внешнего гео-узла (Сценарий 3) и передаёт сгенерированные правила в сквады Remnawave через API:
+#### 4. Интеграция с Remnawave (базы на внешнем узле)
+Работает в изолированном Docker-окружении рядом с Remnawave. **Публичный домен и открытые веб-порты не требуются.** Правила генерируются и сразу пушатся в API сквадов:
 ```env
 ENABLED_CLIENTS=HAPP_DEEPLINK
 PUBLIC_GEO_BASE_URL=https://geo-node.example.com/секретный_токен
@@ -199,8 +195,8 @@ REMNAWAVE_SQUAD_1_UUID=uuid_сквада
 REMNAWAVE_SQUAD_1_RULE=JSONSUB.JSON
 ```
 
-### 5. Сервер правил Incy (с базами на внешнем узле)
-Раздает по HTTPS JSON-правила для Incy, а адреса баз внутри правил ведут на внешний гео-узел:
+#### 5. Сервер правил Incy (с внешними базами)
+Раздает по HTTPS JSON-правила для Incy, а адреса загрузки баз внутри правил ведут на выделенный гео-узел:
 ```env
 DOMAIN=geo.example.com
 ROUTING_TOKEN=секретный_токен
@@ -214,7 +210,7 @@ PUBLIC_GEO_BASE_URL=https://geo-node.example.com/секретный_токен
 
 ### HAPP
 Happ принимает правила через Base64-диплинк `happ://routing/onadd/<base64>`.
-* **С Remnawave:** правила обновляются в сквадах автоматически через API (Сценарии 2 и 4).
+* **С Remnawave:** правила обновляются в сквадах автоматически через API (Сценарии 1 и 4).
 * **Вручную / другие панели:** скопируйте ссылку на сгенерированный файл:
   ```text
   https://<DOMAIN>/<ROUTING_TOKEN>/HAPP/<RULE>.DEEPLINK
