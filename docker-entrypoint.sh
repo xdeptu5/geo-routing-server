@@ -26,6 +26,8 @@ set -eu
 if [ -f /etc/environment.sh ]; then
     . /etc/environment.sh
 fi
+cd /app
+export PYTHONPATH="/app:${PYTHONPATH:-}"
 python3 -m app.main
 RUNNER
 

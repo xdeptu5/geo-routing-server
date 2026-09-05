@@ -15,6 +15,10 @@ BOLD='\033[1m'
 DIM='\033[2m'
 NC='\033[0m'
 
+SCRIPT_VERSION="2.1.0"
+CHECKED_REMOTE_VER=""
+UPDATE_AVAILABLE=false
+
 CONFIG_FILE_RECORD="/etc/geo-routing-server.conf"
 LANG_RECORD="/etc/geo-routing-server.lang"
 UI_LANG=""
@@ -470,8 +474,48 @@ detect_or_ask_language() {
     fi
 }
 
+check_script_version() {
+    [ -n "$CHECKED_REMOTE_VER" ] && return 0
+
+    local cache_file="/tmp/.geoserver_ver_cache"
+    local now
+    now=$(date +%s 2>/dev/null || echo 0)
+    local cached_time=0
+    local cached_ver=""
+
+    if [ -f "$cache_file" ]; then
+        cached_time=$(head -n 1 "$cache_file" 2>/dev/null | cut -d'|' -f1 || echo 0)
+        cached_ver=$(head -n 1 "$cache_file" 2>/dev/null | cut -d'|' -f2 || echo "")
+    fi
+
+    if [ "$cached_time" -gt 0 ] && [ $(( now - cached_time )) -lt 300 ] && [ -n "$cached_ver" ]; then
+        CHECKED_REMOTE_VER="$cached_ver"
+    else
+        local fetched_ver
+        fetched_ver=$(curl -fsSL -m 2 -r 0-1000 "https://raw.githubusercontent.com/xdeptu5/geo-routing-server/main/install.sh" 2>/dev/null | grep -E '^SCRIPT_VERSION=' | head -n 1 | cut -d'"' -f2 || true)
+        if [ -n "$fetched_ver" ]; then
+            CHECKED_REMOTE_VER="$fetched_ver"
+            echo "${now}|${fetched_ver}" > "$cache_file" 2>/dev/null || true
+        elif [ -n "$cached_ver" ]; then
+            CHECKED_REMOTE_VER="$cached_ver"
+        else
+            CHECKED_REMOTE_VER="$SCRIPT_VERSION"
+        fi
+    fi
+
+    if [ -n "$CHECKED_REMOTE_VER" ] && [ "$CHECKED_REMOTE_VER" != "$SCRIPT_VERSION" ]; then
+        local highest
+        highest=$(printf '%s\n%s\n' "$SCRIPT_VERSION" "$CHECKED_REMOTE_VER" | sort -V 2>/dev/null | tail -n 1 || echo "")
+        if [ "$highest" = "$CHECKED_REMOTE_VER" ]; then
+            UPDATE_AVAILABLE=true
+        fi
+    fi
+}
+
 print_header() {
     clear || true
+    check_script_version 2>/dev/null || true
+
     echo -e "${CYAN}${BOLD}"
     if [ "${UI_LANG:-ru}" = "en" ]; then
         echo "╭─────────────────────────────────────────────────────────────────────────────╮"
@@ -485,6 +529,20 @@ print_header() {
         echo "╰─────────────────────────────────────────────────────────────────────────────╯"
     fi
     echo -e "${NC}"
+
+    if [ "$UPDATE_AVAILABLE" = true ]; then
+        if [ "${UI_LANG:-ru}" = "en" ]; then
+            echo -e "  ${YELLOW}${BOLD}Version: v${SCRIPT_VERSION}${NC}  ${RED}● Update available: v${CHECKED_REMOTE_VER}${NC} ${DIM}(select option 11 to update)${NC}\n"
+        else
+            echo -e "  ${YELLOW}${BOLD}Версия: v${SCRIPT_VERSION}${NC}  ${RED}● Доступно обновление: v${CHECKED_REMOTE_VER}${NC} ${DIM}(обновите через пункт 11)${NC}\n"
+        fi
+    else
+        if [ "${UI_LANG:-ru}" = "en" ]; then
+            echo -e "  ${DIM}Version: v${SCRIPT_VERSION} • ${GREEN}Up to date${NC}\n"
+        else
+            echo -e "  ${DIM}Версия: v${SCRIPT_VERSION} • ${GREEN}Последняя версия${NC}\n"
+        fi
+    fi
 }
 
 ui_step() {
@@ -934,6 +992,7 @@ update_script_only() {
             mv "$target_dir/install.sh.new" "$target_dir/install.sh"
             chmod +x "$target_dir/install.sh"
             create_cli_shortcut "$target_dir"
+            rm -f /tmp/.geoserver_ver_cache 2>/dev/null || true
             echo -e "${GREEN}[+] Скрипт управления (меню и CLI) успешно обновлён!${NC}\n"
         else
             rm -f "$target_dir/install.sh.new"
@@ -2103,6 +2162,11 @@ main_menu() {
             fi
             echo ""
 
+            local script_upd_en="Update management script from GitHub"
+            if [ "$UPDATE_AVAILABLE" = true ]; then
+                script_upd_en="Update management script [new v${CHECKED_REMOTE_VER} available!]"
+            fi
+
             local en_options=(
                 "HEADER:General & Information"
                 "Sync geo-databases right now"
@@ -2117,7 +2181,7 @@ main_menu() {
                 "Restart container"
                 "Stop container"
                 "Update Docker image (pull & recreate)"
-                "Update management script from GitHub"
+                "$script_upd_en"
                 "HEADER:System"
                 "Change language / Сменить язык (RU/EN)"
                 "Completely remove geo-routing-server"
@@ -2138,6 +2202,11 @@ main_menu() {
             fi
             echo ""
 
+            local script_upd_ru="Обновить скрипт управления из GitHub"
+            if [ "$UPDATE_AVAILABLE" = true ]; then
+                script_upd_ru="Обновить скрипт управления [доступна новая v${CHECKED_REMOTE_VER}!]"
+            fi
+
             local ru_options=(
                 "HEADER:Основное и ссылки"
                 "Синхронизировать базы прямо сейчас"
@@ -2152,7 +2221,7 @@ main_menu() {
                 "Перезапустить контейнер"
                 "Остановить контейнер"
                 "Обновить Docker-образ (pull & recreate)"
-                "Обновить скрипт управления из GitHub"
+                "$script_upd_ru"
                 "HEADER:Система"
                 "Сменить язык / Change language (RU/EN)"
                 "Полностью удалить geo-routing-server"

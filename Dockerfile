@@ -1,7 +1,8 @@
 FROM alpine:3.21
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app
 
 RUN apk add --no-cache \
     python3 \
