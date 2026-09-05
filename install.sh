@@ -16,9 +16,11 @@ DIM='\033[2m'
 NC='\033[0m'
 
 # Повышайте версию при каждом изменении install.sh. GitHub Actions это проверяет.
-SCRIPT_VERSION="1.0.5"
+SCRIPT_VERSION="1.0.6"
 CHECKED_REMOTE_VER=""
 UPDATE_AVAILABLE=false
+CHECKED_REMOTE_IMG_DIGEST=""
+IMAGE_UPDATE_AVAILABLE=false
 
 CONFIG_FILE_RECORD="/etc/geo-routing-server.conf"
 LANG_RECORD="/etc/geo-routing-server.lang"
@@ -515,9 +517,63 @@ check_script_version() {
     fi
 }
 
+check_docker_image_version() {
+    [ -n "$CHECKED_REMOTE_IMG_DIGEST" ] && return 0
+    command -v docker >/dev/null 2>&1 || return 0
+
+    local cache_file="/tmp/.geoserver_img_cache"
+    local now
+    now=$(date +%s 2>/dev/null || echo 0)
+    local cached_time=0
+    local cached_digest=""
+
+    if [ -f "$cache_file" ]; then
+        cached_time=$(head -n 1 "$cache_file" 2>/dev/null | cut -d'|' -f1 || echo 0)
+        cached_digest=$(head -n 1 "$cache_file" 2>/dev/null | cut -d'|' -f2 || echo "")
+    fi
+
+    if [ "$cached_time" -gt 0 ] && [ $(( now - cached_time )) -lt 300 ] && [ -n "$cached_digest" ]; then
+        CHECKED_REMOTE_IMG_DIGEST="$cached_digest"
+    else
+        local token
+        token=$(curl -fsSL -m 3 "https://ghcr.io/token?scope=repository:xdeptu5/geo-routing-server:pull" 2>/dev/null | sed -n 's/.*"token":"\([^"]*\)".*/\1/p' || true)
+        if [ -n "$token" ]; then
+            local fetched_digest
+            fetched_digest=$(curl -sI -m 3 -H "Authorization: Bearer $token" -H "Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.v2+json" "https://ghcr.io/v2/xdeptu5/geo-routing-server/manifests/latest" 2>/dev/null | grep -i '^docker-content-digest:' | awk '{print $2}' | tr -d '\r\n' || true)
+            if [ -n "$fetched_digest" ]; then
+                CHECKED_REMOTE_IMG_DIGEST="$fetched_digest"
+                echo "${now}|${fetched_digest}" > "$cache_file" 2>/dev/null || true
+            fi
+        fi
+        if [ -z "$CHECKED_REMOTE_IMG_DIGEST" ] && [ -n "$cached_digest" ]; then
+            CHECKED_REMOTE_IMG_DIGEST="$cached_digest"
+        fi
+    fi
+
+    if [ -n "$CHECKED_REMOTE_IMG_DIGEST" ]; then
+        local local_digests
+        local_digests=$(docker inspect --format '{{range .RepoDigests}}{{.}} {{end}}' ghcr.io/xdeptu5/geo-routing-server:latest 2>/dev/null || true)
+        if [ -n "$local_digests" ]; then
+            case "$local_digests" in
+                *@sha256:*)
+                    case "$local_digests" in
+                        *"$CHECKED_REMOTE_IMG_DIGEST"*)
+                            IMAGE_UPDATE_AVAILABLE=false
+                            ;;
+                        *)
+                            IMAGE_UPDATE_AVAILABLE=true
+                            ;;
+                    esac
+                    ;;
+            esac
+        fi
+    fi
+}
+
 print_header() {
     clear || true
     check_script_version 2>/dev/null || true
+    check_docker_image_version 2>/dev/null || true
 
     echo -e "${CYAN}${BOLD}"
     if [ "${UI_LANG:-ru}" = "en" ]; then
@@ -535,17 +591,26 @@ print_header() {
 
     if [ "$UPDATE_AVAILABLE" = true ]; then
         if [ "${UI_LANG:-ru}" = "en" ]; then
-            echo -e "  ${YELLOW}${BOLD}Version: v${SCRIPT_VERSION}${NC}  ${RED}● Update available: v${CHECKED_REMOTE_VER}${NC} ${DIM}(select option 11 to update)${NC}\n"
+            echo -e "  ${YELLOW}${BOLD}Version: v${SCRIPT_VERSION}${NC}  ${RED}● Update available: v${CHECKED_REMOTE_VER}${NC} ${DIM}(select option 11 to update)${NC}"
         else
-            echo -e "  ${YELLOW}${BOLD}Версия: v${SCRIPT_VERSION}${NC}  ${RED}● Доступно обновление: v${CHECKED_REMOTE_VER}${NC} ${DIM}(обновите через пункт 11)${NC}\n"
+            echo -e "  ${YELLOW}${BOLD}Версия: v${SCRIPT_VERSION}${NC}  ${RED}● Доступно обновление: v${CHECKED_REMOTE_VER}${NC} ${DIM}(обновите через пункт 11)${NC}"
         fi
     else
         if [ "${UI_LANG:-ru}" = "en" ]; then
-            echo -e "  ${DIM}Version: v${SCRIPT_VERSION} • ${GREEN}Up to date${NC}\n"
+            echo -e "  ${DIM}Version: v${SCRIPT_VERSION} • ${GREEN}Up to date${NC}"
         else
-            echo -e "  ${DIM}Версия: v${SCRIPT_VERSION} • ${GREEN}Последняя версия${NC}\n"
+            echo -e "  ${DIM}Версия: v${SCRIPT_VERSION} • ${GREEN}Последняя версия${NC}"
         fi
     fi
+
+    if [ "$IMAGE_UPDATE_AVAILABLE" = true ]; then
+        if [ "${UI_LANG:-ru}" = "en" ]; then
+            echo -e "  ${YELLOW}${BOLD}Docker Image:${NC}  ${YELLOW}● New image available!${NC} ${DIM}(select option 10 to update)${NC}"
+        else
+            echo -e "  ${YELLOW}${BOLD}Docker-образ:${NC}  ${YELLOW}● Доступно обновление!${NC} ${DIM}(обновите через пункт 10)${NC}"
+        fi
+    fi
+    echo ""
 }
 
 ui_step() {
@@ -1301,6 +1366,9 @@ update_script_only() {
             *) echo -e "${RED}[!] Не удалось скачать или проверить скрипт обновления.${NC}\n" ;;
         esac
     fi
+    rm -f /tmp/.geoserver_ver_cache 2>/dev/null || true
+    CHECKED_REMOTE_VER=""
+    UPDATE_AVAILABLE=false
     pause_menu "Нажмите Enter для перезапуска меню..."
     exec bash "$target_dir/install.sh"
 }
@@ -1451,6 +1519,11 @@ update_project() {
         echo -e "\n${GREEN}${BOLD}✓ ПРОВЕРКА И ОБНОВЛЕНИЕ ЗАВЕРШЕНЫ${NC}\n"
     fi
 
+    rm -f /tmp/.geoserver_img_cache /tmp/.geoserver_ver_cache 2>/dev/null || true
+    CHECKED_REMOTE_IMG_DIGEST=""
+    IMAGE_UPDATE_AVAILABLE=false
+    CHECKED_REMOTE_VER=""
+    UPDATE_AVAILABLE=false
     pause_menu "Нажмите Enter для перезапуска меню..."
     exec bash "$target_dir/install.sh"
 }
@@ -2641,7 +2714,11 @@ main_menu() {
 
         if [ "${UI_LANG:-ru}" = "en" ]; then
             echo -e "Installation directory: ${CYAN}$target_dir${NC}"
-            echo -e "Container status:       $status_msg"
+            if [ "$IMAGE_UPDATE_AVAILABLE" = true ]; then
+                echo -e "Container status:       $status_msg ${YELLOW}(new image available)${NC}"
+            else
+                echo -e "Container status:       $status_msg"
+            fi
             echo -e "Last synchronization:   $sync_msg"
             echo -e "Active modules:         ${GREEN}$modules_en${NC}"
             if [ "$is_local" -eq 0 ] && [ -n "$domain_val" ] && [ "$domain_val" != "geo.example.com" ]; then
@@ -2655,6 +2732,11 @@ main_menu() {
                 echo -e "Integrations:           ${YELLOW}$integrations_en${NC}"
             fi
             echo ""
+
+            local img_upd_en="Update Docker image (pull & recreate)"
+            if [ "$IMAGE_UPDATE_AVAILABLE" = true ]; then
+                img_upd_en="Update Docker image [new image available!]"
+            fi
 
             local script_upd_en="Update management script from GitHub"
             if [ "$UPDATE_AVAILABLE" = true ]; then
@@ -2674,7 +2756,7 @@ main_menu() {
                 "View container logs"
                 "Restart container"
                 "Stop container"
-                "Update Docker image (pull & recreate)"
+                "$img_upd_en"
                 "$script_upd_en"
                 "HEADER:System"
                 "Change language / Сменить язык (RU/EN)"
@@ -2686,7 +2768,11 @@ main_menu() {
             menu_idx=$(tui_select "Choose an action:" 0 "${en_options[@]}")
         else
             echo -e "Каталог установки: ${CYAN}$target_dir${NC}"
-            echo -e "Статус контейнера: $status_msg"
+            if [ "$IMAGE_UPDATE_AVAILABLE" = true ]; then
+                echo -e "Статус контейнера: $status_msg ${YELLOW}(доступен новый образ)${NC}"
+            else
+                echo -e "Статус контейнера: $status_msg"
+            fi
             echo -e "Последняя синхронизация: $sync_msg"
             echo -e "Активные модули:   ${GREEN}$modules_ru${NC}"
             if [ "$is_local" -eq 0 ] && [ -n "$domain_val" ] && [ "$domain_val" != "geo.example.com" ]; then
@@ -2700,6 +2786,11 @@ main_menu() {
                 echo -e "Интеграции:        ${YELLOW}$integrations_ru${NC}"
             fi
             echo ""
+
+            local img_upd_ru="Обновить Docker-образ (pull & recreate)"
+            if [ "$IMAGE_UPDATE_AVAILABLE" = true ]; then
+                img_upd_ru="Обновить Docker-образ [доступно обновление!]"
+            fi
 
             local script_upd_ru="Обновить скрипт управления из GitHub"
             if [ "$UPDATE_AVAILABLE" = true ]; then
@@ -2719,7 +2810,7 @@ main_menu() {
                 "Посмотреть логи контейнера"
                 "Перезапустить контейнер"
                 "Остановить контейнер"
-                "Обновить Docker-образ (pull & recreate)"
+                "$img_upd_ru"
                 "$script_upd_ru"
                 "HEADER:Система"
                 "Сменить язык / Change language (RU/EN)"
