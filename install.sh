@@ -2320,6 +2320,7 @@ main_menu() {
             case "$sync_status" in
                 *'"state":"success"'*) sync_msg="${GREEN}[+] Успешна${NC}" ;;
                 *'"state":"failed"'*) sync_msg="${RED}[-] Ошибка${NC}" ;;
+                *'"state":"running"'*) sync_msg="${YELLOW}[~] Выполняется${NC}" ;;
                 *) sync_msg="${YELLOW}[~] Нет результата${NC}" ;;
             esac
         else

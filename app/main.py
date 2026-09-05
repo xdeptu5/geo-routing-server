@@ -74,7 +74,7 @@ def write_sync_status(storage_dir: Path, token: str, state: str, failures: int =
     status_file = storage_dir / token / ".sync-status.json"
     payload = {
         "state": state,
-        "completed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "recorded_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "failed_processors": failures,
         "remnawave_ok": remnawave_ok,
     }
