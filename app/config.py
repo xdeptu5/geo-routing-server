@@ -25,6 +25,63 @@ class Config:
         if c.strip()
     ]
     
+    # Список правил маршрутизации: JSONSUB, WHITELIST, DEFAULT или пусто / ALL для всех
+    _raw_rules = os.getenv("ROUTING_RULES", "").strip()
+    ROUTING_RULES: List[str] = [
+        r.strip().upper().removesuffix(".JSON")
+        for r in _raw_rules.split(",")
+        if r.strip()
+    ] if _raw_rules and _raw_rules.upper() != "ALL" else []
+
+    # Выборочная раздача файлов geo-баз (geoip.dat, geosite.dat)
+    SERVE_GEOIP = os.getenv("SERVE_GEOIP", "true").lower() in ("true", "1", "yes")
+    SERVE_GEOSITE = os.getenv("SERVE_GEOSITE", "true").lower() in ("true", "1", "yes")
+
+    # Форматы правил: CLIENT_OPTIMIZED (Happ -> .DEEPLINK, Incy -> .JSON), ALL, JSON, DEEPLINK
+    SERVE_FORMATS = os.getenv("SERVE_FORMATS", "ALL").strip().upper()
+
+    @classmethod
+    def should_serve_rule(cls, rule_name: str) -> bool:
+        """Проверяет, разрешено ли правило к генерации и отдаче."""
+        if not cls.ROUTING_RULES:
+            return True
+        clean = rule_name.strip().upper().removesuffix(".JSON")
+        return clean in cls.ROUTING_RULES
+
+    @classmethod
+    def should_serve_json(cls, client: str) -> bool:
+        """Проверяет, нужно ли публиковать .JSON файл для клиента."""
+        fmt = cls.SERVE_FORMATS
+        if fmt == "DEEPLINK":
+            return False
+        if fmt in ("CLIENT_OPTIMIZED", "OPTIMIZED"):
+            return client.upper() != "HAPP"
+        return True
+
+    @classmethod
+    def should_serve_deeplink(cls, client: str) -> bool:
+        """Проверяет, нужно ли публиковать .DEEPLINK файл для клиента."""
+        fmt = cls.SERVE_FORMATS
+        if fmt == "JSON":
+            return False
+        if fmt in ("CLIENT_OPTIMIZED", "OPTIMIZED"):
+            return client.upper() != "INCY"
+        return True
+
+    @classmethod
+    def get_active_rules(cls, discovered_rules: List[str]) -> List[str]:
+        """Возвращает отфильтрованный список правил для генерации."""
+        if not cls.ROUTING_RULES:
+            return discovered_rules
+        discovered_dict = {r.upper().removesuffix(".JSON"): r for r in discovered_rules}
+        active = []
+        for r in cls.ROUTING_RULES:
+            if r in discovered_dict:
+                active.append(discovered_dict[r])
+            else:
+                active.append(f"{r}.JSON")
+        return active or discovered_rules
+
     # Внешний URL к гео-базам (если базы отдаются с другого сервера)
     _raw_public_geo = os.getenv("PUBLIC_GEO_BASE_URL", "").strip().rstrip("/")
     PUBLIC_GEO_BASE_URL = _raw_public_geo if _raw_public_geo.startswith(("http://", "https://")) else ""

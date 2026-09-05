@@ -40,14 +40,24 @@ class HappProcessor(BaseProcessor):
 
         # 1. Синхронизируем geo-базы (только если включен модуль geo-баз)
         if needs_geo:
-            logger.info("Processing HAPP GEO databases...")
-            if not self.geo_manager.sync_client_geo(client, target_dir, default_json_data):
-                success = False
+            if Config.SERVE_GEOIP or Config.SERVE_GEOSITE:
+                logger.info("Processing HAPP GEO databases...")
+                if not self.geo_manager.sync_client_geo(client, target_dir, default_json_data):
+                    success = False
+            else:
+                for f in ("geoip.dat", "geosite.dat"):
+                    old_f = target_dir / f
+                    if old_f.is_file():
+                        try:
+                            old_f.unlink()
+                        except OSError:
+                            pass
 
         # 2. Генерируем JSON и DEEPLINK для Remnawave / клиентов (только если включен deeplink модуль)
         if needs_deeplink:
             logger.info("Processing HAPP configuration and DEEPLINK files...")
             config_files = self._discover_config_files()
+            config_files = Config.get_active_rules(config_files)
             
             # Если настроены конкретные сквады Remnawave, генерируем ТОЛЬКО запрошенные правила
             squads = RemnawaveSync.load_squad_configs()
@@ -73,12 +83,12 @@ class HappProcessor(BaseProcessor):
             ext_geo_url = Config.get_external_geo_url(client)
             if ext_geo_url:
                 # Указан валидный внешний сервер geo-баз
-                geoip_url = f"{ext_geo_url}/geoip.dat"
-                geosite_url = f"{ext_geo_url}/geosite.dat"
+                geoip_url = f"{ext_geo_url}/geoip.dat" if Config.SERVE_GEOIP else ""
+                geosite_url = f"{ext_geo_url}/geosite.dat" if Config.SERVE_GEOSITE else ""
             elif needs_geo:
                 # Базы раздаются с этого же локального сервера
-                geoip_url = f"{base_public_url}/{client}/geoip.dat"
-                geosite_url = f"{base_public_url}/{client}/geosite.dat"
+                geoip_url = f"{base_public_url}/{client}/geoip.dat" if Config.SERVE_GEOIP else ""
+                geosite_url = f"{base_public_url}/{client}/geosite.dat" if Config.SERVE_GEOSITE else ""
             else:
                 # Базы не раздаются локально — берем исходные upstream URL
                 geoip_url = (default_json_data or {}).get("Geoipurl") or Config.GEOIP_SOURCE_URL or ""
@@ -112,21 +122,24 @@ class HappProcessor(BaseProcessor):
                         content_hash = int(hashlib.md5(raw_bytes).hexdigest()[:8], 16)
                         data["LastUpdated"] = str(content_hash)
                         
-                    # Форматированный JSON для отдачи по HTTP
-                    json_content = json.dumps(data, indent=2, ensure_ascii=False)
-                    if not Publisher.publish_file(target_dir, file_name, json_content):
-                        success = False
-                        continue
-                    published_files.add(file_name)
+                    # Форматированный JSON для отдачи по HTTP (если включена отдача JSON)
+                    if Config.should_serve_json(client):
+                        json_content = json.dumps(data, indent=2, ensure_ascii=False)
+                        if not Publisher.publish_file(target_dir, file_name, json_content):
+                            success = False
+                            continue
+                        published_files.add(file_name)
                         
-                    # Генерируем компактный DEEPLINK (happ://routing/onadd/<base64>) без пробелов (сокращение размера заголовка на 40%)
+                    # Генерируем компактный DEEPLINK (happ://routing/onadd/<base64>) без пробелов
                     deeplink_content = self.build_deeplink(client, data)
-                    
                     deeplink_filename = f"{file_name.rsplit('.', 1)[0]}.DEEPLINK"
-                    if Publisher.publish_file(target_dir, deeplink_filename, deeplink_content):
-                        published_files.add(deeplink_filename)
-                    else:
-                        success = False
+                    
+                    if Config.should_serve_deeplink(client) or RemnawaveSync.is_configured():
+                        if Publisher.publish_file(target_dir, deeplink_filename, deeplink_content):
+                            if Config.should_serve_deeplink(client):
+                                published_files.add(deeplink_filename)
+                        else:
+                            success = False
                         
                 except Exception as e:
                     logger.error(f"Failed to process {file_name} for HAPP: {e}")

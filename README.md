@@ -243,6 +243,10 @@ Happ принимает правила через Base64-диплинк `happ://
 | `DOMAIN` | `geo.example.com` | Домен для HTTPS-прокси (не нужен в режиме `HAPP_DEEPLINK`) |
 | `ROUTING_TOKEN` | — | **Обязательно** для раздачи файлов: минимум 4 символа из `[A-Za-z0-9_-]`; установщик генерирует 32-символьный токен |
 | `ENABLED_CLIENTS` | `HAPP,INCY` | Модули: `HAPP,INCY`, `HAPP`, `INCY`, `HAPP_GEO`, `INCY_GEO`, `HAPP_DEEPLINK` |
+| `ROUTING_RULES` | `JSONSUB,WHITELIST` | Выборочные правила маршрутизации: `JSONSUB,WHITELIST`, `JSONSUB`, `ALL` или кастомный список через запятую |
+| `SERVE_FORMATS` | `CLIENT_OPTIMIZED` | Форматы файлов: `CLIENT_OPTIMIZED` (Happ → `.DEEPLINK`, Incy → `.JSON`), `ALL`, `JSON`, `DEEPLINK` |
+| `SERVE_GEOIP` | `true` | Раздача файла `geoip.dat` (`true` / `false`) |
+| `SERVE_GEOSITE` | `true` | Раздача файла `geosite.dat` (`true` / `false`) |
 | `PUBLIC_GEO_BASE_URL` | *пусто* | Внешний URL баз (`https://geo-node.example.com/<token>`) |
 | `DOCKER_NETWORK` | `remnawave-network` | Имя существующей сети Remnawave; применяется блоком `networks` в `compose.yaml` |
 | `HTTP_BIND` | `127.0.0.1` | IP привязки внутреннего веб-сервера |

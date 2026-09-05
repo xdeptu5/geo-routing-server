@@ -95,9 +95,10 @@ def write_sync_status(storage_dir: Path, token: str, state: str, failures: int =
             pass
 
 def print_summary_banner(token: str):
-    """Выводит чистый, аккуратный блок со ссылками строго под выбранные модули."""
+    """Выводит чистый, аккуратный блок со ссылками строго под выбранные модули и файлы."""
     base_url = Config.get_base_url(token)
     clients_set = set(Config.ENABLED_CLIENTS)
+    active_rules = Config.ROUTING_RULES or ["JSONSUB", "WHITELIST"]
     
     sections = []
     
@@ -129,41 +130,57 @@ def print_summary_banner(token: str):
                 happ_lines.append("  [!] Remnawave API: указан URL, но отсутствует REMNAWAVE_TOKEN")
                 happ_lines.append("      Автопатч не активен. Введите токен через команду: geoserver -> пункт 4")
             else:
-                happ_lines.append("  - Правила Happ (диплинки happ://routing/onadd/...):")
-                happ_lines.append(f"      • JSONSUB:   {base_url}/HAPP/JSONSUB.DEEPLINK")
-                happ_lines.append(f"      • WHITELIST: {base_url}/HAPP/WHITELIST.DEEPLINK")
-        if happ_geo:
+                if Config.should_serve_deeplink("HAPP"):
+                    happ_lines.append("  - Правила Happ (диплинки happ://routing/onadd/...):")
+                    for r in active_rules:
+                        happ_lines.append(f"      • {r}:   {base_url}/HAPP/{r}.DEEPLINK")
+                if Config.should_serve_json("HAPP"):
+                    happ_lines.append("  - Файлы правил JSON:")
+                    for r in active_rules:
+                        happ_lines.append(f"      • {r}:   {base_url}/HAPP/{r}.JSON")
+
+        if happ_geo and (Config.SERVE_GEOIP or Config.SERVE_GEOSITE):
             ext_geo = Config.get_external_geo_url("HAPP")
-            if ext_geo:
-                happ_lines.append(f"""  - Внешние ссылки на базы:
-      GeoIP:     {ext_geo}/geoip.dat
-      GeoSite:   {ext_geo}/geosite.dat""")
-            else:
-                happ_lines.append(f"""  - Публичные HTTPS ссылки на базы (для клиентов с токеном):
-      GeoIP:     {base_url}/HAPP/geoip.dat
-      GeoSite:   {base_url}/HAPP/geosite.dat""")
+            target_base = ext_geo if ext_geo else f"{base_url}/HAPP"
+            hdr = "  - Внешние ссылки на базы:" if ext_geo else "  - Публичные HTTPS ссылки на базы (для клиентов с токеном):"
+            geo_lines = [hdr]
+            if Config.SERVE_GEOIP:
+                geo_lines.append(f"      GeoIP:     {target_base}/geoip.dat")
+            if Config.SERVE_GEOSITE:
+                geo_lines.append(f"      GeoSite:   {target_base}/geosite.dat")
+            happ_lines.append("\n".join(geo_lines))
+
         sections.append("\n".join(happ_lines))
 
     # INCY блок
     if "INCY" in clients_set or "INCY_GEO" in clients_set:
         incy_lines = ["[INCY]"]
         ext_geo = Config.get_external_geo_url("INCY")
-        if ext_geo:
-            incy_lines.append(f"""  - Внешние ссылки на базы:
-      GeoIP:     {ext_geo}/geoip.dat
-      GeoSite:   {ext_geo}/geosite.dat""")
-        else:
-            incy_lines.append(f"""  - Публичные HTTPS ссылки на базы (для клиентов с токеном):
-      GeoIP:     {base_url}/INCY/geoip.dat
-      GeoSite:   {base_url}/INCY/geosite.dat""")
-        if "INCY" in clients_set:
+        target_base = ext_geo if ext_geo else f"{base_url}/INCY"
+        
+        if Config.SERVE_GEOIP or Config.SERVE_GEOSITE:
+            hdr = "  - Внешние ссылки на базы:" if ext_geo else "  - Публичные HTTPS ссылки на базы (для клиентов с токеном):"
+            geo_lines = [hdr]
+            if Config.SERVE_GEOIP:
+                geo_lines.append(f"      GeoIP:     {target_base}/geoip.dat")
+            if Config.SERVE_GEOSITE:
+                geo_lines.append(f"      GeoSite:   {target_base}/geosite.dat")
+            incy_lines.append("\n".join(geo_lines))
+
+        if "INCY" in clients_set and Config.should_serve_json("INCY"):
+            rule_examples = "\n".join([f"      • {r}:   incy://autorouting/onadd/{base_url}/INCY/{r}.JSON" for r in active_rules])
             incy_lines.append(f"""  - Заголовок подписки (Remnawave / Marzban Autorouting):
       Header Name:  autorouting
       Header Value: incy://autorouting/onadd/{base_url}/INCY/<RULE>.JSON
 
       Примеры:
-      • JSONSUB:   incy://autorouting/onadd/{base_url}/INCY/JSONSUB.JSON
-      • WHITELIST: incy://autorouting/onadd/{base_url}/INCY/WHITELIST.JSON""")
+{rule_examples}""")
+
+        if "INCY" in clients_set and Config.should_serve_deeplink("INCY"):
+            dl_examples = "\n".join([f"      • {r}:   {base_url}/INCY/{r}.DEEPLINK" for r in active_rules])
+            incy_lines.append(f"""  - Deep-link файлы для Incy:
+{dl_examples}""")
+
         sections.append("\n".join(incy_lines))
 
     body = "\n\n".join(sections) if sections else "No active clients configured in ENABLED_CLIENTS."

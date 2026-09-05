@@ -16,7 +16,7 @@ DIM='\033[2m'
 NC='\033[0m'
 
 # Повышайте версию при каждом изменении install.sh. GitHub Actions это проверяет.
-SCRIPT_VERSION="1.0.6"
+SCRIPT_VERSION="1.0.7"
 CHECKED_REMOTE_VER=""
 UPDATE_AVAILABLE=false
 CHECKED_REMOTE_IMG_DIGEST=""
@@ -1759,6 +1759,10 @@ install_wizard() {
     local prev_routing_repo="https://raw.githubusercontent.com/hydraponique/roscomvpn-routing/main"
     local prev_schedule="0 10 * * *"
     local prev_ext_network=""
+    local prev_rules="JSONSUB,WHITELIST"
+    local prev_formats="CLIENT_OPTIMIZED"
+    local prev_serve_geoip="true"
+    local prev_serve_geosite="true"
 
     local scan_env=""
     if [ -f "$INSTALL_DIR/.env" ]; then
@@ -1772,6 +1776,10 @@ install_wizard() {
         prev_domain="$(grep "^DOMAIN=" "$scan_env" | cut -d'=' -f2- || echo "$prev_domain")"
         prev_token="$(grep "^ROUTING_TOKEN=" "$scan_env" | cut -d'=' -f2- || echo "$prev_token")"
         prev_clients="$(grep "^ENABLED_CLIENTS=" "$scan_env" | cut -d'=' -f2- || echo "$prev_clients")"
+        prev_rules="$(grep "^ROUTING_RULES=" "$scan_env" | cut -d'=' -f2- || echo "$prev_rules")"
+        prev_formats="$(grep "^SERVE_FORMATS=" "$scan_env" | cut -d'=' -f2- || echo "$prev_formats")"
+        prev_serve_geoip="$(grep "^SERVE_GEOIP=" "$scan_env" | cut -d'=' -f2- || echo "$prev_serve_geoip")"
+        prev_serve_geosite="$(grep "^SERVE_GEOSITE=" "$scan_env" | cut -d'=' -f2- || echo "$prev_serve_geosite")"
         prev_port="$(grep "^HTTP_PORT=" "$scan_env" | cut -d'=' -f2- || echo "$prev_port")"
         prev_remna_base="$(grep "^REMNAWAVE_BASE_URL=" "$scan_env" | cut -d'=' -f2- || echo "$prev_remna_base")"
         prev_remna_token="$(grep "^REMNAWAVE_TOKEN=" "$scan_env" | cut -d'=' -f2- || echo "$prev_remna_token")"
@@ -1982,6 +1990,95 @@ install_wizard() {
             break
         done
         echo -e "${GREEN}[+] Базы: $PUBLIC_GEO_BASE_URL${NC}\n"
+    fi
+
+    # ────────────────────────────────────────────────────────────────────────
+    # ШАГ 2.1: Состав отдаваемых файлов и правил
+    # ────────────────────────────────────────────────────────────────────────
+    local ROUTING_RULES="${prev_rules:-JSONSUB,WHITELIST}"
+    local SERVE_FORMATS="${prev_formats:-CLIENT_OPTIMIZED}"
+    local SERVE_GEOIP="${prev_serve_geoip:-true}"
+    local SERVE_GEOSITE="${prev_serve_geosite:-true}"
+
+    if [ "$server_role" != "3" ]; then
+        echo -e "${CYAN}${BOLD}[*] Настройка состава правил и форматов файлов:${NC}"
+        local default_rules_idx=0
+        case "$prev_rules" in
+            "JSONSUB") default_rules_idx=1 ;;
+            "ALL"|"DEFAULT,JSONSUB,WHITELIST") default_rules_idx=2 ;;
+            *) default_rules_idx=0 ;;
+        esac
+
+        local rules_idx
+        rules_idx=$(tui_select "Какие правила генерировать и отдавать?" "$default_rules_idx" \
+            "JSONSUB и WHITELIST (Рекомендуется: подписки + белый список)" \
+            "Только JSONSUB (Минималистичный: только маршрут подписок)" \
+            "Все правила (DEFAULT, JSONSUB, WHITELIST)" \
+            "Ввести список правил вручную (через запятую)")
+
+        case "$rules_idx" in
+            1) ROUTING_RULES="JSONSUB" ;;
+            2) ROUTING_RULES="ALL" ;;
+            3)
+                read -r -p "  ▸ Введите имена правил через запятую [${prev_rules:-JSONSUB,WHITELIST}]: " custom_rules
+                ROUTING_RULES="${custom_rules:-${prev_rules:-JSONSUB,WHITELIST}}"
+                ROUTING_RULES="$(echo "$ROUTING_RULES" | tr -d ' ')"
+                ;;
+            *) ROUTING_RULES="JSONSUB,WHITELIST" ;;
+        esac
+        echo -e "  ${GREEN}[+] Правила: ${BOLD}$ROUTING_RULES${NC}\n"
+
+        local default_fmt_idx=0
+        case "$prev_formats" in
+            "ALL") default_fmt_idx=1 ;;
+            "JSON") default_fmt_idx=2 ;;
+            "DEEPLINK") default_fmt_idx=3 ;;
+            *) default_fmt_idx=0 ;;
+        esac
+
+        local fmt_idx
+        fmt_idx=$(tui_select "Форматы файлов правил:" "$default_fmt_idx" \
+            "Оптимально под клиенты (Happ: .DEEPLINK, Incy: .JSON) [Рекомендуется]" \
+            "Все форматы (.JSON и .DEEPLINK для каждого клиента)" \
+            "Только .JSON файлы" \
+            "Только .DEEPLINK файлы")
+
+        case "$fmt_idx" in
+            1) SERVE_FORMATS="ALL" ;;
+            2) SERVE_FORMATS="JSON" ;;
+            3) SERVE_FORMATS="DEEPLINK" ;;
+            *) SERVE_FORMATS="CLIENT_OPTIMIZED" ;;
+        esac
+        echo -e "  ${GREEN}[+] Форматы: ${BOLD}$SERVE_FORMATS${NC}\n"
+    fi
+
+    if [ "$server_role" != "4" ]; then
+        local default_geo_idx=0
+        if [ "$prev_serve_geoip" = "true" ] && [ "$prev_serve_geosite" = "false" ]; then
+            default_geo_idx=1
+        elif [ "$prev_serve_geoip" = "false" ] && [ "$prev_serve_geosite" = "true" ]; then
+            default_geo_idx=2
+        elif [ "$prev_serve_geoip" = "false" ] && [ "$prev_serve_geosite" = "false" ]; then
+            default_geo_idx=3
+        fi
+
+        local geo_pick
+        geo_pick=$(tui_select "Раздача баз GeoIP и GeoSite:" "$default_geo_idx" \
+            "Обе базы (geoip.dat и geosite.dat) [Рекомендуется]" \
+            "Только geoip.dat" \
+            "Только geosite.dat" \
+            "Не раздавать базы (только правила)")
+
+        case "$geo_pick" in
+            1) SERVE_GEOIP="true"; SERVE_GEOSITE="false" ;;
+            2) SERVE_GEOIP="false"; SERVE_GEOSITE="true" ;;
+            3) SERVE_GEOIP="false"; SERVE_GEOSITE="false" ;;
+            *) SERVE_GEOIP="true"; SERVE_GEOSITE="true" ;;
+        esac
+        echo -e "  ${GREEN}[+] Geo-базы: GeoIP=$SERVE_GEOIP, GeoSite=$SERVE_GEOSITE${NC}\n"
+    else
+        SERVE_GEOIP="false"
+        SERVE_GEOSITE="false"
     fi
 
     # ────────────────────────────────────────────────────────────────────────
@@ -2479,6 +2576,10 @@ CLOUDFLARE_ZERO_TRUST_CLIENT_SECRET=${prev_cf_secret}
         echo "DOMAIN=${DOMAIN}"
         echo "ROUTING_TOKEN=${ROUTING_TOKEN}"
         echo "ENABLED_CLIENTS=${ENABLED_CLIENTS}"
+        [ -n "$ROUTING_RULES" ] && echo "ROUTING_RULES=${ROUTING_RULES}"
+        [ -n "$SERVE_FORMATS" ] && echo "SERVE_FORMATS=${SERVE_FORMATS}"
+        echo "SERVE_GEOIP=${SERVE_GEOIP:-true}"
+        echo "SERVE_GEOSITE=${SERVE_GEOSITE:-true}"
         [ -n "$PUBLIC_GEO_BASE_URL" ] && echo "PUBLIC_GEO_BASE_URL=${PUBLIC_GEO_BASE_URL}"
         [ -n "$ROUTING_SOURCE_REPO" ] && echo "ROUTING_SOURCE_REPO=${ROUTING_SOURCE_REPO}"
         [ -n "$REMNA_BLOCK" ] && printf '%s' "$REMNA_BLOCK"
@@ -2710,6 +2811,11 @@ main_menu() {
                 integrations_ru=$(IFS=" • "; echo "${int_ru[*]}")
                 integrations_en=$(IFS=" • "; echo "${int_en[*]}")
             fi
+
+            local rules_val
+            local formats_val
+            rules_val=$(grep "^ROUTING_RULES=" "$env_file" | cut -d'=' -f2- || echo "")
+            formats_val=$(grep "^SERVE_FORMATS=" "$env_file" | cut -d'=' -f2- || echo "")
         fi
 
         if [ "${UI_LANG:-ru}" = "en" ]; then
@@ -2721,6 +2827,9 @@ main_menu() {
             fi
             echo -e "Last synchronization:   $sync_msg"
             echo -e "Active modules:         ${GREEN}$modules_en${NC}"
+            if [ -n "$rules_val" ]; then
+                echo -e "Rules & formats:        ${YELLOW}$rules_val ($formats_val)${NC}"
+            fi
             if [ "$is_local" -eq 0 ] && [ -n "$domain_val" ] && [ "$domain_val" != "geo.example.com" ]; then
                 if [ -n "$token_val" ] && [ "$token_val" != "local" ]; then
                     echo -e "Base URL:               ${CYAN}https://${domain_val}/${token_val}${NC}"
@@ -2775,6 +2884,9 @@ main_menu() {
             fi
             echo -e "Последняя синхронизация: $sync_msg"
             echo -e "Активные модули:   ${GREEN}$modules_ru${NC}"
+            if [ -n "$rules_val" ]; then
+                echo -e "Правила и форматы: ${YELLOW}$rules_val ($formats_val)${NC}"
+            fi
             if [ "$is_local" -eq 0 ] && [ -n "$domain_val" ] && [ "$domain_val" != "geo.example.com" ]; then
                 if [ -n "$token_val" ] && [ "$token_val" != "local" ]; then
                     echo -e "Базовый URL:       ${CYAN}https://${domain_val}/${token_val}${NC}"

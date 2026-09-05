@@ -103,9 +103,20 @@ class GeoManager:
         success = True
         
         for geo_type in ("geoip", "geosite"):
+            filename = f"{geo_type}.dat"
+            is_enabled = Config.SERVE_GEOIP if geo_type == "geoip" else Config.SERVE_GEOSITE
+            if not is_enabled:
+                disabled_file = target_dir / filename
+                if disabled_file.is_file():
+                    try:
+                        disabled_file.unlink()
+                        logger.info(f"  Removed disabled {filename} for {client}")
+                    except OSError:
+                        pass
+                continue
+
             try:
                 content = self.resolve_and_fetch(client, geo_type, default_json_data)
-                filename = f"{geo_type}.dat"
                 if not Publisher.publish_file(target_dir, filename, content):
                     success = False
                 # Очищаем устаревшие .sha256 файлы, если они остались от старых версий
