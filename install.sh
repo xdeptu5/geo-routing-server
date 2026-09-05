@@ -16,7 +16,7 @@ DIM='\033[2m'
 NC='\033[0m'
 
 # Повышайте версию при каждом изменении install.sh. GitHub Actions это проверяет.
-SCRIPT_VERSION="1.0.3"
+SCRIPT_VERSION="1.0.4"
 CHECKED_REMOTE_VER=""
 UPDATE_AVAILABLE=false
 
@@ -934,55 +934,124 @@ show_proxy_snippets() {
         return 0
     fi
 
-    echo -e "${CYAN}${BOLD}===============================================================================${NC}"
-    echo -e "${YELLOW}${BOLD}  ГОТОВЫЕ КОНФИГУРАЦИИ ДЛЯ ВАШЕГО РЕВЕРС-ПРОКСИ (HTTPS)${NC}"
-    echo -e "${CYAN}${BOLD}===============================================================================${NC}"
-    echo -e "Выберите конфигурацию под ваш веб-сервер и сценарий развёртывания:\n"
+    local proxy_choice
+    proxy_choice=$(tui_select "Выберите ваш веб-сервер для получения готового конфига:" 0 \
+        "Nginx (конфиг server / location)" \
+        "Caddy (/etc/caddy/Caddyfile)" \
+        "Nginx Proxy Manager (NPM GUI)" \
+        "Показать все варианты сразу" \
+        "Пропустить (уже настроено / настрою позже)")
 
-    echo -e "${GREEN}${BOLD}[ ВАРИАНТ 1: NGINX ]${NC}"
-    echo -e "  ${CYAN}── Сценарий А: Отдельный субдомен (${domain}) ──${NC}"
-    echo -e "${BOLD}server {${NC}"
-    echo -e "    ${BOLD}server_name ${domain};${NC}\n"
-    echo -e "    ${BOLD}location / {${NC}"
-    echo -e "        ${BOLD}proxy_pass http://127.0.0.1:${port};${NC}"
-    echo -e "        ${BOLD}proxy_set_header Host \$host;${NC}"
-    echo -e "        ${BOLD}proxy_set_header X-Real-IP \$remote_addr;${NC}"
-    echo -e "        ${BOLD}proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;${NC}"
-    echo -e "        ${BOLD}proxy_set_header X-Forwarded-Proto \$scheme;${NC}"
-    echo -e "    ${BOLD}}${NC}"
-    echo -e "${BOLD}}${NC}"
-    echo -e "\n  ${CYAN}── Сценарий Б: Существующий сайт (добавьте внутрь вашего server { ... }) ──${NC}"
-    echo -e "${BOLD}    location /${token}/ {${NC}"
-    echo -e "        ${BOLD}proxy_pass http://127.0.0.1:${port};${NC}"
-    echo -e "        ${BOLD}proxy_set_header Host \$host;${NC}"
-    echo -e "        ${BOLD}proxy_set_header X-Real-IP \$remote_addr;${NC}"
-    echo -e "        ${BOLD}proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;${NC}"
-    echo -e "        ${BOLD}proxy_set_header X-Forwarded-Proto \$scheme;${NC}"
-    echo -e "${BOLD}    }${NC}"
-    echo -e "  После сохранения примените: ${YELLOW}sudo nginx -t && sudo nginx -s reload${NC}\n"
-
-    echo -e "${GREEN}${BOLD}[ ВАРИАНТ 2: CADDY ]${NC} (/etc/caddy/Caddyfile)"
-    echo -e "  ${CYAN}── Сценарий А: Отдельный субдомен (${domain}) ──${NC}"
-    echo -e "${BOLD}${domain} {${NC}"
-    echo -e "    ${BOLD}reverse_proxy 127.0.0.1:${port}${NC}"
-    echo -e "${BOLD}}${NC}"
-    echo -e "\n  ${CYAN}── Сценарий Б: Существующий сайт (добавьте внутрь блока вашего домена) ──${NC}"
-    echo -e "${BOLD}    handle /${token}/* {${NC}"
-    echo -e "        ${BOLD}reverse_proxy 127.0.0.1:${port}${NC}"
-    echo -e "${BOLD}    }${NC}"
-    echo -e "  После сохранения примените: ${YELLOW}sudo systemctl reload caddy${NC}\n"
-
-    echo -e "${GREEN}${BOLD}[ ВАРИАНТ 3: NGINX PROXY MANAGER (GUI) ]${NC}"
-    echo -e "  ${CYAN}── Сценарий А: Отдельный Proxy Host ──${NC}"
-    echo -e "    Domain Names:          ${BOLD}${domain}${NC}"
-    echo -e "    Forward Hostname / IP: ${BOLD}127.0.0.1${NC}   Port: ${BOLD}${port}${NC}"
-    echo -e "    SSL:                   Request a new SSL Certificate (Force SSL: ON)"
-    echo -e "\n  ${CYAN}── Сценарий Б: На существующем Proxy Host сайта ──${NC}"
-    echo -e "    В настройках вашего Proxy Host перейдите во вкладку ${BOLD}Custom Locations${NC} -> Add location:"
-    echo -e "    Location:              ${BOLD}/${token}/${NC}"
-    echo -e "    Forward Hostname / IP: ${BOLD}127.0.0.1${NC}   Port: ${BOLD}${port}${NC}"
-    echo -e "${CYAN}===============================================================================${NC}\n"
-    pause_menu
+    case "$proxy_choice" in
+        0)
+            echo -e "\n${CYAN}${BOLD}===============================================================================${NC}"
+            echo -e "${YELLOW}${BOLD}  ГОТОВЫЙ КОНФИГ ДЛЯ NGINX (${domain} → 127.0.0.1:${port})${NC}"
+            echo -e "${CYAN}${BOLD}===============================================================================${NC}"
+            echo -e "  ${CYAN}── Сценарий А: Отдельный субдомен (${domain}) ──${NC}"
+            echo -e "${BOLD}server {${NC}"
+            echo -e "    ${BOLD}server_name ${domain};${NC}\n"
+            echo -e "    ${BOLD}location / {${NC}"
+            echo -e "        ${BOLD}proxy_pass http://127.0.0.1:${port};${NC}"
+            echo -e "        ${BOLD}proxy_set_header Host \$host;${NC}"
+            echo -e "        ${BOLD}proxy_set_header X-Real-IP \$remote_addr;${NC}"
+            echo -e "        ${BOLD}proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;${NC}"
+            echo -e "        ${BOLD}proxy_set_header X-Forwarded-Proto \$scheme;${NC}"
+            echo -e "    ${BOLD}}${NC}"
+            echo -e "${BOLD}}${NC}"
+            echo -e "\n  ${CYAN}── Сценарий Б: Существующий сайт (добавьте внутрь вашего server { ... }) ──${NC}"
+            echo -e "${BOLD}    location /${token}/ {${NC}"
+            echo -e "        ${BOLD}proxy_pass http://127.0.0.1:${port};${NC}"
+            echo -e "        ${BOLD}proxy_set_header Host \$host;${NC}"
+            echo -e "        ${BOLD}proxy_set_header X-Real-IP \$remote_addr;${NC}"
+            echo -e "        ${BOLD}proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;${NC}"
+            echo -e "        ${BOLD}proxy_set_header X-Forwarded-Proto \$scheme;${NC}"
+            echo -e "${BOLD}    }${NC}"
+            echo -e "\nПрименить: ${YELLOW}sudo nginx -t && sudo nginx -s reload${NC}"
+            echo -e "${CYAN}===============================================================================${NC}\n"
+            pause_menu
+            ;;
+        1)
+            echo -e "\n${CYAN}${BOLD}===============================================================================${NC}"
+            echo -e "${YELLOW}${BOLD}  ГОТОВЫЙ КОНФИГ ДЛЯ CADDY (${domain} → 127.0.0.1:${port})${NC}"
+            echo -e "${CYAN}${BOLD}===============================================================================${NC}"
+            echo -e "  ${CYAN}── Сценарий А: Отдельный субдомен (${domain}) ──${NC}"
+            echo -e "${BOLD}${domain} {${NC}"
+            echo -e "    ${BOLD}reverse_proxy 127.0.0.1:${port}${NC}"
+            echo -e "${BOLD}}${NC}"
+            echo -e "\n  ${CYAN}── Сценарий Б: Существующий сайт (добавьте внутрь блока вашего домена) ──${NC}"
+            echo -e "${BOLD}    handle /${token}/* {${NC}"
+            echo -e "        ${BOLD}reverse_proxy 127.0.0.1:${port}${NC}"
+            echo -e "${BOLD}    }${NC}"
+            echo -e "\nПрименить: ${YELLOW}sudo systemctl reload caddy${NC}"
+            echo -e "${CYAN}===============================================================================${NC}\n"
+            pause_menu
+            ;;
+        2)
+            echo -e "\n${CYAN}${BOLD}===============================================================================${NC}"
+            echo -e "${YELLOW}${BOLD}  НАСТРОЙКА В NGINX PROXY MANAGER (GUI)${NC}"
+            echo -e "${CYAN}${BOLD}===============================================================================${NC}"
+            echo -e "  ${CYAN}── Сценарий А: Отдельный Proxy Host ──${NC}"
+            echo -e "    Domain Names:          ${BOLD}${domain}${NC}"
+            echo -e "    Forward Hostname / IP: ${BOLD}127.0.0.1${NC}   Port: ${BOLD}${port}${NC}"
+            echo -e "    SSL:                   Request a new SSL Certificate (Force SSL: ON)"
+            echo -e "\n  ${CYAN}── Сценарий Б: На существующем Proxy Host сайта ──${NC}"
+            echo -e "    В настройках вашего Proxy Host перейдите во вкладку ${BOLD}Custom Locations${NC} -> Add location:"
+            echo -e "    Location:              ${BOLD}/${token}/${NC}"
+            echo -e "    Forward Hostname / IP: ${BOLD}127.0.0.1${NC}   Port: ${BOLD}${port}${NC}"
+            echo -e "${CYAN}===============================================================================${NC}\n"
+            pause_menu
+            ;;
+        3)
+            echo -e "\n${CYAN}${BOLD}===============================================================================${NC}"
+            echo -e "${YELLOW}${BOLD}  ВСЕ ВАРИАНТЫ КОНФИГУРАЦИЙ ДЛЯ РЕВЕРС-ПРОКСИ (HTTPS)${NC}"
+            echo -e "${CYAN}${BOLD}===============================================================================${NC}"
+            echo -e "${GREEN}${BOLD}[ ВАРИАНТ 1: NGINX ]${NC}"
+            echo -e "  ${CYAN}── Сценарий А: Отдельный субдомен (${domain}) ──${NC}"
+            echo -e "${BOLD}server {${NC}"
+            echo -e "    ${BOLD}server_name ${domain};${NC}\n"
+            echo -e "    ${BOLD}location / {${NC}"
+            echo -e "        ${BOLD}proxy_pass http://127.0.0.1:${port};${NC}"
+            echo -e "        ${BOLD}proxy_set_header Host \$host;${NC}"
+            echo -e "        ${BOLD}proxy_set_header X-Real-IP \$remote_addr;${NC}"
+            echo -e "        ${BOLD}proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;${NC}"
+            echo -e "        ${BOLD}proxy_set_header X-Forwarded-Proto \$scheme;${NC}"
+            echo -e "    ${BOLD}}${NC}"
+            echo -e "${BOLD}}${NC}"
+            echo -e "\n  ${CYAN}── Сценарий Б: Существующий сайт (добавьте внутрь вашего server { ... }) ──${NC}"
+            echo -e "${BOLD}    location /${token}/ {${NC}"
+            echo -e "        ${BOLD}proxy_pass http://127.0.0.1:${port};${NC}"
+            echo -e "        ${BOLD}proxy_set_header Host \$host;${NC}"
+            echo -e "        ${BOLD}proxy_set_header X-Real-IP \$remote_addr;${NC}"
+            echo -e "        ${BOLD}proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;${NC}"
+            echo -e "        ${BOLD}proxy_set_header X-Forwarded-Proto \$scheme;${NC}"
+            echo -e "${BOLD}    }${NC}"
+            echo -e "  После сохранения: ${YELLOW}sudo nginx -t && sudo nginx -s reload${NC}\n"
+            echo -e "${GREEN}${BOLD}[ ВАРИАНТ 2: CADDY ]${NC} (/etc/caddy/Caddyfile)"
+            echo -e "  ${CYAN}── Сценарий А: Отдельный субдомен (${domain}) ──${NC}"
+            echo -e "${BOLD}${domain} {${NC}"
+            echo -e "    ${BOLD}reverse_proxy 127.0.0.1:${port}${NC}"
+            echo -e "${BOLD}}${NC}"
+            echo -e "\n  ${CYAN}── Сценарий Б: Существующий сайт (добавьте внутрь блока вашего домена) ──${NC}"
+            echo -e "${BOLD}    handle /${token}/* {${NC}"
+            echo -e "        ${BOLD}reverse_proxy 127.0.0.1:${port}${NC}"
+            echo -e "${BOLD}    }${NC}"
+            echo -e "  После сохранения: ${YELLOW}sudo systemctl reload caddy${NC}\n"
+            echo -e "${GREEN}${BOLD}[ ВАРИАНТ 3: NGINX PROXY MANAGER (GUI) ]${NC}"
+            echo -e "  ${CYAN}── Сценарий А: Отдельный Proxy Host ──${NC}"
+            echo -e "    Domain Names:          ${BOLD}${domain}${NC}"
+            echo -e "    Forward Hostname / IP: ${BOLD}127.0.0.1${NC}   Port: ${BOLD}${port}${NC}"
+            echo -e "    SSL:                   Request a new SSL Certificate (Force SSL: ON)"
+            echo -e "\n  ${CYAN}── Сценарий Б: На существующем Proxy Host сайта ──${NC}"
+            echo -e "    В настройках вашего Proxy Host перейдите во вкладку ${BOLD}Custom Locations${NC} -> Add location:"
+            echo -e "    Location:              ${BOLD}/${token}/${NC}"
+            echo -e "    Forward Hostname / IP: ${BOLD}127.0.0.1${NC}   Port: ${BOLD}${port}${NC}"
+            echo -e "${CYAN}===============================================================================${NC}\n"
+            pause_menu
+            ;;
+        *)
+            return 0
+            ;;
+    esac
 }
 
 configure_remnawave() {
