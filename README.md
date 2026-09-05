@@ -286,6 +286,7 @@ server {
 
 ---
 
+<a id="donate"></a>
 ## 💎 Поддержать проект (Donations)
 
 * **USDT / TRX (TRC20):** `TKw6b3ZszCM2983sLuFAvqxtt2M8hpNW51`

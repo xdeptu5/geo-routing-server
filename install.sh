@@ -735,7 +735,7 @@ print_summary_banner(Config.get_token())
 " || {
         echo -e "${YELLOW}[!] Не удалось получить ссылки напрямую из контейнера. Проверьте логи: docker compose logs${NC}"
     }
-    echo -e "\n${DIM}💎 Поддержать проект / Donations: https://github.com/xdeptu5/geo-routing-server#-%D0%BF%D0%BE%D0%B4%D0%B4%D0%B5%D1%80%D0%B6%D0%B0%D1%82%D1%8C-%D0%BF%D1%80%D0%BE%D0%B5%D0%BA%D1%82-donations${NC}"
+    echo -e "\n${DIM}💎 Поддержать проект / Donations: https://github.com/xdeptu5/geo-routing-server#donate${NC}"
     pause_menu
 }
 
