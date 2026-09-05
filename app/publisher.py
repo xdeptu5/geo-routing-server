@@ -122,10 +122,5 @@ class Publisher:
 
     @classmethod
     def publish_geo_with_checksum(cls, dest_dir: Path, filename: str, content: bytes) -> bool:
-        """Публикует бинарную базу и создает рядом <filename>.sha256."""
-        if not cls.publish_file(dest_dir, filename, content):
-            return False
-            
-        checksum = hashlib.sha256(content).hexdigest()
-        checksum_filename = f"{filename}.sha256"
-        return cls.publish_file(dest_dir, checksum_filename, f"{checksum}\n")
+        """Публикует бинарную базу (legacy alias для совместимости)."""
+        return cls.publish_file(dest_dir, filename, content)

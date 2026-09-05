@@ -98,7 +98,7 @@ class GeoManager:
         return data
 
     def sync_client_geo(self, client: str, target_dir: Path, default_json_data: Optional[dict] = None) -> bool:
-        """Синхронизирует geoip.dat и geosite.dat с их sha256 для указанного клиента."""
+        """Синхронизирует geoip.dat и geosite.dat для указанного клиента."""
         logger.info(f"Processing {client} GEO databases...")
         success = True
         
@@ -106,8 +106,15 @@ class GeoManager:
             try:
                 content = self.resolve_and_fetch(client, geo_type, default_json_data)
                 filename = f"{geo_type}.dat"
-                if not Publisher.publish_geo_with_checksum(target_dir, filename, content):
+                if not Publisher.publish_file(target_dir, filename, content):
                     success = False
+                # Очищаем устаревшие .sha256 файлы, если они остались от старых версий
+                old_sha = target_dir / f"{filename}.sha256"
+                if old_sha.is_file():
+                    try:
+                        old_sha.unlink()
+                    except OSError:
+                        pass
             except Exception as e:
                 logger.error(f"  Error processing {geo_type} for {client}: {e}")
                 success = False
