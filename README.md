@@ -126,8 +126,15 @@ sudo bash install.sh
    docker compose up -d
    ```
 
-Контейнер и HTTP-проверку показывает `docker compose ps`. Успешный первый запуск
-заканчивается строкой `Synchronization completed successfully.` в `docker compose logs`.
+4. Проверьте запуск:
+   ```bash
+   docker compose ps
+   curl -fsS http://127.0.0.1:8080/health
+   docker compose logs --tail=100
+   ```
+   `healthy` подтверждает работу контейнера. Строка
+   `Synchronization completed successfully.` в логах подтверждает, что базы и правила
+   уже загружены.
 
 Для прямого доступа к Remnawave API узнайте имя сети панели командой
 `docker network ls`, задайте `DOCKER_NETWORK` в `.env` и раскомментируйте оба
@@ -139,6 +146,17 @@ sudo bash install.sh
 ## 🗺️ Сценарии развертывания
 
 Вся настройка задаётся через переменные в файле `.env`:
+
+| Если нужно | Выберите сценарий | Основной модуль |
+|---|---:|---|
+| Раздавать базы и правила для Happ и Incy | 1 | `HAPP,INCY` |
+| Раздавать файлы и обновлять сквады Remnawave | 2 | `HAPP,INCY` + Remnawave API |
+| Отдельный публичный узел только для GeoIP/GeoSite | 3 | `HAPP_GEO,INCY_GEO` |
+| Генерировать Happ-правила рядом с Remnawave, базы брать с другого узла | 4 | `HAPP_DEEPLINK` |
+| Раздавать только Incy-правила, базы брать с другого узла | 5 | `INCY` |
+
+Каждый сценарий ниже содержит минимальный `.env`. Для первого запуска достаточно
+выбрать один из них и пройти раздел «Быстрый запуск» выше.
 
 ### 1. Универсальный сервер раздачи (Pull-модель)
 Сервер раздает базы (geoip/geosite) для Happ и Incy, а также JSON-подписку для Incy по HTTPS. Панели (Remnawave, Marzban, 3x-ui) и клиенты забирают файлы по ссылкам:
