@@ -1,6 +1,9 @@
 import logging
 import os
 import sys
+import json
+import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 # Fix Windows console encoding if needed
@@ -65,6 +68,31 @@ def ensure_internal_symlinks(storage_dir: Path, token: str):
                     link.symlink_to(target, target_is_directory=True)
                 except Exception:
                     pass
+
+def write_sync_status(storage_dir: Path, token: str, state: str, failures: int = 0, remnawave_ok: bool = True):
+    """Сохраняет последний результат синхронизации атомарно, без публикации его по HTTP."""
+    status_file = storage_dir / token / ".sync-status.json"
+    payload = {
+        "state": state,
+        "completed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "failed_processors": failures,
+        "remnawave_ok": remnawave_ok,
+    }
+    temp_fd, temp_path = tempfile.mkstemp(prefix=".sync-status.", dir=str(status_file.parent))
+    try:
+        with os.fdopen(temp_fd, "w", encoding="utf-8") as status_handle:
+            json.dump(payload, status_handle, ensure_ascii=False, separators=(",", ":"))
+            status_handle.flush()
+            os.fsync(status_handle.fileno())
+        os.replace(temp_path, status_file)
+        os.chmod(status_file, 0o600)
+    except OSError as error:
+        logger = logging.getLogger("geo-routing-server")
+        logger.warning(f"Could not write sync status: {error}")
+        try:
+            os.unlink(temp_path)
+        except OSError:
+            pass
 
 def print_summary_banner(token: str):
     """Выводит чистый, аккуратный блок со ссылками строго под выбранные модули."""
@@ -167,6 +195,7 @@ def main():
     Publisher.ensure_dir(Config.STORAGE_DIR)
     Publisher.ensure_dir(Config.STORAGE_DIR / token)
     Publisher.ensure_dir(Config.CACHE_DIR)
+    write_sync_status(Config.STORAGE_DIR, token, "running")
     
     # 4. Инициализируем загрузчик
     downloader = Downloader(Config.CACHE_DIR)
@@ -212,10 +241,12 @@ def main():
         TelegramNotifier.alert_failure(err_text)
 
     if remna_ok and failures == 0:
+        write_sync_status(Config.STORAGE_DIR, token, "success")
         logger.info("Synchronization completed successfully.")
         print_summary_banner(token)
         TelegramNotifier.notify_changes(token, Publisher.published_registry, Publisher.any_file_changed)
     else:
+        write_sync_status(Config.STORAGE_DIR, token, "failed", failures, remna_ok)
         logger.warning("Synchronization completed with warnings/errors.")
         print_summary_banner(token)
         sys.exit(1)

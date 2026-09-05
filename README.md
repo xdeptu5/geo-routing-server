@@ -126,8 +126,8 @@ sudo bash install.sh
    docker compose up -d
    ```
 
-Контейнер и HTTP-проверку показывает `docker compose ps`. Результат последней
-синхронизации и ссылки смотрите через `docker compose logs`.
+Контейнер и HTTP-проверку показывает `docker compose ps`. Успешный первый запуск
+заканчивается строкой `Synchronization completed successfully.` в `docker compose logs`.
 
 Для прямого доступа к Remnawave API узнайте имя сети панели командой
 `docker network ls`, задайте `DOCKER_NETWORK` в `.env` и раскомментируйте оба

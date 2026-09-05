@@ -1135,6 +1135,32 @@ update_script_only() {
     exec bash "$target_dir/install.sh"
 }
 
+wait_for_container_health() {
+    local attempt health_status
+    for attempt in {1..30}; do
+        health_status=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' geo-routing-server 2>/dev/null || true)
+        case "$health_status" in
+            healthy) return 0 ;;
+            unhealthy|exited|dead) return 1 ;;
+        esac
+        sleep 2
+    done
+    return 1
+}
+
+wait_for_initial_sync() {
+    local attempt sync_status
+    for attempt in {1..45}; do
+        sync_status=$(docker exec geo-routing-server sh -c 'cat "/app/www/${ROUTING_TOKEN:-local}/.sync-status.json"' 2>/dev/null || true)
+        case "$sync_status" in
+            *'"state":"success"'*) return 0 ;;
+            *'"state":"failed"'*) return 1 ;;
+        esac
+        sleep 2
+    done
+    return 2
+}
+
 update_project() {
     local target_dir
     target_dir="$(get_install_dir)"
@@ -1210,30 +1236,35 @@ update_project() {
             echo -e "\n${CYAN}${BOLD}[3/3] Пересоздание контейнера с новым образом...${NC}"
         fi
 
-        docker compose up -d
+        if ! docker compose up -d; then
+            echo -e "      ${RED}[!] Не удалось пересоздать контейнер. Проверьте: docker compose logs${NC}"
+            pause_menu
+            return 1
+        fi
 
         if [ "${UI_LANG:-ru}" = "en" ]; then
             echo -e "      ${BLUE}[*] Verifying container health...${NC}"
         else
             echo -e "      ${BLUE}[*] Проверка состояния контейнера...${NC}"
         fi
-        sleep 2
+        if ! wait_for_container_health; then
+            echo -e "      ${RED}[!] Контейнер не прошёл healthcheck. Проверьте: docker compose logs${NC}"
+            pause_menu
+            return 1
+        fi
 
-        local cont_status=""
-        cont_status=$(docker inspect --format '{{.State.Status}}' geo-routing-server 2>/dev/null || echo "unknown")
-
-        if [ "$cont_status" = "running" ]; then
-            if [ "${UI_LANG:-ru}" = "en" ]; then
-                echo -e "      ${GREEN}[+] Container successfully updated and running smoothly!${NC}"
-            else
-                echo -e "      ${GREEN}[+] Контейнер успешно обновлён и работает в штатном режиме!${NC}"
-            fi
+        echo -e "      ${BLUE}[*] Ожидание результата стартовой синхронизации...${NC}"
+        if wait_for_initial_sync; then
+            echo -e "      ${GREEN}[+] Контейнер запущен, healthcheck и синхронизация успешны.${NC}"
         else
-            if [ "${UI_LANG:-ru}" = "en" ]; then
-                echo -e "      ${RED}[!] Warning: container status is '${cont_status}'${NC}"
+            local sync_result=$?
+            if [ "$sync_result" -eq 1 ]; then
+                echo -e "      ${RED}[!] Синхронизация завершилась с ошибкой. Проверьте: docker compose logs${NC}"
             else
-                echo -e "      ${RED}[!] Внимание: статус контейнера: '${cont_status}'${NC}"
+                echo -e "      ${YELLOW}[!] Результат синхронизации не получен за 90 секунд. Проверьте: docker compose logs${NC}"
             fi
+            pause_menu
+            return 1
         fi
     else
         if [ "${UI_LANG:-ru}" = "en" ]; then
