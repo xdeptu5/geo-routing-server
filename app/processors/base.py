@@ -53,6 +53,18 @@ class BaseProcessor(ABC):
     def _discover_config_files(self) -> List[str]:
         """Получает список JSON файлов из GitHub API репозитория для данного клиента."""
         from app.config import Config
+        configured_files = Config.get_routing_config_files(self.CLIENT_NAME)
+        if configured_files:
+            invalid_files = [name for name in configured_files if not self.is_safe_config_filename(name)]
+            if invalid_files:
+                logger.warning(
+                    f"Ignoring unsafe configured file names for {self.CLIENT_NAME}: {', '.join(invalid_files)}"
+                )
+            discovered = sorted({name for name in configured_files if self.is_safe_config_filename(name)}, key=str.upper)
+            if discovered:
+                self.is_fallback_discovery = False
+                return discovered
+
         api_url = Config.get_github_contents_url(self.CLIENT_NAME)
         if not api_url:
             logger.warning(

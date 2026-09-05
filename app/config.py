@@ -54,10 +54,18 @@ class Config:
 
     GEOIP_SOURCE_URL = _validate_http_url.__func__(None, os.getenv("GEOIP_SOURCE_URL", ""))
     GEOSITE_SOURCE_URL = _validate_http_url.__func__(None, os.getenv("GEOSITE_SOURCE_URL", ""))
+    ALLOW_PRIVATE_GEO_SOURCES = os.getenv("ALLOW_PRIVATE_GEO_SOURCES", "false").lower() in ("true", "1", "yes")
     ROUTING_SOURCE_REPO = (
         _validate_http_url.__func__(None, os.getenv("ROUTING_SOURCE_REPO", ""))
         or "https://raw.githubusercontent.com/hydraponique/roscomvpn-routing/main"
     ).rstrip("/")
+
+    @classmethod
+    def get_routing_config_files(cls, client: str) -> List[str]:
+        """Возвращает заданный администратором список конфигов для источника без API."""
+        raw = os.getenv(f"ROUTING_CONFIG_FILES_{client.upper()}", "")
+        files = [name.strip() for name in raw.split(",") if name.strip()]
+        return files
     
     # Telegram Notifications (опционально)
     TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
