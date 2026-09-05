@@ -16,7 +16,7 @@ DIM='\033[2m'
 NC='\033[0m'
 
 # Повышайте версию при каждом изменении install.sh. GitHub Actions это проверяет.
-SCRIPT_VERSION="1.0.7"
+SCRIPT_VERSION="1.0.8"
 CHECKED_REMOTE_VER=""
 UPDATE_AVAILABLE=false
 CHECKED_REMOTE_IMG_DIGEST=""
@@ -1866,8 +1866,8 @@ install_wizard() {
 
     local role_idx
     role_idx=$(tui_select "Выберите режим работы сервера:" "$default_role_idx" \
-        "Всё в одном (раздача баз + Incy + автообновление Remnawave)" \
-        "Сервер раздачи (базы geoip/geosite + подписка Incy)" \
+        "Всё в одном (раздача баз и правил + автообновление Remnawave)" \
+        "Сервер раздачи (раздача баз и правил по HTTPS, без Remnawave)" \
         "Только базы (раздача geoip.dat и geosite.dat без правил)" \
         "Только Remnawave (автообновление сквадов, базы на внешнем сервере)" \
         "Только Incy (раздача подписки JSON, базы на внешнем сервере)")
