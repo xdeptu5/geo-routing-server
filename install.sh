@@ -1113,22 +1113,42 @@ EOF
     pause_menu
 }
 
+install_latest_management_script() {
+    local target_dir="$1"
+    local candidate="$target_dir/install.sh.new"
+    local new_version=""
+
+    mkdir -p "$target_dir" || return 1
+    if ! curl -fsSL --connect-timeout 5 --max-time 20 \
+        "https://raw.githubusercontent.com/xdeptu5/geo-routing-server/main/install.sh" \
+        -o "$candidate" 2>/dev/null; then
+        rm -f "$candidate"
+        return 1
+    fi
+
+    if ! bash -n "$candidate" 2>/dev/null; then
+        rm -f "$candidate"
+        return 1
+    fi
+
+    new_version=$(grep -E '^SCRIPT_VERSION=' "$candidate" | head -n 1 | cut -d'"' -f2 || true)
+    mv "$candidate" "$target_dir/install.sh"
+    chmod +x "$target_dir/install.sh"
+    create_cli_shortcut "$target_dir"
+    rm -f /tmp/.geoserver_ver_cache 2>/dev/null || true
+    printf '%s' "$new_version"
+}
+
 update_script_only() {
     local target_dir
     target_dir="$(get_install_dir)"
     print_header
     echo -e "${BOLD}[>] Обновление скрипта управления из GitHub...${NC}\n"
     local cur_v="${SCRIPT_VERSION}"
-    if curl -fsSL "https://raw.githubusercontent.com/xdeptu5/geo-routing-server/main/install.sh" -o "$target_dir/install.sh.new" 2>/dev/null && bash -n "$target_dir/install.sh.new" 2>/dev/null; then
-        local new_v
-        new_v=$(grep -E '^SCRIPT_VERSION=' "$target_dir/install.sh.new" | head -n 1 | cut -d'"' -f2 || true)
-        mv "$target_dir/install.sh.new" "$target_dir/install.sh"
-        chmod +x "$target_dir/install.sh"
-        create_cli_shortcut "$target_dir"
-        rm -f /tmp/.geoserver_ver_cache 2>/dev/null || true
+    local new_v
+    if new_v=$(install_latest_management_script "$target_dir"); then
         echo -e "${GREEN}[+] Скрипт обновлён:${NC} v${cur_v} → ${BOLD}${new_v:-$cur_v}${NC}\n"
     else
-        rm -f "$target_dir/install.sh.new"
         echo -e "${RED}[!] Не удалось скачать или проверить скрипт обновления.${NC}\n"
     fi
     pause_menu "Нажмите Enter для перезапуска меню..."
@@ -1174,16 +1194,10 @@ update_project() {
     # [1/3] Проверка и обновление скрипта управления
     echo -e "${CYAN}${BOLD}[1/3] Проверка и обновление скрипта управления...${NC}"
     local cur_v="${SCRIPT_VERSION}"
-    if curl -fsSL -m 3 "https://raw.githubusercontent.com/xdeptu5/geo-routing-server/main/install.sh" -o "$target_dir/install.sh.new" 2>/dev/null && bash -n "$target_dir/install.sh.new" 2>/dev/null; then
-        local new_v
-        new_v=$(grep -E '^SCRIPT_VERSION=' "$target_dir/install.sh.new" | head -n 1 | cut -d'"' -f2 || true)
-        mv "$target_dir/install.sh.new" "$target_dir/install.sh"
-        chmod +x "$target_dir/install.sh"
-        create_cli_shortcut "$target_dir"
-        rm -f /tmp/.geoserver_ver_cache 2>/dev/null || true
+    local new_v
+    if new_v=$(install_latest_management_script "$target_dir"); then
         echo -e "      ${GREEN}[+] Скрипт обновлён:${NC} v${cur_v} → ${BOLD}${new_v:-$cur_v}${NC}"
     else
-        rm -f "$target_dir/install.sh.new"
         echo -e "      ${YELLOW}[!] Не удалось скачать или проверить install.sh; образ будет обновлён отдельно.${NC}"
     fi
 
