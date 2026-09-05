@@ -15,7 +15,8 @@ BOLD='\033[1m'
 DIM='\033[2m'
 NC='\033[0m'
 
-SCRIPT_VERSION="1.0.0"
+# Повышайте версию при каждом изменении install.sh. GitHub Actions это проверяет.
+SCRIPT_VERSION="1.0.1"
 CHECKED_REMOTE_VER=""
 UPDATE_AVAILABLE=false
 
@@ -1132,6 +1133,23 @@ install_latest_management_script() {
     fi
 
     new_version=$(grep -E '^SCRIPT_VERSION=' "$candidate" | head -n 1 | cut -d'"' -f2 || true)
+    if [[ ! "$new_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        rm -f "$candidate"
+        return 1
+    fi
+
+    if [ "$new_version" = "$SCRIPT_VERSION" ]; then
+        rm -f "$candidate"
+        return 2
+    fi
+
+    local highest_version
+    highest_version=$(printf '%s\n%s\n' "$SCRIPT_VERSION" "$new_version" | sort -V | tail -n 1)
+    if [ "$highest_version" != "$new_version" ]; then
+        rm -f "$candidate"
+        return 3
+    fi
+
     mv "$candidate" "$target_dir/install.sh"
     chmod +x "$target_dir/install.sh"
     create_cli_shortcut "$target_dir"
@@ -1149,7 +1167,12 @@ update_script_only() {
     if new_v=$(install_latest_management_script "$target_dir"); then
         echo -e "${GREEN}[+] Скрипт обновлён:${NC} v${cur_v} → ${BOLD}${new_v:-$cur_v}${NC}\n"
     else
-        echo -e "${RED}[!] Не удалось скачать или проверить скрипт обновления.${NC}\n"
+        local update_result=$?
+        case "$update_result" in
+            2) echo -e "${GREEN}[+] Скрипт уже актуален: v${cur_v}${NC}\n" ;;
+            3) echo -e "${YELLOW}[!] На GitHub найдена более старая версия v${new_v:-?}; замена отменена.${NC}\n" ;;
+            *) echo -e "${RED}[!] Не удалось скачать или проверить скрипт обновления.${NC}\n" ;;
+        esac
     fi
     pause_menu "Нажмите Enter для перезапуска меню..."
     exec bash "$target_dir/install.sh"
@@ -1198,7 +1221,12 @@ update_project() {
     if new_v=$(install_latest_management_script "$target_dir"); then
         echo -e "      ${GREEN}[+] Скрипт обновлён:${NC} v${cur_v} → ${BOLD}${new_v:-$cur_v}${NC}"
     else
-        echo -e "      ${YELLOW}[!] Не удалось скачать или проверить install.sh; образ будет обновлён отдельно.${NC}"
+        local update_result=$?
+        case "$update_result" in
+            2) echo -e "      ${GREEN}[+] Скрипт уже актуален: v${cur_v}${NC}" ;;
+            3) echo -e "      ${YELLOW}[!] На GitHub найдена более старая версия; замена отменена.${NC}" ;;
+            *) echo -e "      ${YELLOW}[!] Не удалось скачать или проверить install.sh; образ будет обновлён отдельно.${NC}" ;;
+        esac
     fi
 
     # [2/3] Загрузка свежего Docker-образа

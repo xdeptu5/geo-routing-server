@@ -20,6 +20,29 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Require a version bump for installer changes
+        if: github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000'
+        env:
+          PREVIOUS_SHA: ${{ github.event.before }}
+        run: |
+          if git diff --quiet "$PREVIOUS_SHA" "$GITHUB_SHA" -- install.sh; then
+            exit 0
+          fi
+
+          previous_version=$(git show "$PREVIOUS_SHA:install.sh" | sed -n 's/^SCRIPT_VERSION="\([0-9][0-9.]*\)"/\1/p' | head -n 1)
+          current_version=$(sed -n 's/^SCRIPT_VERSION="\([0-9][0-9.]*\)"/\1/p' install.sh | head -n 1)
+          if [ -z "$previous_version" ] || [ -z "$current_version" ] || [ "$previous_version" = "$current_version" ]; then
+            echo "install.sh changed without a new SCRIPT_VERSION"
+            exit 1
+          fi
+
+          if [ "$(printf '%s\n%s\n' "$previous_version" "$current_version" | sort -V | tail -n 1)" != "$current_version" ]; then
+            echo "SCRIPT_VERSION must increase: $previous_version -> $current_version"
+            exit 1
+          fi
 
       - name: Set up QEMU (for multi-arch builds)
         uses: docker/setup-qemu-action@v3
