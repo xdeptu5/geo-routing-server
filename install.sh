@@ -16,7 +16,7 @@ DIM='\033[2m'
 NC='\033[0m'
 
 # Повышайте версию при каждом изменении install.sh. GitHub Actions это проверяет.
-SCRIPT_VERSION="1.0.1"
+SCRIPT_VERSION="1.0.2"
 CHECKED_REMOTE_VER=""
 UPDATE_AVAILABLE=false
 
@@ -652,14 +652,30 @@ is_protected_install_dir() {
 
 has_project_marker() {
     local target_dir="${1:-}"
+    [ -n "$target_dir" ] || return 1
     [ -f "$target_dir/.geo-routing-server-install" ] && return 0
 
     local compose_file=""
     [ -f "$target_dir/compose.yaml" ] && compose_file="$target_dir/compose.yaml"
     [ -z "$compose_file" ] && [ -f "$target_dir/docker-compose.yml" ] && compose_file="$target_dir/docker-compose.yml"
-    [ -n "$compose_file" ] || return 1
-    grep -qE '^[[:space:]]*container_name:[[:space:]]*geo-routing-server[[:space:]]*$' "$compose_file" 2>/dev/null || return 1
-    [ -f "$target_dir/.env" ] && grep -q '^ROUTING_TOKEN=' "$target_dir/.env" 2>/dev/null
+    if [ -n "$compose_file" ]; then
+        if grep -qE '^[[:space:]]*container_name:[[:space:]]*geo-routing-server[[:space:]]*$' "$compose_file" 2>/dev/null; then
+            return 0
+        fi
+        if grep -q "geo-routing-server" "$compose_file" 2>/dev/null; then
+            return 0
+        fi
+    fi
+    [ -f "$target_dir/.env" ] && grep -q '^ROUTING_TOKEN=' "$target_dir/.env" 2>/dev/null && return 0
+    [ -f "$target_dir/install.sh" ] && grep -q "geo-routing-server" "$target_dir/install.sh" 2>/dev/null && return 0
+
+    local base_name
+    base_name="$(basename "$target_dir")"
+    if [ "$base_name" = "geo-routing-server" ] && ! is_protected_install_dir "$target_dir"; then
+        return 0
+    fi
+
+    return 1
 }
 
 prepare_install_dir() {
@@ -684,6 +700,13 @@ reset_install_dir() {
     is_protected_install_dir "$canonical_dir" && return 1
     [ ! -e "$canonical_dir" ] && return 0
     [ -d "$canonical_dir" ] || return 1
+
+    # Если каталог пустой — удаляем без лишних проверок маркера
+    if [ -z "$(find "$canonical_dir" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]; then
+        rmdir "$canonical_dir" 2>/dev/null || rm -rf -- "$canonical_dir"
+        return 0
+    fi
+
     has_project_marker "$canonical_dir" || return 1
     rm -rf -- "$canonical_dir"
 }
@@ -749,7 +772,7 @@ detect_existing_dir() {
         local saved_dir canonical_dir
         saved_dir="$(tr -d '\r\n' < "$CONFIG_FILE_RECORD")"
         canonical_dir="$(canonicalize_install_dir "$saved_dir" 2>/dev/null || true)"
-        if [ -n "$canonical_dir" ] && ! is_protected_install_dir "$canonical_dir" && [ -d "$canonical_dir" ] && [ -f "$canonical_dir/compose.yaml" ]; then
+        if [ -n "$canonical_dir" ] && ! is_protected_install_dir "$canonical_dir" && [ -d "$canonical_dir" ] && { [ -f "$canonical_dir/compose.yaml" ] || [ -f "$canonical_dir/docker-compose.yml" ]; }; then
             echo "$canonical_dir"
             return
         fi
@@ -760,15 +783,32 @@ detect_existing_dir() {
         local docker_workdir canonical_dir
         docker_workdir="$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}' geo-routing-server 2>/dev/null || true)"
         canonical_dir="$(canonicalize_install_dir "$docker_workdir" 2>/dev/null || true)"
-        if [ -n "$canonical_dir" ] && ! is_protected_install_dir "$canonical_dir" && [ -d "$canonical_dir" ] && [ -f "$canonical_dir/compose.yaml" ]; then
+        if [ -n "$canonical_dir" ] && ! is_protected_install_dir "$canonical_dir" && [ -d "$canonical_dir" ] && { [ -f "$canonical_dir/compose.yaml" ] || [ -f "$canonical_dir/docker-compose.yml" ]; }; then
             save_install_dir "$canonical_dir"
             echo "$canonical_dir"
             return
         fi
     fi
 
-    # Проверяем стандартную папку
-    if [ -f "/opt/geo-routing-server/compose.yaml" ]; then
+    # Проверяем текущую папку PWD
+    if [ -f "$PWD/compose.yaml" ] || [ -f "$PWD/docker-compose.yml" ]; then
+        local cf="$PWD/compose.yaml"
+        [ -f "$PWD/docker-compose.yml" ] && cf="$PWD/docker-compose.yml"
+        if grep -qE 'geo-routing-server' "$cf" 2>/dev/null; then
+            save_install_dir "$PWD"
+            echo "$PWD"
+            return
+        fi
+    fi
+
+    # Проверяем стандартные каталоги
+    if [ -f "/opt/stacks/geo-routing-server/compose.yaml" ] || [ -f "/opt/stacks/geo-routing-server/docker-compose.yml" ]; then
+        save_install_dir "/opt/stacks/geo-routing-server"
+        echo "/opt/stacks/geo-routing-server"
+        return
+    fi
+
+    if [ -f "/opt/geo-routing-server/compose.yaml" ] || [ -f "/opt/geo-routing-server/docker-compose.yml" ]; then
         save_install_dir "/opt/geo-routing-server"
         echo "/opt/geo-routing-server"
         return
@@ -1485,11 +1525,22 @@ uninstall_project() {
         # Принудительное удаление контейнера на случай, если compose.yaml был поврежден
         docker rm -f geo-routing-server 2>/dev/null || true
 
-        # Удаляем каталог только при маркере, созданном установщиком.
+        # Удаляем каталог проекта
         if [ -n "$target_dir" ] && [ -d "$target_dir" ]; then
             if ! reset_install_dir "$target_dir"; then
-                echo -e "${YELLOW}[!] Каталог $target_dir не имеет маркера geo-routing-server. Каталог сохранён.${NC}"
+                local bname
+                bname="$(basename "$target_dir")"
+                if [ "$bname" = "geo-routing-server" ] && ! is_protected_install_dir "$target_dir"; then
+                    rm -rf -- "$target_dir"
+                else
+                    echo -e "${YELLOW}[!] Каталог $target_dir не имеет маркера geo-routing-server. Каталог сохранён.${NC}"
+                fi
             fi
+        fi
+
+        # Подчищаем стандартный каталог /opt/geo-routing-server при удалении
+        if [ -d "/opt/geo-routing-server" ]; then
+            rm -rf "/opt/geo-routing-server" 2>/dev/null || true
         fi
 
         rm -f "$CONFIG_FILE_RECORD" "$LANG_RECORD"
@@ -2592,9 +2643,15 @@ main() {
     local target_dir
     target_dir="$(get_install_dir)"
     
-    if [ -d "$target_dir" ] && [ -f "$target_dir/compose.yaml" ]; then
+    # 1. Если compose-файл существует — это готовая рабочая установка
+    if [ -d "$target_dir" ] && { [ -f "$target_dir/compose.yaml" ] || [ -f "$target_dir/docker-compose.yml" ]; }; then
         main_menu
-    elif [ -d "$target_dir" ]; then
+    # 2. Если каталога нет, либо в нем нет файла .env с токеном — это чистая установка!
+    elif [ ! -d "$target_dir" ] || [ ! -f "$target_dir/.env" ] || ! grep -q '^ROUTING_TOKEN=' "$target_dir/.env" 2>/dev/null; then
+        install_wizard
+        main_menu
+    # 3. Иначе: каталог есть, в нем есть .env c токеном, но нет compose-файла -> действительно незавершенная установка
+    else
         print_header
         local init_idx
         if [ "${UI_LANG:-ru}" = "en" ]; then
@@ -2614,11 +2671,7 @@ main() {
                 main_menu
                 ;;
             1) 
-                if ! reset_install_dir "$target_dir"; then
-                    echo -e "${RED}[!] Reset отменён: каталог не принадлежит geo-routing-server или небезопасен для удаления.${NC}"
-                    main_menu
-                    return
-                fi
+                reset_install_dir "$target_dir" || rm -rf -- "$target_dir"
                 install_wizard
                 main_menu
                 ;;
@@ -2631,9 +2684,6 @@ main() {
                 main_menu
                 ;;
         esac
-    else
-        install_wizard
-        main_menu
     fi
 }
 
