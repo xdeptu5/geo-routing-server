@@ -16,7 +16,7 @@ DIM='\033[2m'
 NC='\033[0m'
 
 # Повышайте версию при каждом изменении install.sh. GitHub Actions это проверяет.
-SCRIPT_VERSION="1.0.8"
+SCRIPT_VERSION="1.0.9"
 CHECKED_REMOTE_VER=""
 UPDATE_AVAILABLE=false
 CHECKED_REMOTE_IMG_DIGEST=""
@@ -241,7 +241,23 @@ tui_select() {
                     fi
                 fi
                 ;;
-            [0-9]) # Накопление номера пункта (без автотаймаута, подтверждение по Enter)
+            'q'|'Q')
+                selected=$((action_count - 1))
+                break
+                ;;
+            '0')
+                if [ -z "$input_buf" ]; then
+                    selected=$((action_count - 1))
+                    break
+                else
+                    local candidate="${input_buf}0"
+                    if [ "$candidate" -ge 1 ] && [ "$candidate" -le "$action_count" ]; then
+                        input_buf="$candidate"
+                        selected=$((candidate - 1))
+                    fi
+                fi
+                ;;
+            [1-9]) # Накопление номера пункта (без автотаймаута, подтверждение по Enter)
                 local candidate="${input_buf}${key}"
                 candidate="$(echo "$candidate" | sed 's/^0*//')"
                 if [ -n "$candidate" ] && [ "$candidate" -ge 1 ] && [ "$candidate" -le "$action_count" ]; then
@@ -589,26 +605,27 @@ print_header() {
     fi
     echo -e "${NC}"
 
-    if [ "$UPDATE_AVAILABLE" = true ]; then
-        if [ "${UI_LANG:-ru}" = "en" ]; then
-            echo -e "  ${YELLOW}${BOLD}Version: v${SCRIPT_VERSION}${NC}  ${RED}● Update available: v${CHECKED_REMOTE_VER}${NC} ${DIM}(select option 11 to update)${NC}"
-        else
-            echo -e "  ${YELLOW}${BOLD}Версия: v${SCRIPT_VERSION}${NC}  ${RED}● Доступно обновление: v${CHECKED_REMOTE_VER}${NC} ${DIM}(обновите через пункт 11)${NC}"
+    local ver_str="v${SCRIPT_VERSION}"
+    if [ "${UI_LANG:-ru}" = "en" ]; then
+        local upd_badge="${GREEN}Up to date${NC}"
+        if [ "$UPDATE_AVAILABLE" = true ] && [ "$IMAGE_UPDATE_AVAILABLE" = true ]; then
+            upd_badge="${YELLOW}● Updates available (script v${CHECKED_REMOTE_VER} & Docker image)${NC}"
+        elif [ "$UPDATE_AVAILABLE" = true ]; then
+            upd_badge="${YELLOW}● New script v${CHECKED_REMOTE_VER} available${NC}"
+        elif [ "$IMAGE_UPDATE_AVAILABLE" = true ]; then
+            upd_badge="${YELLOW}● New Docker image available${NC}"
         fi
+        echo -e "  Version: ${BOLD}${ver_str}${NC} • $upd_badge"
     else
-        if [ "${UI_LANG:-ru}" = "en" ]; then
-            echo -e "  ${DIM}Version: v${SCRIPT_VERSION} • ${GREEN}Up to date${NC}"
-        else
-            echo -e "  ${DIM}Версия: v${SCRIPT_VERSION} • ${GREEN}Последняя версия${NC}"
+        local upd_badge="${GREEN}Последняя версия${NC}"
+        if [ "$UPDATE_AVAILABLE" = true ] && [ "$IMAGE_UPDATE_AVAILABLE" = true ]; then
+            upd_badge="${YELLOW}● Доступны обновления (скрипт v${CHECKED_REMOTE_VER} и образ)${NC}"
+        elif [ "$UPDATE_AVAILABLE" = true ]; then
+            upd_badge="${YELLOW}● Доступен новый скрипт v${CHECKED_REMOTE_VER}${NC}"
+        elif [ "$IMAGE_UPDATE_AVAILABLE" = true ]; then
+            upd_badge="${YELLOW}● Доступен новый Docker-образ${NC}"
         fi
-    fi
-
-    if [ "$IMAGE_UPDATE_AVAILABLE" = true ]; then
-        if [ "${UI_LANG:-ru}" = "en" ]; then
-            echo -e "  ${YELLOW}${BOLD}Docker Image:${NC}  ${YELLOW}● New image available!${NC} ${DIM}(select option 10 to update)${NC}"
-        else
-            echo -e "  ${YELLOW}${BOLD}Docker-образ:${NC}  ${YELLOW}● Доступно обновление!${NC} ${DIM}(обновите через пункт 10)${NC}"
-        fi
+        echo -e "  Версия: ${BOLD}${ver_str}${NC} • $upd_badge"
     fi
     echo ""
 }
@@ -2704,6 +2721,144 @@ EOF
 }
 
 # ==============================================================================
+# ПОДМЕНЮ НАСТРОЕК, УПРАВЛЕНИЯ И СИСТЕМЫ
+# ==============================================================================
+
+configure_integrations_menu() {
+    while true; do
+        print_header
+        local choice
+        if [ "${UI_LANG:-ru}" = "en" ]; then
+            choice=$(tui_select "Integration Settings:" 0 \
+                "Configure Remnawave API sync" \
+                "Configure Telegram notifications" \
+                "Back to main menu")
+        else
+            choice=$(tui_select "Настройки интеграций:" 0 \
+                "Настроить прямую синхронизацию с Remnawave" \
+                "Настроить / Изменить Telegram-уведомления" \
+                "Назад в главное меню")
+        fi
+        case "$choice" in
+            0) configure_remnawave ;;
+            1) configure_telegram ;;
+            *) return 0 ;;
+        esac
+    done
+}
+
+manage_container_menu() {
+    while true; do
+        print_header
+        local choice
+        if [ "${UI_LANG:-ru}" = "en" ]; then
+            choice=$(tui_select "Container Management:" 0 \
+                "Restart container" \
+                "Stop container" \
+                "Back to main menu")
+        else
+            choice=$(tui_select "Управление контейнером:" 0 \
+                "Перезапустить контейнер" \
+                "Остановить контейнер" \
+                "Назад в главное меню")
+        fi
+        case "$choice" in
+            0) restart_server; return 0 ;;
+            1) stop_server; return 0 ;;
+            *) return 0 ;;
+        esac
+    done
+}
+
+update_server_menu() {
+    while true; do
+        print_header
+        local img_status="актуален"
+        local script_status="актуален"
+        [ "$IMAGE_UPDATE_AVAILABLE" = true ] && img_status="доступно обновление!"
+        [ "$UPDATE_AVAILABLE" = true ] && script_status="доступна v${CHECKED_REMOTE_VER}!"
+
+        local choice
+        if [ "${UI_LANG:-ru}" = "en" ]; then
+            [ "$IMAGE_UPDATE_AVAILABLE" = true ] && img_status="update available!" || img_status="up to date"
+            [ "$UPDATE_AVAILABLE" = true ] && script_status="v${CHECKED_REMOTE_VER} available!" || script_status="up to date"
+            choice=$(tui_select "Server Component Updates:" 0 \
+                "Update everything (Docker image & Script) [Recommended]" \
+                "Update Docker image ($img_status)" \
+                "Update management script ($script_status)" \
+                "Back to main menu")
+        else
+            choice=$(tui_select "Обновление компонентов сервера:" 0 \
+                "Обновить всё сразу (Docker-образ и скрипт) [Рекомендуется]" \
+                "Обновить только Docker-образ ($img_status)" \
+                "Обновить только скрипт управления ($script_status)" \
+                "Назад в главное меню")
+        fi
+        case "$choice" in
+            0)
+                update_project
+                update_script_only
+                return 0
+                ;;
+            1)
+                update_project
+                return 0
+                ;;
+            2)
+                update_script_only
+                return 0
+                ;;
+            *) return 0 ;;
+        esac
+    done
+}
+
+system_advanced_menu() {
+    while true; do
+        print_header
+        local choice
+        if [ "${UI_LANG:-ru}" = "en" ]; then
+            choice=$(tui_select "Advanced System Options:" 0 \
+                "Change language / Сменить язык (RU/EN)" \
+                "Show installation directory and system info" \
+                "Completely remove geo-routing-server" \
+                "Back to main menu")
+        else
+            choice=$(tui_select "Дополнительные опции:" 0 \
+                "Сменить язык / Change language (RU/EN)" \
+                "Показать каталог установки и системную информацию" \
+                "Полностью удалить geo-routing-server" \
+                "Назад в главное меню")
+        fi
+        case "$choice" in
+            0)
+                if [ "${UI_LANG:-ru}" = "ru" ]; then
+                    UI_LANG="en"
+                else
+                    UI_LANG="ru"
+                fi
+                echo "$UI_LANG" > "$LANG_RECORD" 2>/dev/null || true
+                echo -e "${GREEN}[+] Language / Язык: $UI_LANG${NC}"
+                sleep 1
+                ;;
+            1)
+                local target_dir
+                target_dir="$(get_install_dir)"
+                echo -e "\n  ${CYAN}[i] Каталог установки: ${BOLD}$target_dir${NC}"
+                echo -e "  ${CYAN}[i] Команда вызова:    ${BOLD}/usr/local/bin/geoserver${NC}"
+                echo -e "  ${CYAN}[i] Версия скрипта:    ${BOLD}v$SCRIPT_VERSION${NC}\n"
+                pause_menu
+                ;;
+            2)
+                uninstall_project
+                return 0
+                ;;
+            *) return 0 ;;
+        esac
+    done
+}
+
+# ==============================================================================
 # ГЛАВНОЕ МЕНЮ
 # ==============================================================================
 
@@ -2717,17 +2872,17 @@ main_menu() {
         local status_msg=""
         local sync_msg=""
         if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^geo-routing-server$"; then
-            status_msg="${GREEN}[+] Запущен и активен${NC}"
+            status_msg="${GREEN}[+] Работает${NC}"
             local sync_status
             sync_status=$(docker exec geo-routing-server sh -c 'cat "/app/www/${ROUTING_TOKEN:-local}/.sync-status.json"' 2>/dev/null || true)
             case "$sync_status" in
                 *'"state":"success"'*) sync_msg="${GREEN}[+] Успешна${NC}" ;;
                 *'"state":"failed"'*) sync_msg="${RED}[-] Ошибка${NC}" ;;
                 *'"state":"running"'*) sync_msg="${YELLOW}[~] Выполняется${NC}" ;;
-                *) sync_msg="${YELLOW}[~] Нет результата${NC}" ;;
+                *) sync_msg="${YELLOW}[~] Нет данных${NC}" ;;
             esac
         else
-            status_msg="${RED}[-] Остановлен или не найден${NC}"
+            status_msg="${RED}[-] Остановлен${NC}"
             sync_msg="${DIM}—${NC}"
         fi
 
@@ -2760,7 +2915,7 @@ main_menu() {
                 modules_en="Happ (deeplinks) + Geo-databases"
             elif [ "$clients" = "INCY" ]; then
                 if [ -n "$ext_geo" ]; then
-                    modules_ru="Incy (Autorouting, внешние Geo-базы)"
+                    modules_ru="Incy (Autorouting, внешние базы)"
                     modules_en="Incy (Autorouting, external geo)"
                 else
                     modules_ru="Incy (Autorouting) + Раздача Geo-баз"
@@ -2768,7 +2923,7 @@ main_menu() {
                 fi
             elif [[ "$clients" =~ HAPP ]] && [[ "$clients" =~ INCY ]]; then
                 if [ -n "$ext_geo" ]; then
-                    modules_ru="Happ + Incy (внешние Geo-базы)"
+                    modules_ru="Happ + Incy (внешние базы)"
                     modules_en="Happ + Incy (external geo)"
                 else
                     modules_ru="Happ + Incy + Раздача Geo-баз"
@@ -2818,115 +2973,81 @@ main_menu() {
             formats_val=$(grep "^SERVE_FORMATS=" "$env_file" | cut -d'=' -f2- || echo "")
         fi
 
+        local full_mod_ru="$modules_ru"
+        local full_mod_en="$modules_en"
+        if [ -n "$rules_val" ]; then
+            full_mod_ru="${modules_ru} (${YELLOW}${rules_val}${NC} • ${CYAN}${formats_val:-CLIENT_OPTIMIZED}${NC})"
+            full_mod_en="${modules_en} (${YELLOW}${rules_val}${NC} • ${CYAN}${formats_val:-CLIENT_OPTIMIZED}${NC})"
+        fi
+
+        local upd_label_ru="Обновить сервер"
+        local upd_label_en="Update server"
+        if [ "$IMAGE_UPDATE_AVAILABLE" = true ] || [ "$UPDATE_AVAILABLE" = true ]; then
+            upd_label_ru="Обновить сервер [доступно обновление!]"
+            upd_label_en="Update server [update available!]"
+        fi
+
         if [ "${UI_LANG:-ru}" = "en" ]; then
-            echo -e "Installation directory: ${CYAN}$target_dir${NC}"
-            if [ "$IMAGE_UPDATE_AVAILABLE" = true ]; then
-                echo -e "Container status:       $status_msg ${YELLOW}(new image available)${NC}"
-            else
-                echo -e "Container status:       $status_msg"
-            fi
-            echo -e "Last synchronization:   $sync_msg"
-            echo -e "Active modules:         ${GREEN}$modules_en${NC}"
-            if [ -n "$rules_val" ]; then
-                echo -e "Rules & formats:        ${YELLOW}$rules_val ($formats_val)${NC}"
-            fi
+            echo -e "  Status: $status_msg • Sync: $sync_msg"
+            echo -e "  Modules: ${GREEN}$full_mod_en${NC}"
             if [ "$is_local" -eq 0 ] && [ -n "$domain_val" ] && [ "$domain_val" != "geo.example.com" ]; then
                 if [ -n "$token_val" ] && [ "$token_val" != "local" ]; then
-                    echo -e "Base URL:               ${CYAN}https://${domain_val}/${token_val}${NC}"
+                    echo -e "  Base URL: ${CYAN}https://${domain_val}/${token_val}${NC}"
                 else
-                    echo -e "Public domain:          ${CYAN}$domain_val${NC}"
+                    echo -e "  Public domain: ${CYAN}$domain_val${NC}"
                 fi
             fi
             if [ -n "$integrations_en" ]; then
-                echo -e "Integrations:           ${YELLOW}$integrations_en${NC}"
+                echo -e "  Integrations: ${YELLOW}$integrations_en${NC}"
             fi
             echo ""
 
-            local img_upd_en="Update Docker image (pull & recreate)"
-            if [ "$IMAGE_UPDATE_AVAILABLE" = true ]; then
-                img_upd_en="Update Docker image [new image available!]"
-            fi
-
-            local script_upd_en="Update management script from GitHub"
-            if [ "$UPDATE_AVAILABLE" = true ]; then
-                script_upd_en="Update management script [new v${CHECKED_REMOTE_VER} available!]"
-            fi
-
             local en_options=(
-                "HEADER:General & Information"
+                "HEADER:General"
                 "Sync geo-databases right now"
-                "Show public links and autorouting header"
-                "Show reverse-proxy configs (Caddy / Nginx / NPM)"
-                "HEADER:Settings & Integrations"
-                "Configure Remnawave API sync"
-                "Configure Telegram notifications"
-                "Reconfigure parameters (run wizard)"
-                "HEADER:Container Management"
+                "Show public links and deeplinks"
+                "Ready-to-use reverse-proxy configs (Caddy / Nginx / NPM)"
+                "HEADER:Settings"
+                "Integration settings (Remnawave, Telegram)"
+                "Reconfigure parameters (installer wizard)"
+                "HEADER:Service & System"
                 "View container logs"
-                "Restart container"
-                "Stop container"
-                "$img_upd_en"
-                "$script_upd_en"
-                "HEADER:System"
-                "Change language / Сменить язык (RU/EN)"
-                "Completely remove geo-routing-server"
+                "Container management (restart / stop)"
+                "$upd_label_en"
+                "Advanced (language, directory info, uninstall)"
                 "Exit"
             )
 
             local menu_idx
             menu_idx=$(tui_select "Choose an action:" 0 "${en_options[@]}")
         else
-            echo -e "Каталог установки: ${CYAN}$target_dir${NC}"
-            if [ "$IMAGE_UPDATE_AVAILABLE" = true ]; then
-                echo -e "Статус контейнера: $status_msg ${YELLOW}(доступен новый образ)${NC}"
-            else
-                echo -e "Статус контейнера: $status_msg"
-            fi
-            echo -e "Последняя синхронизация: $sync_msg"
-            echo -e "Активные модули:   ${GREEN}$modules_ru${NC}"
-            if [ -n "$rules_val" ]; then
-                echo -e "Правила и форматы: ${YELLOW}$rules_val ($formats_val)${NC}"
-            fi
+            echo -e "  Статус: $status_msg • Синхронизация: $sync_msg"
+            echo -e "  Модули: ${GREEN}$full_mod_ru${NC}"
             if [ "$is_local" -eq 0 ] && [ -n "$domain_val" ] && [ "$domain_val" != "geo.example.com" ]; then
                 if [ -n "$token_val" ] && [ "$token_val" != "local" ]; then
-                    echo -e "Базовый URL:       ${CYAN}https://${domain_val}/${token_val}${NC}"
+                    echo -e "  Базовый URL: ${CYAN}https://${domain_val}/${token_val}${NC}"
                 else
-                    echo -e "Публичный домен:   ${CYAN}$domain_val${NC}"
+                    echo -e "  Публичный домен: ${CYAN}$domain_val${NC}"
                 fi
             fi
             if [ -n "$integrations_ru" ]; then
-                echo -e "Интеграции:        ${YELLOW}$integrations_ru${NC}"
+                echo -e "  Интеграции: ${YELLOW}$integrations_ru${NC}"
             fi
             echo ""
 
-            local img_upd_ru="Обновить Docker-образ (pull & recreate)"
-            if [ "$IMAGE_UPDATE_AVAILABLE" = true ]; then
-                img_upd_ru="Обновить Docker-образ [доступно обновление!]"
-            fi
-
-            local script_upd_ru="Обновить скрипт управления из GitHub"
-            if [ "$UPDATE_AVAILABLE" = true ]; then
-                script_upd_ru="Обновить скрипт управления [доступна новая v${CHECKED_REMOTE_VER}!]"
-            fi
-
             local ru_options=(
-                "HEADER:Основное и ссылки"
+                "HEADER:Основное"
                 "Синхронизировать базы прямо сейчас"
                 "Показать публичные ссылки и диплинки"
                 "Готовые конфиги для Caddy / Nginx / NPM"
-                "HEADER:Настройки и интеграции"
-                "Настроить прямую синхронизацию с Remnawave"
-                "Настроить / Изменить Telegram-уведомления"
-                "Перенастроить параметры (мастер настройки)"
-                "HEADER:Управление контейнером"
+                "HEADER:Настройки"
+                "Настройки интеграций (Remnawave, Telegram)"
+                "Изменить параметры раздачи (мастер настройки)"
+                "HEADER:Сервис и система"
                 "Посмотреть логи контейнера"
-                "Перезапустить контейнер"
-                "Остановить контейнер"
-                "$img_upd_ru"
-                "$script_upd_ru"
-                "HEADER:Система"
-                "Сменить язык / Change language (RU/EN)"
-                "Полностью удалить geo-routing-server"
+                "Управление контейнером (перезапуск / стоп)"
+                "$upd_label_ru"
+                "Дополнительно (язык, каталог, удаление)"
                 "Выход"
             )
 
@@ -2938,26 +3059,13 @@ main_menu() {
             0) run_sync_now ;;
             1) show_links ;;
             2) show_proxy_snippets true ;;
-            3) configure_remnawave ;;
-            4) configure_telegram ;;
-            5) install_wizard ;;
-            6) view_logs ;;
-            7) restart_server ;;
-            8) stop_server ;;
-            9) update_project ;;
-            10) update_script_only ;;
-            11)
-                if [ "${UI_LANG:-ru}" = "ru" ]; then
-                    UI_LANG="en"
-                else
-                    UI_LANG="ru"
-                fi
-                echo "$UI_LANG" > "$LANG_RECORD" 2>/dev/null || true
-                echo -e "${GREEN}[+] Language / Язык: $UI_LANG${NC}"
-                sleep 1
-                ;;
-            12) uninstall_project ;;
-            13) exit 0 ;;
+            3) configure_integrations_menu ;;
+            4) install_wizard ;;
+            5) view_logs ;;
+            6) manage_container_menu ;;
+            7) update_server_menu ;;
+            8) system_advanced_menu ;;
+            9) exit 0 ;;
             *) echo -e "${RED}[!] Неверный пункт меню${NC}"; sleep 1 ;;
         esac
     done
