@@ -16,7 +16,7 @@ DIM='\033[2m'
 NC='\033[0m'
 
 # Повышайте версию при каждом изменении install.sh. GitHub Actions это проверяет.
-SCRIPT_VERSION="1.0.9"
+SCRIPT_VERSION="1.0.10"
 CHECKED_REMOTE_VER=""
 UPDATE_AVAILABLE=false
 CHECKED_REMOTE_IMG_DIGEST=""
@@ -2028,9 +2028,9 @@ install_wizard() {
 
         local rules_idx
         rules_idx=$(tui_select "Какие правила генерировать и отдавать?" "$default_rules_idx" \
-            "JSONSUB и WHITELIST (Рекомендуется: подписки + белый список)" \
-            "Только JSONSUB (Минималистичный: только маршрут подписок)" \
-            "Все правила (DEFAULT, JSONSUB, WHITELIST)" \
+            "JSONSUB и WHITELIST (маршрут подписок + белый список)" \
+            "Только JSONSUB (только маршрут подписок)" \
+            "Все правила источника (DEFAULT, JSONSUB, WHITELIST)" \
             "Ввести список правил вручную (через запятую)")
 
         case "$rules_idx" in
@@ -2055,8 +2055,8 @@ install_wizard() {
 
         local fmt_idx
         fmt_idx=$(tui_select "Форматы файлов правил:" "$default_fmt_idx" \
-            "Оптимально под клиенты (Happ: .DEEPLINK, Incy: .JSON) [Рекомендуется]" \
-            "Все форматы (.JSON и .DEEPLINK для каждого клиента)" \
+            "По типу клиента (Happ: .DEEPLINK, Incy: .JSON)" \
+            "Все форматы (.JSON и .DEEPLINK для обоих клиентов)" \
             "Только .JSON файлы" \
             "Только .DEEPLINK файлы")
 
@@ -2081,7 +2081,7 @@ install_wizard() {
 
         local geo_pick
         geo_pick=$(tui_select "Раздача баз GeoIP и GeoSite:" "$default_geo_idx" \
-            "Обе базы (geoip.dat и geosite.dat) [Рекомендуется]" \
+            "Обе базы (geoip.dat и geosite.dat)" \
             "Только geoip.dat" \
             "Только geosite.dat" \
             "Не раздавать базы (только правила)")
@@ -2474,7 +2474,7 @@ CLOUDFLARE_ZERO_TRUST_CLIENT_SECRET=${prev_cf_secret}
 
     local sched_idx
     sched_idx=$(tui_select "Как часто обновлять базы и правила?" "$def_sched_idx" \
-        "Раз в сутки в 10:00 UTC / 13:00 МСК (Рекомендуется)" \
+        "Раз в сутки в 10:00 UTC / 13:00 МСК (по умолчанию)" \
         "Каждые 6 часов (4 раза в день)" \
         "Каждые 12 часов (2 раза в день)" \
         "Указать свое cron-расписание")
@@ -2783,13 +2783,13 @@ update_server_menu() {
             [ "$IMAGE_UPDATE_AVAILABLE" = true ] && img_status="update available!" || img_status="up to date"
             [ "$UPDATE_AVAILABLE" = true ] && script_status="v${CHECKED_REMOTE_VER} available!" || script_status="up to date"
             choice=$(tui_select "Server Component Updates:" 0 \
-                "Update everything (Docker image & Script) [Recommended]" \
+                "Update everything (Docker image & script)" \
                 "Update Docker image ($img_status)" \
                 "Update management script ($script_status)" \
                 "Back to main menu")
         else
             choice=$(tui_select "Обновление компонентов сервера:" 0 \
-                "Обновить всё сразу (Docker-образ и скрипт) [Рекомендуется]" \
+                "Обновить всё сразу (Docker-образ и скрипт)" \
                 "Обновить только Docker-образ ($img_status)" \
                 "Обновить только скрипт управления ($script_status)" \
                 "Назад в главное меню")
