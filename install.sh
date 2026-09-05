@@ -16,7 +16,7 @@ DIM='\033[2m'
 NC='\033[0m'
 
 # Повышайте версию при каждом изменении install.sh. GitHub Actions это проверяет.
-SCRIPT_VERSION="1.0.10"
+SCRIPT_VERSION="1.0.11"
 CHECKED_REMOTE_VER=""
 UPDATE_AVAILABLE=false
 CHECKED_REMOTE_IMG_DIGEST=""
@@ -2044,29 +2044,6 @@ install_wizard() {
             *) ROUTING_RULES="JSONSUB,WHITELIST" ;;
         esac
         echo -e "  ${GREEN}[+] Правила: ${BOLD}$ROUTING_RULES${NC}\n"
-
-        local default_fmt_idx=0
-        case "$prev_formats" in
-            "ALL") default_fmt_idx=1 ;;
-            "JSON") default_fmt_idx=2 ;;
-            "DEEPLINK") default_fmt_idx=3 ;;
-            *) default_fmt_idx=0 ;;
-        esac
-
-        local fmt_idx
-        fmt_idx=$(tui_select "Форматы файлов правил:" "$default_fmt_idx" \
-            "По типу клиента (Happ: .DEEPLINK, Incy: .JSON)" \
-            "Все форматы (.JSON и .DEEPLINK для обоих клиентов)" \
-            "Только .JSON файлы" \
-            "Только .DEEPLINK файлы")
-
-        case "$fmt_idx" in
-            1) SERVE_FORMATS="ALL" ;;
-            2) SERVE_FORMATS="JSON" ;;
-            3) SERVE_FORMATS="DEEPLINK" ;;
-            *) SERVE_FORMATS="CLIENT_OPTIMIZED" ;;
-        esac
-        echo -e "  ${GREEN}[+] Форматы: ${BOLD}$SERVE_FORMATS${NC}\n"
     fi
 
     if [ "$server_role" != "4" ]; then
@@ -2976,8 +2953,8 @@ main_menu() {
         local full_mod_ru="$modules_ru"
         local full_mod_en="$modules_en"
         if [ -n "$rules_val" ]; then
-            full_mod_ru="${modules_ru} (${YELLOW}${rules_val}${NC} • ${CYAN}${formats_val:-CLIENT_OPTIMIZED}${NC})"
-            full_mod_en="${modules_en} (${YELLOW}${rules_val}${NC} • ${CYAN}${formats_val:-CLIENT_OPTIMIZED}${NC})"
+            full_mod_ru="${modules_ru} (${YELLOW}правила: ${rules_val}${NC})"
+            full_mod_en="${modules_en} (${YELLOW}rules: ${rules_val}${NC})"
         fi
 
         local upd_label_ru="Обновить сервер"
