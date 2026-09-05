@@ -1107,77 +1107,59 @@ update_project() {
     local short_id=""
     [ -n "$new_img_id" ] && short_id=$(echo "$new_img_id" | cut -c 1-19)
 
-    if [ -n "$old_img_id" ] && [ "$old_img_id" = "$new_img_id" ]; then
-        if [ "${UI_LANG:-ru}" = "en" ]; then
-            echo -e "      ${GREEN}[+] Image is already up to date${NC} (no new layers, ID: ${DIM}${short_id}...${NC})"
-        else
-            echo -e "      ${GREEN}[+] Образ актуален${NC} (новых слоёв не обнаружено, ID: ${DIM}${short_id}...${NC})"
-        fi
-    else
+    local image_updated=false
+    if [ -n "$old_img_id" ] && [ -n "$new_img_id" ] && [ "$old_img_id" != "$new_img_id" ]; then
+        image_updated=true
+    fi
+
+    if [ "$image_updated" = true ]; then
         if [ "${UI_LANG:-ru}" = "en" ]; then
             echo -e "      ${GREEN}[+] New image downloaded!${NC} (ID: ${BOLD}${short_id}...${NC})"
+            echo -e "\n${CYAN}${BOLD}[3/3] Recreating container with new image...${NC}"
         else
             echo -e "      ${GREEN}[+] Загружен обновлённый образ!${NC} (ID: ${BOLD}${short_id}...${NC})"
+            echo -e "\n${CYAN}${BOLD}[3/3] Пересоздание контейнера с новым образом...${NC}"
         fi
-    fi
 
-    # [3/3] Перезапуск контейнера
-    if [ "${UI_LANG:-ru}" = "en" ]; then
-        echo -e "\n${CYAN}${BOLD}[3/3] Recreating container with new image...${NC}"
+        docker compose up -d
+
+        if [ "${UI_LANG:-ru}" = "en" ]; then
+            echo -e "      ${BLUE}[*] Verifying container health...${NC}"
+        else
+            echo -e "      ${BLUE}[*] Проверка состояния контейнера...${NC}"
+        fi
+        sleep 2
+
+        local cont_status=""
+        cont_status=$(docker inspect --format '{{.State.Status}}' geo-routing-server 2>/dev/null || echo "unknown")
+
+        if [ "$cont_status" = "running" ]; then
+            if [ "${UI_LANG:-ru}" = "en" ]; then
+                echo -e "      ${GREEN}[+] Container successfully updated and running smoothly!${NC}"
+            else
+                echo -e "      ${GREEN}[+] Контейнер успешно обновлён и работает в штатном режиме!${NC}"
+            fi
+        else
+            if [ "${UI_LANG:-ru}" = "en" ]; then
+                echo -e "      ${RED}[!] Warning: container status is '${cont_status}'${NC}"
+            else
+                echo -e "      ${RED}[!] Внимание: статус контейнера: '${cont_status}'${NC}"
+            fi
+        fi
     else
-        echo -e "\n${CYAN}${BOLD}[3/3] Перезапуск контейнера с новым образом...${NC}"
-    fi
-
-    docker compose up -d
-
-    if [ "${UI_LANG:-ru}" = "en" ]; then
-        echo -e "      ${BLUE}[*] Verifying container health...${NC}"
-    else
-        echo -e "      ${BLUE}[*] Проверка состояния контейнера...${NC}"
-    fi
-    sleep 2
-
-    local cont_status=""
-    cont_status=$(docker inspect --format '{{.State.Status}}' geo-routing-server 2>/dev/null || echo "unknown")
-
-    if [ "$cont_status" = "running" ]; then
         if [ "${UI_LANG:-ru}" = "en" ]; then
-            echo -e "      ${GREEN}[+] Container is running smoothly!${NC}"
+            echo -e "      ${GREEN}[+] Image is already up to date${NC} (no new layers, ID: ${DIM}${short_id}...${NC})"
+            echo -e "\n${DIM}[i] Container is already running the latest image. Recreate not needed.${NC}"
         else
-            echo -e "      ${GREEN}[+] Контейнер успешно запущен и работает в штатном режиме!${NC}"
-        fi
-    else
-        if [ "${UI_LANG:-ru}" = "en" ]; then
-            echo -e "      ${RED}[!] Warning: container status is '${cont_status}'${NC}"
-        else
-            echo -e "      ${RED}[!] Внимание: статус контейнера: '${cont_status}'${NC}"
-        fi
-    fi
-
-    # Интерактивное предложение запустить синхронизацию
-    echo -e "\n${BOLD}─────────────────────────────────────────────────────────────────────────────${NC}"
-    local prompt_sync="Запустить тестовую синхронизацию правил сейчас? [Y/n]: "
-    [ "${UI_LANG:-ru}" = "en" ] && prompt_sync="Run test routing synchronization now? [Y/n]: "
-    read -r -p "$prompt_sync" run_test_sync
-    run_test_sync="${run_test_sync:-y}"
-    if [[ "$run_test_sync" =~ ^[YyДд]$ ]]; then
-        if [ "${UI_LANG:-ru}" = "en" ]; then
-            echo -e "\n${BLUE}[*] Running routing synchronization test...${NC}"
-        else
-            echo -e "\n${BLUE}[*] Запуск синхронизации гео-баз и правил...${NC}"
-        fi
-        docker exec geo-routing-server run-routing-sync || echo -e "${YELLOW}[!] Синхронизация завершилась с предупреждением.${NC}"
-        if [ "${UI_LANG:-ru}" = "en" ]; then
-            echo -e "${GREEN}[+] Verification completed.${NC}"
-        else
-            echo -e "${GREEN}[+] Проверка завершена.${NC}"
+            echo -e "      ${GREEN}[+] Образ актуален${NC} (новых слоёв не обнаружено, ID: ${DIM}${short_id}...${NC})"
+            echo -e "\n${DIM}[i] Контейнер уже работает на актуальной версии образа. Перезапуск не требуется.${NC}"
         fi
     fi
 
     if [ "${UI_LANG:-ru}" = "en" ]; then
-        echo -e "\n${GREEN}${BOLD}✓ UPDATE COMPLETED SUCCESSFULLY!${NC}\n"
+        echo -e "\n${GREEN}${BOLD}✓ UPDATE CHECK FINISHED${NC}\n"
     else
-        echo -e "\n${GREEN}${BOLD}✓ ОБНОВЛЕНИЕ УСПЕШНО ЗАВЕРШЕНО!${NC}\n"
+        echo -e "\n${GREEN}${BOLD}✓ ПРОВЕРКА И ОБНОВЛЕНИЕ ЗАВЕРШЕНЫ${NC}\n"
     fi
 
     pause_menu "Нажмите Enter для перезапуска меню..."
