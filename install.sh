@@ -985,21 +985,49 @@ EOF
 update_script_only() {
     local target_dir
     target_dir="$(get_install_dir)"
-    echo -e "${BLUE}[*] Скачивание последней версии скрипта управления из GitHub...${NC}"
-    
+    print_header
+    if [ "${UI_LANG:-ru}" = "en" ]; then
+        echo -e "${BOLD}[>] Updating management script from GitHub...${NC}\n"
+    else
+        echo -e "${BOLD}[>] Обновление скрипта управления из GitHub...${NC}\n"
+    fi
+
+    local cur_v="${SCRIPT_VERSION}"
     if curl -fsSL "https://raw.githubusercontent.com/xdeptu5/geo-routing-server/main/install.sh" -o "$target_dir/install.sh.new" 2>/dev/null; then
         if bash -n "$target_dir/install.sh.new" 2>/dev/null; then
+            local new_v
+            new_v=$(grep -E '^SCRIPT_VERSION=' "$target_dir/install.sh.new" | head -n 1 | cut -d'"' -f2 || true)
             mv "$target_dir/install.sh.new" "$target_dir/install.sh"
             chmod +x "$target_dir/install.sh"
             create_cli_shortcut "$target_dir"
             rm -f /tmp/.geoserver_ver_cache 2>/dev/null || true
-            echo -e "${GREEN}[+] Скрипт управления (меню и CLI) успешно обновлён!${NC}\n"
+            if [ -n "$new_v" ] && [ "$new_v" != "$cur_v" ]; then
+                if [ "${UI_LANG:-ru}" = "en" ]; then
+                    echo -e "${GREEN}[+] Script successfully updated:${NC} v${cur_v} → ${BOLD}v${new_v}${NC}\n"
+                else
+                    echo -e "${GREEN}[+] Скрипт успешно обновлён:${NC} v${cur_v} → ${BOLD}v${new_v}${NC}\n"
+                fi
+            else
+                if [ "${UI_LANG:-ru}" = "en" ]; then
+                    echo -e "${GREEN}[+] Script is already at the latest version:${NC} v${cur_v}\n"
+                else
+                    echo -e "${GREEN}[+] У вас уже установлена актуальная версия скрипта:${NC} v${cur_v}\n"
+                fi
+            fi
         else
             rm -f "$target_dir/install.sh.new"
-            echo -e "${RED}[!] Скачанный скрипт содержит ошибки синтаксиса. Обновление отменено.${NC}\n"
+            if [ "${UI_LANG:-ru}" = "en" ]; then
+                echo -e "${RED}[!] Downloaded script contains syntax errors. Update canceled.${NC}\n"
+            else
+                echo -e "${RED}[!] Скачанный скрипт содержит ошибки синтаксиса. Обновление отменено.${NC}\n"
+            fi
         fi
     else
-        echo -e "${RED}[!] Не удалось загрузить скрипт. Проверьте интернет-соединение.${NC}\n"
+        if [ "${UI_LANG:-ru}" = "en" ]; then
+            echo -e "${RED}[!] Failed to download script. Check internet connection.${NC}\n"
+        else
+            echo -e "${RED}[!] Не удалось загрузить скрипт. Проверьте интернет-соединение.${NC}\n"
+        fi
     fi
     pause_menu "Нажмите Enter для перезапуска меню..."
     exec bash "$target_dir/install.sh"
@@ -1008,39 +1036,150 @@ update_script_only() {
 update_project() {
     local target_dir
     target_dir="$(get_install_dir)"
-    echo -e "${BLUE}[*] Загрузка и обновление Docker-образа...${NC}"
-    
-    # Также обновляем сам скрипт с проверкой целостности
-    if curl -fsSL "https://raw.githubusercontent.com/xdeptu5/geo-routing-server/main/install.sh" -o "$target_dir/install.sh.new" 2>/dev/null; then
+    print_header
+    if [ "${UI_LANG:-ru}" = "en" ]; then
+        echo -e "${BOLD}[>] Updating geo-routing-server system...${NC}\n"
+    else
+        echo -e "${BOLD}[>] Комплексное обновление geo-routing-server...${NC}\n"
+    fi
+
+    # [1/3] Проверка и обновление скрипта управления
+    if [ "${UI_LANG:-ru}" = "en" ]; then
+        echo -e "${CYAN}${BOLD}[1/3] Checking and updating management script...${NC}"
+    else
+        echo -e "${CYAN}${BOLD}[1/3] Проверка и обновление скрипта управления...${NC}"
+    fi
+
+    local cur_v="${SCRIPT_VERSION}"
+    if curl -fsSL -m 3 "https://raw.githubusercontent.com/xdeptu5/geo-routing-server/main/install.sh" -o "$target_dir/install.sh.new" 2>/dev/null; then
         if bash -n "$target_dir/install.sh.new" 2>/dev/null; then
+            local new_v
+            new_v=$(grep -E '^SCRIPT_VERSION=' "$target_dir/install.sh.new" | head -n 1 | cut -d'"' -f2 || true)
             mv "$target_dir/install.sh.new" "$target_dir/install.sh"
             chmod +x "$target_dir/install.sh"
             create_cli_shortcut "$target_dir"
+            rm -f /tmp/.geoserver_ver_cache 2>/dev/null || true
+            if [ -n "$new_v" ] && [ "$new_v" != "$cur_v" ]; then
+                echo -e "      ${GREEN}[+] Скрипт обновлён:${NC} v${cur_v} → ${BOLD}v${new_v}${NC}"
+            else
+                echo -e "      ${GREEN}[+] Скрипт актуален:${NC} v${cur_v}"
+            fi
         else
             rm -f "$target_dir/install.sh.new"
+            echo -e "      ${YELLOW}[!] Синтаксическая ошибка в удаленном скрипте, оставлена текущая версия.${NC}"
         fi
+    else
+        echo -e "      ${YELLOW}[!] Не удалось загрузить скрипт из GitHub, переход к образу.${NC}"
     fi
 
-    # Удаляем устаревший симлинк, чтобы избежать конфликтов и предупреждений compose
-    rm -f "$target_dir/docker-compose.yml" 2>/dev/null || true
+    # [2/3] Загрузка свежего Docker-образа
+    if [ "${UI_LANG:-ru}" = "en" ]; then
+        echo -e "\n${CYAN}${BOLD}[2/3] Pulling latest Docker image...${NC}"
+    else
+        echo -e "\n${CYAN}${BOLD}[2/3] Скачивание свежего Docker-образа...${NC}"
+    fi
 
+    rm -f "$target_dir/docker-compose.yml" 2>/dev/null || true
     cd "$target_dir"
+
+    local old_img_id=""
+    old_img_id=$(docker inspect --format '{{.Image}}' geo-routing-server 2>/dev/null || true)
+
     set +e
-    local pull_out
-    pull_out=$(docker compose pull 2>&1)
+    docker compose pull
     local pull_status=$?
     set -e
 
     if [ "$pull_status" -ne 0 ]; then
-        echo -e "\n${RED}[!] Ошибка при загрузке нового Docker-образа:${NC}"
-        echo "$pull_out"
-        echo -e "\n${YELLOW}[i] Текущий контейнер продолжает работу без изменений.${NC}"
+        if [ "${UI_LANG:-ru}" = "en" ]; then
+            echo -e "\n${RED}[!] Error downloading Docker image.${NC}"
+            echo -e "${YELLOW}[i] Current container remains active and untouched.${NC}\n"
+        else
+            echo -e "\n${RED}[!] Ошибка при загрузке нового Docker-образа.${NC}"
+            echo -e "${YELLOW}[i] Текущий контейнер продолжает работу без изменений.${NC}\n"
+        fi
         pause_menu
         return 1
     fi
 
+    local new_img_id=""
+    new_img_id=$(docker inspect --format '{{.Id}}' ghcr.io/xdeptu5/geo-routing-server:latest 2>/dev/null || true)
+    local short_id=""
+    [ -n "$new_img_id" ] && short_id=$(echo "$new_img_id" | cut -c 1-19)
+
+    if [ -n "$old_img_id" ] && [ "$old_img_id" = "$new_img_id" ]; then
+        if [ "${UI_LANG:-ru}" = "en" ]; then
+            echo -e "      ${GREEN}[+] Image is already up to date${NC} (no new layers, ID: ${DIM}${short_id}...${NC})"
+        else
+            echo -e "      ${GREEN}[+] Образ актуален${NC} (новых слоёв не обнаружено, ID: ${DIM}${short_id}...${NC})"
+        fi
+    else
+        if [ "${UI_LANG:-ru}" = "en" ]; then
+            echo -e "      ${GREEN}[+] New image downloaded!${NC} (ID: ${BOLD}${short_id}...${NC})"
+        else
+            echo -e "      ${GREEN}[+] Загружен обновлённый образ!${NC} (ID: ${BOLD}${short_id}...${NC})"
+        fi
+    fi
+
+    # [3/3] Перезапуск контейнера
+    if [ "${UI_LANG:-ru}" = "en" ]; then
+        echo -e "\n${CYAN}${BOLD}[3/3] Recreating container with new image...${NC}"
+    else
+        echo -e "\n${CYAN}${BOLD}[3/3] Перезапуск контейнера с новым образом...${NC}"
+    fi
+
     docker compose up -d
-    echo -e "${GREEN}[+] Контейнер и скрипт успешно обновлены до последней версии!${NC}\n"
+
+    if [ "${UI_LANG:-ru}" = "en" ]; then
+        echo -e "      ${BLUE}[*] Verifying container health...${NC}"
+    else
+        echo -e "      ${BLUE}[*] Проверка состояния контейнера...${NC}"
+    fi
+    sleep 2
+
+    local cont_status=""
+    cont_status=$(docker inspect --format '{{.State.Status}}' geo-routing-server 2>/dev/null || echo "unknown")
+
+    if [ "$cont_status" = "running" ]; then
+        if [ "${UI_LANG:-ru}" = "en" ]; then
+            echo -e "      ${GREEN}[+] Container is running smoothly!${NC}"
+        else
+            echo -e "      ${GREEN}[+] Контейнер успешно запущен и работает в штатном режиме!${NC}"
+        fi
+    else
+        if [ "${UI_LANG:-ru}" = "en" ]; then
+            echo -e "      ${RED}[!] Warning: container status is '${cont_status}'${NC}"
+        else
+            echo -e "      ${RED}[!] Внимание: статус контейнера: '${cont_status}'${NC}"
+        fi
+    fi
+
+    # Интерактивное предложение запустить синхронизацию
+    echo -e "\n${BOLD}─────────────────────────────────────────────────────────────────────────────${NC}"
+    local prompt_sync="Запустить тестовую синхронизацию правил сейчас? [Y/n]: "
+    [ "${UI_LANG:-ru}" = "en" ] && prompt_sync="Run test routing synchronization now? [Y/n]: "
+    read -r -p "$prompt_sync" run_test_sync
+    run_test_sync="${run_test_sync:-y}"
+    if [[ "$run_test_sync" =~ ^[YyДд]$ ]]; then
+        if [ "${UI_LANG:-ru}" = "en" ]; then
+            echo -e "\n${BLUE}[*] Running routing synchronization test...${NC}"
+        else
+            echo -e "\n${BLUE}[*] Запуск синхронизации гео-баз и правил...${NC}"
+        fi
+        docker exec geo-routing-server run-routing-sync || echo -e "${YELLOW}[!] Синхронизация завершилась с предупреждением.${NC}"
+        if [ "${UI_LANG:-ru}" = "en" ]; then
+            echo -e "${GREEN}[+] Verification completed.${NC}"
+        else
+            echo -e "${GREEN}[+] Проверка завершена.${NC}"
+        fi
+    fi
+
+    if [ "${UI_LANG:-ru}" = "en" ]; then
+        echo -e "\n${GREEN}${BOLD}✓ UPDATE COMPLETED SUCCESSFULLY!${NC}\n"
+    else
+        echo -e "\n${GREEN}${BOLD}✓ ОБНОВЛЕНИЕ УСПЕШНО ЗАВЕРШЕНО!${NC}\n"
+    fi
+
     pause_menu "Нажмите Enter для перезапуска меню..."
     exec bash "$target_dir/install.sh"
 }
