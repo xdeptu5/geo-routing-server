@@ -16,7 +16,7 @@ DIM='\033[2m'
 NC='\033[0m'
 
 # Повышайте версию при каждом изменении install.sh. GitHub Actions это проверяет.
-SCRIPT_VERSION="1.0.11"
+SCRIPT_VERSION="1.0.12"
 CHECKED_REMOTE_VER=""
 UPDATE_AVAILABLE=false
 CHECKED_REMOTE_IMG_DIGEST=""
@@ -2957,11 +2957,11 @@ main_menu() {
             full_mod_en="${modules_en} (${YELLOW}rules: ${rules_val}${NC})"
         fi
 
-        local upd_label_ru="Обновить сервер"
-        local upd_label_en="Update server"
+        local upd_label_ru="Обновить сервис (образ и скрипт)"
+        local upd_label_en="Update service (image & script)"
         if [ "$IMAGE_UPDATE_AVAILABLE" = true ] || [ "$UPDATE_AVAILABLE" = true ]; then
-            upd_label_ru="Обновить сервер [доступно обновление!]"
-            upd_label_en="Update server [update available!]"
+            upd_label_ru="Обновить сервис (образ и скрипт) [доступно обновление!]"
+            upd_label_en="Update service (image & script) [update available!]"
         fi
 
         if [ "${UI_LANG:-ru}" = "en" ]; then
