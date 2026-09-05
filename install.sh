@@ -688,9 +688,7 @@ EOF
     chmod +x "$wrapper_script"
     
     ln -sf "$wrapper_script" /usr/bin/geoserver 2>/dev/null || true
-    ln -sf "$wrapper_script" /usr/local/bin/grs 2>/dev/null || true
-    ln -sf "$wrapper_script" /usr/bin/grs 2>/dev/null || true
-    rm -f /usr/local/bin/geo-server /usr/bin/geo-server 2>/dev/null || true
+    rm -f /usr/local/bin/grs /usr/bin/grs /usr/local/bin/geo-server /usr/bin/geo-server 2>/dev/null || true
 }
 
 pause_menu() {
@@ -719,7 +717,7 @@ run_sync_now() {
         echo -e "${GREEN}[+] Синхронизация успешно выполнена!${NC}\n"
         refresh_squad_names_in_env 2>/dev/null || true
     else
-        echo -e "${RED}[!] Ошибка синхронизации. Проверьте логи: geoserver logs (или grs logs)${NC}\n"
+        echo -e "${RED}[!] Ошибка синхронизации. Проверьте логи: geoserver logs${NC}\n"
     fi
     pause_menu
 }
@@ -2120,7 +2118,7 @@ EOF
     [ -f "$INSTALL_DIR/.env.backup" ] && chmod 600 "$INSTALL_DIR/.env.backup" 2>/dev/null || true
     rm -f "$INSTALL_DIR/docker-compose.yml" 2>/dev/null || true
 
-    # Сохраняем скрипт установщика в каталог проекта для работы команд geoserver и grs
+    # Сохраняем скрипт установщика в каталог проекта для работы команды geoserver
     if [ -f "$0" ] && grep -q "Geo Routing Server" "$0" 2>/dev/null; then
         cp "$0" "$INSTALL_DIR/install.sh" 2>/dev/null || true
     else
@@ -2166,7 +2164,7 @@ EOF
     echo -e "\033[1;32m│                     ✓ НАСТРОЙКА УСПЕШНО ЗАВЕРШЕНА!                          │\033[0m"
     echo -e "\033[1;32m╰─────────────────────────────────────────────────────────────────────────────╯\033[0m"
     echo -e "  Каталог установки:             ${CYAN}${BOLD}${INSTALL_DIR}${NC}"
-    echo -e "  Команда управления из консоли: ${CYAN}${BOLD}geoserver${NC} (или ${CYAN}${BOLD}grs${NC})\n"
+    echo -e "  Команда управления из консоли: ${CYAN}${BOLD}geoserver${NC}\n"
     
     if [ "$NEEDS_PUBLIC_DOMAIN" = true ]; then
         show_proxy_snippets
@@ -2386,7 +2384,7 @@ main_menu() {
 main() {
     case "${1:-}" in
         --help|-h|help)
-            echo "Usage: geoserver [command] (or grs [command])"
+            echo "Usage: geoserver [command]"
             echo "Commands:"
             echo "  menu          Open management menu"
             echo "  install       Run installer wizard"
