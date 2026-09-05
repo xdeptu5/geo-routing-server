@@ -16,7 +16,7 @@ DIM='\033[2m'
 NC='\033[0m'
 
 # Повышайте версию при каждом изменении install.sh. GitHub Actions это проверяет.
-SCRIPT_VERSION="1.0.4"
+SCRIPT_VERSION="1.0.5"
 CHECKED_REMOTE_VER=""
 UPDATE_AVAILABLE=false
 
@@ -911,6 +911,7 @@ print_summary_banner(Config.get_token())
 }
 
 show_proxy_snippets() {
+    local is_menu="${1:-false}"
     local target_dir
     target_dir="$(get_install_dir)"
     local env_file="$target_dir/.env"
@@ -968,7 +969,7 @@ show_proxy_snippets() {
             echo -e "${BOLD}    }${NC}"
             echo -e "\nПрименить: ${YELLOW}sudo nginx -t && sudo nginx -s reload${NC}"
             echo -e "${CYAN}===============================================================================${NC}\n"
-            pause_menu
+            [ "$is_menu" = true ] && pause_menu
             ;;
         1)
             echo -e "\n${CYAN}${BOLD}===============================================================================${NC}"
@@ -984,7 +985,7 @@ show_proxy_snippets() {
             echo -e "${BOLD}    }${NC}"
             echo -e "\nПрименить: ${YELLOW}sudo systemctl reload caddy${NC}"
             echo -e "${CYAN}===============================================================================${NC}\n"
-            pause_menu
+            [ "$is_menu" = true ] && pause_menu
             ;;
         2)
             echo -e "\n${CYAN}${BOLD}===============================================================================${NC}"
@@ -999,7 +1000,7 @@ show_proxy_snippets() {
             echo -e "    Location:              ${BOLD}/${token}/${NC}"
             echo -e "    Forward Hostname / IP: ${BOLD}127.0.0.1${NC}   Port: ${BOLD}${port}${NC}"
             echo -e "${CYAN}===============================================================================${NC}\n"
-            pause_menu
+            [ "$is_menu" = true ] && pause_menu
             ;;
         3)
             echo -e "\n${CYAN}${BOLD}===============================================================================${NC}"
@@ -1046,7 +1047,7 @@ show_proxy_snippets() {
             echo -e "    Location:              ${BOLD}/${token}/${NC}"
             echo -e "    Forward Hostname / IP: ${BOLD}127.0.0.1${NC}   Port: ${BOLD}${port}${NC}"
             echo -e "${CYAN}===============================================================================${NC}\n"
-            pause_menu
+            [ "$is_menu" = true ] && pause_menu
             ;;
         *)
             return 0
@@ -2523,7 +2524,7 @@ EOF
     echo -e "  Команда управления из консоли: ${CYAN}${BOLD}geoserver${NC}\n"
     
     if [ "$NEEDS_PUBLIC_DOMAIN" = true ]; then
-        show_proxy_snippets
+        show_proxy_snippets false
     fi
     show_links
 }
@@ -2562,6 +2563,7 @@ main_menu() {
         local integrations_ru=""
         local integrations_en=""
         local domain_val=""
+        local token_val=""
         local is_local=0
 
         if [ -f "$env_file" ]; then
@@ -2570,6 +2572,7 @@ main_menu() {
             local ext_geo
             ext_geo=$(grep "^PUBLIC_GEO_BASE_URL=" "$env_file" | cut -d'=' -f2- || echo "")
             domain_val=$(grep "^DOMAIN=" "$env_file" | cut -d'=' -f2- || echo "")
+            token_val=$(grep "^ROUTING_TOKEN=" "$env_file" | cut -d'=' -f2- || echo "")
 
             if [ "$clients" = "HAPP_DEEPLINK" ] || [ "$clients" = "HAPP_LOCAL" ]; then
                 is_local=1
@@ -2642,7 +2645,11 @@ main_menu() {
             echo -e "Last synchronization:   $sync_msg"
             echo -e "Active modules:         ${GREEN}$modules_en${NC}"
             if [ "$is_local" -eq 0 ] && [ -n "$domain_val" ] && [ "$domain_val" != "geo.example.com" ]; then
-                echo -e "Public domain:          ${CYAN}$domain_val${NC}"
+                if [ -n "$token_val" ] && [ "$token_val" != "local" ]; then
+                    echo -e "Base URL:               ${CYAN}https://${domain_val}/${token_val}${NC}"
+                else
+                    echo -e "Public domain:          ${CYAN}$domain_val${NC}"
+                fi
             fi
             if [ -n "$integrations_en" ]; then
                 echo -e "Integrations:           ${YELLOW}$integrations_en${NC}"
@@ -2683,7 +2690,11 @@ main_menu() {
             echo -e "Последняя синхронизация: $sync_msg"
             echo -e "Активные модули:   ${GREEN}$modules_ru${NC}"
             if [ "$is_local" -eq 0 ] && [ -n "$domain_val" ] && [ "$domain_val" != "geo.example.com" ]; then
-                echo -e "Публичный домен:   ${CYAN}$domain_val${NC}"
+                if [ -n "$token_val" ] && [ "$token_val" != "local" ]; then
+                    echo -e "Базовый URL:       ${CYAN}https://${domain_val}/${token_val}${NC}"
+                else
+                    echo -e "Публичный домен:   ${CYAN}$domain_val${NC}"
+                fi
             fi
             if [ -n "$integrations_ru" ]; then
                 echo -e "Интеграции:        ${YELLOW}$integrations_ru${NC}"
@@ -2723,7 +2734,7 @@ main_menu() {
         case "$menu_idx" in
             0) run_sync_now ;;
             1) show_links ;;
-            2) show_proxy_snippets ;;
+            2) show_proxy_snippets true ;;
             3) configure_remnawave ;;
             4) configure_telegram ;;
             5) install_wizard ;;
