@@ -31,9 +31,12 @@ class GeoManager:
             self.custom_geo_dir / f"{geo_type}.dat"
         ]
         for candidate in local_candidates:
-            if candidate.is_file() and candidate.stat().st_size >= 1024:
-                logger.info(f"  Using local {geo_type} file for {client} from {candidate}")
-                return candidate.read_bytes()
+            if candidate.is_file():
+                content = candidate.read_bytes()
+                if self.downloader._validate_content(content, "binary"):
+                    logger.info(f"  Using local {geo_type} file for {client} from {candidate}")
+                    return content
+                logger.warning(f"  Ignoring invalid local {geo_type} file: {candidate}")
 
         # 2. Кастомный URL из .env
         custom_url = Config.GEOIP_SOURCE_URL if geo_type == "geoip" else Config.GEOSITE_SOURCE_URL
@@ -44,7 +47,12 @@ class GeoManager:
             logger.info(f"  Downloading {geo_type} for {client} from custom URL: {custom_url}")
             url_hash = hashlib.sha256(custom_url.encode("utf-8")).hexdigest()[:8]
             try:
-                data = self.downloader.fetch(custom_url, f"geo_{geo_type}_custom_{url_hash}", kind="binary")
+                data = self.downloader.fetch(
+                    custom_url,
+                    f"geo_{geo_type}_custom_{url_hash}",
+                    kind="binary",
+                    trusted_url=True,
+                )
                 self._memory_cache[custom_url] = data
                 return data
             except DownloadError as e:
@@ -61,8 +69,14 @@ class GeoManager:
                 logger.info(f"  Reusing already downloaded {geo_type} for {client}")
                 return self._memory_cache[url]
             logger.info(f"  Downloading {geo_type} for {client} from repository source: {url}")
+            url_hash = hashlib.sha256(url.encode("utf-8")).hexdigest()[:12]
             try:
-                data = self.downloader.fetch(url, f"global_{geo_type}", kind="binary")
+                data = self.downloader.fetch(
+                    url,
+                    f"global_{geo_type}_{url_hash}",
+                    kind="binary",
+                    trusted_url=False,
+                )
                 self._memory_cache[url] = data
                 return data
             except DownloadError as e:
@@ -74,7 +88,12 @@ class GeoManager:
             logger.info(f"  Reusing fallback {geo_type} for {client}")
             return self._memory_cache[fallback_url]
         logger.info(f"  Downloading {geo_type} for {client} from fallback: {fallback_url}")
-        data = self.downloader.fetch(fallback_url, f"global_{geo_type}_fallback", kind="binary")
+        data = self.downloader.fetch(
+            fallback_url,
+            f"global_{geo_type}_fallback",
+            kind="binary",
+            trusted_url=False,
+        )
         self._memory_cache[fallback_url] = data
         return data
 

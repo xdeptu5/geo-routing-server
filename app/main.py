@@ -218,8 +218,7 @@ def main():
     else:
         logger.warning("Synchronization completed with warnings/errors.")
         print_summary_banner(token)
-        if failures > 0:
-            sys.exit(1)
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()

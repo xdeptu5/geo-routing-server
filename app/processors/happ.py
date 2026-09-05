@@ -1,9 +1,7 @@
-import base64
 import hashlib
 import json
 import logging
 import os
-import re
 from typing import Set
 from app.processors.base import BaseProcessor
 from app.processors.geo import GeoManager
@@ -65,11 +63,10 @@ class HappProcessor(BaseProcessor):
                 configured_rules.add(g_name if g_name.endswith(".JSON") else f"{g_name}.JSON")
 
             if configured_rules:
-                filtered = [f for f in config_files if f.upper() in configured_rules]
-                if filtered:
-                    config_files = filtered
-                else:
-                    config_files = list(configured_rules)
+                discovered_by_rule = {file_name.upper(): file_name for file_name in config_files}
+                for rule_name in configured_rules:
+                    discovered_by_rule.setdefault(rule_name, rule_name)
+                config_files = sorted(discovered_by_rule.values(), key=str.upper)
             
             # Определяем ссылки на geo-базы, которые нужно зашить в правила
             base_public_url = Config.get_base_url(self.token)
@@ -90,7 +87,7 @@ class HappProcessor(BaseProcessor):
             published_files: Set[str] = set()
             
             for file_name in config_files:
-                if not re.match(r"^[A-Za-z0-9._-]+\.json$", file_name, re.IGNORECASE):
+                if not self.is_safe_config_filename(file_name):
                     logger.error(f"Skipping unsafe filename: {file_name}")
                     continue
                     
@@ -123,9 +120,7 @@ class HappProcessor(BaseProcessor):
                     published_files.add(file_name)
                         
                     # Генерируем компактный DEEPLINK (happ://routing/onadd/<base64>) без пробелов (сокращение размера заголовка на 40%)
-                    compact_json = json.dumps(data, separators=(",", ":"), ensure_ascii=False)
-                    b64_payload = base64.b64encode(compact_json.encode("utf-8")).decode("ascii")
-                    deeplink_content = f"happ://routing/onadd/{b64_payload}\n"
+                    deeplink_content = self.build_deeplink(client, data)
                     
                     deeplink_filename = f"{file_name.rsplit('.', 1)[0]}.DEEPLINK"
                     if Publisher.publish_file(target_dir, deeplink_filename, deeplink_content):

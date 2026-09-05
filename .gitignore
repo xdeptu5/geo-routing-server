@@ -16,6 +16,7 @@ custom_geo/*.dat
 # Python cache
 __pycache__/
 *.py[cod]
+.coverage
 
 # Logs and runtime artifacts
 *.log

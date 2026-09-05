@@ -1,5 +1,8 @@
+import http.client
+import ipaddress
 import json
 import logging
+import socket
 import time
 import urllib.error
 import urllib.request
@@ -13,6 +16,58 @@ class DownloadError(Exception):
     """Ошибка загрузки данных."""
     pass
 
+
+class _PublicOnlyRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Проверяет каждый адрес до выполнения перенаправления."""
+
+    def __init__(self, validate_url):
+        super().__init__()
+        self._validate_url = validate_url
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        self._validate_url(newurl)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def _pin_connection(connection, resolved_ip: str):
+    """Подменяет повторное DNS-разрешение подключением к проверенному IP."""
+    create_connection = connection._create_connection
+
+    def connect_to_resolved_ip(address, timeout, source_address):
+        return create_connection((resolved_ip, address[1]), timeout, source_address)
+
+    connection._create_connection = connect_to_resolved_ip
+    return connection
+
+
+class _PublicOnlyHTTPHandler(urllib.request.HTTPHandler):
+    def __init__(self, resolve_url):
+        super().__init__()
+        self._resolve_url = resolve_url
+
+    def http_open(self, req):
+        resolved_ip = self._resolve_url(req.full_url)
+
+        def connection_factory(host, **kwargs):
+            return _pin_connection(http.client.HTTPConnection(host, **kwargs), resolved_ip)
+
+        return self.do_open(connection_factory, req)
+
+
+class _PublicOnlyHTTPSHandler(urllib.request.HTTPSHandler):
+    def __init__(self, resolve_url):
+        super().__init__()
+        self._resolve_url = resolve_url
+
+    def https_open(self, req):
+        resolved_ip = self._resolve_url(req.full_url)
+
+        def connection_factory(host, **kwargs):
+            return _pin_connection(http.client.HTTPSConnection(host, **kwargs), resolved_ip)
+
+        return self.do_open(connection_factory, req, context=self._context)
+
+
 class Downloader:
     """HTTP-загрузчик с поддержкой ETag-кэширования, повторных попыток и валидации."""
     
@@ -25,6 +80,10 @@ class Downloader:
         self.timeout = timeout
         self.max_retries = max_retries
         self.cache_dir.mkdir(parents=True, exist_ok=True)
+
+    @staticmethod
+    def _safe_cache_key(cache_key: str) -> str:
+        return cache_key.replace("/", "_").replace("\\", "_")
         
     def _validate_content(self, content: bytes, kind: str) -> bool:
         if not content:
@@ -48,17 +107,73 @@ class Downloader:
             
         return True
 
-    def fetch(self, url: str, cache_key: str, kind: str = "binary") -> bytes:
+    def _validate_untrusted_url(self, url: str) -> str:
+        """Отклоняет URL, которые ведут в локальные или служебные сети."""
+        try:
+            parsed = urlparse(url)
+            port = parsed.port
+        except ValueError as exc:
+            raise DownloadError(f"Rejected malformed URL: {url}") from exc
+
+        if parsed.scheme not in ("http", "https"):
+            raise DownloadError(f"Rejected unsafe URL scheme '{parsed.scheme}': {url}")
+        if not parsed.hostname or parsed.username is not None or parsed.password is not None:
+            raise DownloadError(f"Rejected malformed URL: {url}")
+
+        lookup_port = port or (443 if parsed.scheme == "https" else 80)
+        try:
+            addresses = socket.getaddrinfo(
+                parsed.hostname,
+                lookup_port,
+                type=socket.SOCK_STREAM,
+            )
+        except OSError as exc:
+            raise DownloadError(f"Could not resolve URL host '{parsed.hostname}': {exc}") from exc
+
+        if not addresses:
+            raise DownloadError(f"Could not resolve URL host '{parsed.hostname}'")
+
+        for address in addresses:
+            ip_text = address[4][0]
+            try:
+                resolved_ip = ipaddress.ip_address(ip_text)
+            except ValueError as exc:
+                raise DownloadError(f"Rejected invalid resolved address '{ip_text}'") from exc
+            if not resolved_ip.is_global:
+                raise DownloadError(
+                    f"Rejected URL resolving to private or reserved address '{ip_text}': {url}"
+                )
+
+        return addresses[0][4][0]
+
+    def fetch(
+        self,
+        url: str,
+        cache_key: str,
+        kind: str = "binary",
+        trusted_url: bool = True,
+    ) -> bytes:
         """
         Загружает данные по URL с использованием ETag кэша.
+        trusted_url разрешает адреса локальной сети для источников, заданных администратором.
         Возвращает байтовое содержимое файла.
         """
         parsed = urlparse(url)
         if parsed.scheme not in ("http", "https"):
             raise DownloadError(f"Rejected unsafe URL scheme '{parsed.scheme}': {url}")
 
+        opener = None
+        if not trusted_url:
+            self._validate_untrusted_url(url)
+            opener = urllib.request.build_opener(
+                urllib.request.ProxyHandler({}),
+                _PublicOnlyRedirectHandler(self._validate_untrusted_url),
+                _PublicOnlyHTTPHandler(self._validate_untrusted_url),
+                _PublicOnlyHTTPSHandler(self._validate_untrusted_url),
+            )
+
         max_allowed_size = self.MAX_JSON_SIZE if kind == "json" else self.MAX_BINARY_SIZE
-        safe_cache_key = cache_key.replace("/", "_").replace("\\", "_")
+        safe_cache_key = self._safe_cache_key(cache_key)
         cache_body_file = self.cache_dir / f"{safe_cache_key}.body"
         cache_etag_file = self.cache_dir / f"{safe_cache_key}.etag"
         
@@ -79,8 +194,11 @@ class Downloader:
         last_error = None
         for attempt in range(1, self.max_retries + 1):
             try:
+                if not trusted_url:
+                    self._validate_untrusted_url(url)
                 req = urllib.request.Request(url, headers=headers)
-                with urllib.request.urlopen(req, timeout=self.timeout) as response:
+                open_request = opener.open if opener is not None else urllib.request.urlopen
+                with open_request(req, timeout=self.timeout) as response:
                     status = response.getcode()
                     res_headers = response.headers
                     

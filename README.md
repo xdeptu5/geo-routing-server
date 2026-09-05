@@ -59,13 +59,16 @@
 
 ### Способ 1. Автоматический мастер установки (Рекомендуется)
 
-Скрипт настроит Docker, запросит сценарий, домен, токен и выведет готовые конфиги:
+Скачайте скрипт, просмотрите его и запустите локальную копию. Скрипт запросит
+сценарий, домен и токен, затем создаст конфиги:
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/xdeptu5/geo-routing-server/main/install.sh)
+curl -fL https://raw.githubusercontent.com/xdeptu5/geo-routing-server/main/install.sh -o install.sh
+less install.sh
+sudo bash install.sh
 ```
 
-> **Управление:** После установки доступно меню управления командой `geoserver`. Повторный запуск скрипта открывает то же меню и никогда не перезаписывает данные без подтверждения.
+> **Управление:** После установки доступно меню управления командой `geoserver`. Автоматическое обновление `install.sh` отключено: заменяйте его только после ручной проверки новой версии.
 
 ---
 
@@ -80,6 +83,9 @@ bash <(curl -fsSL https://raw.githubusercontent.com/xdeptu5/geo-routing-server/m
        restart: unless-stopped
        env_file:
          - .env
+       # Для прямого вызова Remnawave API раскомментируйте этот блок:
+       # networks:
+       #   - remnawave
        ports:
          - "127.0.0.1:8080:80"
        volumes:
@@ -95,24 +101,38 @@ bash <(curl -fsSL https://raw.githubusercontent.com/xdeptu5/geo-routing-server/m
 
    volumes:
      routing_data:
+
+   # Сеть должна существовать до запуска: docker network ls
+   # networks:
+   #   remnawave:
+   #     external: true
+   #     name: "${DOCKER_NETWORK:-remnawave-network}"
    ```
 
 2. Создайте файл `.env` на основе [`.env.example`](./.env.example):
    ```env
    DOMAIN=geo.example.com
-   ROUTING_TOKEN=change_me_to_random_secret_token
+   # Выполните `openssl rand -hex 16` и вставьте результат вместо этого значения.
+   ROUTING_TOKEN=replace_with_a_random_token
    ENABLED_CLIENTS=HAPP,INCY
    HTTP_PORT=8080
    SCHEDULE=0 10 * * *
    SYNC_ON_START=true
    ```
+   Не запускайте контейнер, пока не замените `ROUTING_TOKEN` на случайное значение.
 
 3. Запустите:
    ```bash
    docker compose up -d
    ```
 
-Ссылки и статус отображаются в логах: `docker compose logs`.
+Контейнер и HTTP-проверку показывает `docker compose ps`. Результат последней
+синхронизации и ссылки смотрите через `docker compose logs`.
+
+Для прямого доступа к Remnawave API узнайте имя сети панели командой
+`docker network ls`, задайте `DOCKER_NETWORK` в `.env` и раскомментируйте оба
+блока `networks` в `compose.yaml`. Compose завершится с ошибкой, если указанная
+внешняя сеть не существует.
 
 ---
 
@@ -203,10 +223,10 @@ Happ принимает правила через Base64-диплинк `happ://
 | Переменная | По умолчанию | Описание |
 | :--- | :--- | :--- |
 | `DOMAIN` | `geo.example.com` | Домен для HTTPS-прокси (не нужен в режиме `HAPP_DEEPLINK`) |
-| `ROUTING_TOKEN` | — | **Обязательно** для раздачи файлов (`[A-Za-z0-9_-]+`) |
+| `ROUTING_TOKEN` | — | **Обязательно** для раздачи файлов: минимум 4 символа из `[A-Za-z0-9_-]`; установщик генерирует 32-символьный токен |
 | `ENABLED_CLIENTS` | `HAPP,INCY` | Модули: `HAPP,INCY`, `HAPP`, `INCY`, `HAPP_GEO`, `INCY_GEO`, `HAPP_DEEPLINK` |
 | `PUBLIC_GEO_BASE_URL` | *пусто* | Внешний URL баз (`https://geo-node.example.com/<token>`) |
-| `DOCKER_NETWORK` | *пусто* | Внешняя Docker-сеть (например, `remnawave-network`) |
+| `DOCKER_NETWORK` | `remnawave-network` | Имя существующей сети Remnawave; применяется блоком `networks` в `compose.yaml` |
 | `HTTP_BIND` | `127.0.0.1` | IP привязки внутреннего веб-сервера |
 | `HTTP_PORT` | `8080` | Порт для реверс-прокси |
 | `SCHEDULE` | `0 10 * * *` | Расписание автообновления (cron UTC, дефолт 10:00 UTC) |
@@ -245,7 +265,10 @@ geo.example.com {
 **Nginx:**
 ```nginx
 server {
+    listen 443 ssl;
     server_name geo.example.com;
+    ssl_certificate /etc/letsencrypt/live/geo.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/geo.example.com/privkey.pem;
     location / {
         proxy_pass http://127.0.0.1:8080;
         proxy_set_header Host $host;
@@ -255,6 +278,9 @@ server {
     }
 }
 ```
+
+Этот блок предполагает, что сертификат уже выпущен. Проверьте пути к файлам,
+затем выполните `sudo nginx -t` перед перезагрузкой Nginx.
 
 ---
 
@@ -266,7 +292,7 @@ server {
 | **Принудительная синхронизация** | `docker exec geo-routing-server run-routing-sync` | Запуск немедленного обновления |
 | **Просмотр логов** | `docker compose logs -f` | Мониторинг в реальном времени |
 | **Обновление образа** | `docker compose pull && docker compose up -d` | Загрузка свежей версии контейнера |
-| **Статус** | `docker compose ps` | Проверка работы контейнера |
+| **Статус** | `docker compose ps` | Проверка контейнера и HTTP `/health`; успех синхронизации смотрите в логах |
 
 > 📁 **Кастомные базы:** Локальные файлы `geoip.dat` и `geosite.dat` можно положить в папку `./custom_geo/` — сервер подхватит их автоматически вместо загрузки из сети.
 

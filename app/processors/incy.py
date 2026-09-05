@@ -1,9 +1,6 @@
-import base64
 import hashlib
 import json
 import logging
-import os
-import re
 from typing import Set
 from app.processors.base import BaseProcessor
 from app.processors.geo import GeoManager
@@ -64,7 +61,7 @@ class IncyProcessor(BaseProcessor):
             
             for file_name in config_files:
                 # Защита от небезопасных имен файлов
-                if not re.match(r"^[A-Za-z0-9._-]+\.json$", file_name, re.IGNORECASE):
+                if not self.is_safe_config_filename(file_name):
                     logger.error(f"Skipping unsafe filename: {file_name}")
                     continue
                     
@@ -97,10 +94,7 @@ class IncyProcessor(BaseProcessor):
                     published_files.add(file_name)
                         
                     # Генерируем компактный DEEPLINK (схема incy://routing/onadd/<base64>) без лишних пробелов
-                    compact_json = json.dumps(data, separators=(",", ":"), ensure_ascii=False)
-                    b64_payload = base64.b64encode(compact_json.encode("utf-8")).decode("ascii")
-                    prefix = client.lower()
-                    deeplink_content = f"{prefix}://routing/onadd/{b64_payload}\n"
+                    deeplink_content = self.build_deeplink(client, data)
                     
                     deeplink_filename = f"{file_name.rsplit('.', 1)[0]}.DEEPLINK"
                     if Publisher.publish_file(target_dir, deeplink_filename, deeplink_content):

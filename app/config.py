@@ -3,6 +3,7 @@ import re
 import sys
 from pathlib import Path
 from typing import List
+from urllib.parse import quote, urlparse
 
 class Config:
     """Конфигурация приложения, загружаемая из переменных окружения и файлов."""
@@ -107,3 +108,28 @@ class Config:
             owner, repo = match.group(1), match.group(2)
             return f"https://api.github.com/repos/{owner}/{repo}/contents"
         return "https://api.github.com/repos/hydraponique/roscomvpn-routing/contents"
+
+    @classmethod
+    def get_github_contents_url(cls, client: str) -> str:
+        """Возвращает URL GitHub Contents API для raw.githubusercontent.com источника.
+
+        Custom sources outside GitHub нельзя безопасно сопоставить с Contents API,
+        поэтому discovery для них отключается.
+        """
+        parsed = urlparse(cls.ROUTING_SOURCE_REPO)
+        if parsed.scheme != "https" or parsed.hostname != "raw.githubusercontent.com":
+            return ""
+
+        parts = [part for part in parsed.path.split("/") if part]
+        if len(parts) < 3:
+            return ""
+
+        owner, repo, ref = parts[:3]
+        source_path = parts[3:]
+        content_path = "/".join([*source_path, client])
+        quoted_path = quote(content_path, safe="/")
+        quoted_ref = quote(ref, safe="")
+        return (
+            f"https://api.github.com/repos/{owner}/{repo}/contents/"
+            f"{quoted_path}?ref={quoted_ref}"
+        )

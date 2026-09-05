@@ -4,6 +4,7 @@ import os
 import re
 import urllib.request
 import urllib.error
+import urllib.parse
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 from app.config import Config
@@ -14,6 +15,32 @@ class RemnawaveSync:
     """Прямая нативная синхронизация правил маршрутизации с Remnawave API без сторонних сервисов."""
 
     ROUTING_HEADER = "routing"
+
+    class _AuthorizedRedirectHandler(urllib.request.HTTPRedirectHandler):
+        """Разрешает авторизованные redirect только внутри исходного origin."""
+
+        @staticmethod
+        def _origin(url: str) -> tuple[str, str, Optional[int]]:
+            parsed = urllib.parse.urlsplit(url)
+            default_port = 443 if parsed.scheme.lower() == "https" else 80
+            return parsed.scheme.lower(), (parsed.hostname or "").lower(), parsed.port or default_port
+
+        def redirect_request(self, req, fp, code, msg, headers, newurl):
+            protected_headers = (
+                "Authorization",
+                "CF-Access-Client-Id",
+                "CF-Access-Client-Secret",
+            )
+            has_credentials = any(req.has_header(header) for header in protected_headers)
+            if has_credentials and self._origin(req.full_url) != self._origin(newurl):
+                raise urllib.error.HTTPError(
+                    newurl,
+                    code,
+                    "Refusing to forward credentials across origins",
+                    headers,
+                    fp,
+                )
+            return super().redirect_request(req, fp, code, msg, headers, newurl)
 
     @classmethod
     def get_api_url(cls) -> str:
@@ -61,7 +88,8 @@ class RemnawaveSync:
         
         req = urllib.request.Request(url, data=data, headers=headers, method=method)
         try:
-            with urllib.request.urlopen(req, timeout=15) as res:
+            opener = urllib.request.build_opener(cls._AuthorizedRedirectHandler())
+            with opener.open(req, timeout=15) as res:
                 content = res.read().decode("utf-8")
                 return json.loads(content) if content else {}
         except urllib.error.HTTPError as e:
@@ -228,7 +256,10 @@ class RemnawaveSync:
                     cls.last_errors.append("Не удалось загрузить subscription-settings из Remnawave API")
                     success = False
             else:
-                logger.warning(f"[Remnawave] Deeplink for global rule {rule_file} not found in {happ_dir}")
+                error = f"Настроенный файл {rule_file.rsplit('.', 1)[0]}.DEEPLINK не найден в {happ_dir}"
+                logger.error(f"[Remnawave] {error}")
+                cls.last_errors.append(error)
+                success = False
 
         # 2. Синхронизация сквадов (External Squads)
         if squads:
@@ -266,7 +297,11 @@ class RemnawaveSync:
                 deeplink = cls._read_deeplink_content(happ_dir, rule_name)
                 
                 if not deeplink:
-                    logger.warning(f"[Remnawave] Deeplink for rule {rule_name} ({s_desc}) not found in {happ_dir}")
+                    deeplink_name = f"{Path(rule_name).name.rsplit('.', 1)[0].upper()}.DEEPLINK"
+                    error = f"Настроенный файл {deeplink_name} для {s_desc} не найден в {happ_dir}"
+                    logger.error(f"[Remnawave] {error}")
+                    cls.last_errors.append(error)
+                    success = False
                     continue
 
                 if all_ext_res is not None and squad_uuid not in known_squads:

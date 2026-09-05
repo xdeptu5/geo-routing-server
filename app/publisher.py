@@ -36,12 +36,20 @@ class Publisher:
         except Exception:
             pass
 
+    @staticmethod
+    def _sha256_file(path: Path) -> str:
+        digest = hashlib.sha256()
+        with path.open("rb") as source:
+            for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+
     @classmethod
     def publish_file(cls, dest_dir: Path, filename: str, content: Union[str, bytes]) -> bool:
         """
         Атомарно публикует файл:
         - Проверяет безопасность пути назначения (защита от path traversal)
-        - Эффективно проверяет изменения через stat() и sha256 без паразитного I/O
+        - Проверяет изменения через stat() и sha256 фактического файла
         - Записывает во временный файл в целевой директории
         - Выполняет fsync для исключения повреждения данных при сбоях питания
         - Выставляет права 0644
@@ -76,13 +84,8 @@ class Publisher:
                 if target_path.stat().st_size != len(raw_data):
                     is_updated = True
                 else:
-                    # 2. Если есть .sha256 файл, читаем только 64 байта вместо мегабайт баз
-                    sha_file = dest_dir / f"{filename}.sha256"
-                    if sha_file.is_file():
-                        existing_hash = sha_file.read_text(encoding="utf-8").strip()
-                        is_updated = (existing_hash != sha256_hash)
-                    else:
-                        is_updated = (target_path.read_bytes() != raw_data)
+                    # Sidecar может отстать после частичного сбоя записи пары файлов.
+                    is_updated = cls._sha256_file(target_path) != sha256_hash
             except Exception:
                 is_updated = True
 

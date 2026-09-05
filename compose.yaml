@@ -10,6 +10,10 @@ services:
     env_file:
       - .env
 
+    # Для прямого доступа к Remnawave API подключите существующую сеть панели:
+    # networks:
+    #   - remnawave
+
     # Локальный порт для подключения вашего реверс-прокси (Caddy или Nginx):
     ports:
       - "${HTTP_BIND:-127.0.0.1}:${HTTP_PORT:-8080}:80"
@@ -29,3 +33,10 @@ services:
 
 volumes:
   routing_data:
+
+# Раскомментируйте вместе с networks в сервисе. Укажите имя существующей сети
+# в DOCKER_NETWORK (например, remnawave-network).
+# networks:
+#   remnawave:
+#     external: true
+#     name: "${DOCKER_NETWORK:-remnawave-network}"

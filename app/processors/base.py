@@ -1,5 +1,7 @@
+import base64
 import json
 import logging
+import re
 import urllib.request
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -22,6 +24,26 @@ class BaseProcessor(ABC):
         self.domain = domain
         self.client_dir = storage_dir / token
         self.is_fallback_discovery: bool = False
+
+    @staticmethod
+    def is_safe_config_filename(name: str) -> bool:
+        """Accept a plain JSON filename and reject paths or hidden files."""
+        return bool(re.fullmatch(r"[A-Za-z0-9_-][A-Za-z0-9._-]*\.json", name, re.IGNORECASE))
+
+    @staticmethod
+    def build_deeplink(client: str, payload: dict) -> str:
+        """Encode a routing object using the URL scheme accepted by the client."""
+        compact_json = json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
+        encoded = base64.b64encode(compact_json.encode("utf-8")).decode("ascii")
+        return f"{client.lower()}://routing/onadd/{encoded}\n"
+
+    @staticmethod
+    def decode_deeplink(deeplink: str, client: str) -> dict:
+        """Decode a generated deeplink for tests and internal validation."""
+        prefix = f"{client.lower()}://routing/onadd/"
+        if not deeplink.startswith(prefix):
+            raise ValueError("deeplink client prefix does not match")
+        return json.loads(base64.b64decode(deeplink[len(prefix):].strip()).decode("utf-8"))
         
     @abstractmethod
     def process(self) -> bool:
@@ -31,7 +53,15 @@ class BaseProcessor(ABC):
     def _discover_config_files(self) -> List[str]:
         """Получает список JSON файлов из GitHub API репозитория для данного клиента."""
         from app.config import Config
-        api_url = f"{Config.get_github_api_base()}/{self.CLIENT_NAME}"
+        api_url = Config.get_github_contents_url(self.CLIENT_NAME)
+        if not api_url:
+            logger.warning(
+                "Skipping GitHub API discovery for unsupported routing source; "
+                "obsolete-file cleanup is disabled"
+            )
+            self.is_fallback_discovery = True
+            return list(self.FALLBACK_FILES)
+
         try:
             req = urllib.request.Request(
                 api_url, 
@@ -40,8 +70,8 @@ class BaseProcessor(ABC):
             with urllib.request.urlopen(req, timeout=15) as res:
                 items = json.loads(res.read().decode("utf-8"))
                 discovered = [
-                    item["name"] for item in items 
-                    if item.get("type") == "file" and item["name"].lower().endswith(".json")
+                    item["name"] for item in items
+                    if item.get("type") == "file" and self.is_safe_config_filename(item.get("name", ""))
                 ]
                 if discovered:
                     self.is_fallback_discovery = False

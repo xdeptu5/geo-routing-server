@@ -61,8 +61,9 @@ handle_error() {
         2) 
             local target_dir
             target_dir="$(get_install_dir)"
-            if [ -n "$target_dir" ] && [ "$target_dir" != "/" ] && [ "$target_dir" != "/root" ] && [ -d "$target_dir" ]; then
-                rm -rf "$target_dir" 2>/dev/null || true
+            if ! reset_install_dir "$target_dir"; then
+                echo -e "${RED}[!] Reset отменён: каталог не принадлежит geo-routing-server или небезопасен для удаления.${NC}"
+                exit "$code"
             fi
             trap 'handle_error $LINENO' ERR
             install_wizard
@@ -443,6 +444,7 @@ refresh_squad_names_in_env() {
             fi
         fi
     done
+    secure_env_file "$env_file"
 }
 
 detect_or_ask_language() {
@@ -623,24 +625,143 @@ find_free_port() {
     echo "$p"
 }
 
+canonicalize_install_dir() {
+    local raw_path="${1:-}"
+    [ -n "$raw_path" ] || return 1
+    [[ "$raw_path" != *$'\n'* && "$raw_path" != *$'\r'* ]] || return 1
+    [[ "$raw_path" =~ ^/[a-zA-Z0-9_./-]+$ ]] || return 1
+
+    if command -v realpath &>/dev/null; then
+        realpath -m -- "$raw_path"
+    elif command -v readlink &>/dev/null; then
+        readlink -m -- "$raw_path"
+    else
+        return 1
+    fi
+}
+
+is_protected_install_dir() {
+    case "${1:-}" in
+        /|/bin|/boot|/dev|/etc|/home|/lib|/lib64|/media|/mnt|/opt|/proc|/root|/run|/sbin|/srv|/sys|/tmp|/usr|/var)
+            return 0
+            ;;
+    esac
+    return 1
+}
+
+has_project_marker() {
+    local target_dir="${1:-}"
+    [ -f "$target_dir/.geo-routing-server-install" ] && return 0
+
+    local compose_file=""
+    [ -f "$target_dir/compose.yaml" ] && compose_file="$target_dir/compose.yaml"
+    [ -z "$compose_file" ] && [ -f "$target_dir/docker-compose.yml" ] && compose_file="$target_dir/docker-compose.yml"
+    [ -n "$compose_file" ] || return 1
+    grep -qE '^[[:space:]]*container_name:[[:space:]]*geo-routing-server[[:space:]]*$' "$compose_file" 2>/dev/null || return 1
+    [ -f "$target_dir/.env" ] && grep -q '^ROUTING_TOKEN=' "$target_dir/.env" 2>/dev/null
+}
+
+prepare_install_dir() {
+    local canonical_dir
+    canonical_dir="$(canonicalize_install_dir "${1:-}")" || return 1
+    is_protected_install_dir "$canonical_dir" && return 1
+    [ ! -e "$canonical_dir" ] || [ -d "$canonical_dir" ] || return 1
+
+    if [ -d "$canonical_dir" ] && [ -n "$(find "$canonical_dir" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]; then
+        has_project_marker "$canonical_dir" || return 1
+    fi
+
+    mkdir -p -- "$canonical_dir" || return 1
+    : > "$canonical_dir/.geo-routing-server-install" || return 1
+    chmod 600 "$canonical_dir/.geo-routing-server-install" || return 1
+    echo "$canonical_dir"
+}
+
+reset_install_dir() {
+    local canonical_dir
+    canonical_dir="$(canonicalize_install_dir "${1:-}")" || return 1
+    is_protected_install_dir "$canonical_dir" && return 1
+    [ ! -e "$canonical_dir" ] && return 0
+    [ -d "$canonical_dir" ] || return 1
+    has_project_marker "$canonical_dir" || return 1
+    rm -rf -- "$canonical_dir"
+}
+
+secure_env_file() {
+    local env_file="${1:-}"
+    [ -f "$env_file" ] || return 1
+    chmod 600 -- "$env_file"
+}
+
+validate_cron_field() {
+    local field="${1:-}"
+    local min="$2"
+    local max="$3"
+    [[ "$field" =~ ^[0-9*/,-]+$ ]] || return 1
+
+    local part base step start end
+    local parts=()
+    IFS=',' read -r -a parts <<< "$field"
+    for part in "${parts[@]}"; do
+        base="$part"
+        step=""
+        if [[ "$part" == */* ]]; then
+            base="${part%%/*}"
+            step="${part#*/}"
+            [[ "$step" =~ ^[0-9]+$ ]] && [ "$step" -ge 1 ] && [ "$step" -le "$max" ] || return 1
+            [[ "$base" != */* ]] || return 1
+        fi
+
+        if [ "$base" = "*" ]; then
+            continue
+        elif [[ "$base" =~ ^[0-9]+$ ]]; then
+            [ "$base" -ge "$min" ] && [ "$base" -le "$max" ] || return 1
+        elif [[ "$base" =~ ^([0-9]+)-([0-9]+)$ ]]; then
+            start="${BASH_REMATCH[1]}"
+            end="${BASH_REMATCH[2]}"
+            [ "$start" -ge "$min" ] && [ "$start" -le "$max" ] || return 1
+            [ "$end" -ge "$min" ] && [ "$end" -le "$max" ] && [ "$start" -le "$end" ] || return 1
+        else
+            return 1
+        fi
+    done
+}
+
+validate_cron_schedule() {
+    local schedule="${1:-}"
+    [[ "$schedule" != *$'\n'* && "$schedule" != *$'\r'* && "$schedule" != *$'\t'* ]] || return 1
+    [[ "$schedule" =~ ^[0-9*/,-]+\ [0-9*/,-]+\ [0-9*/,-]+\ [0-9*/,-]+\ [0-9*/,-]+$ ]] || return 1
+
+    local fields=()
+    read -r -a fields <<< "$schedule"
+    [ "${#fields[@]}" -eq 5 ] || return 1
+    validate_cron_field "${fields[0]}" 0 59 || return 1
+    validate_cron_field "${fields[1]}" 0 23 || return 1
+    validate_cron_field "${fields[2]}" 1 31 || return 1
+    validate_cron_field "${fields[3]}" 1 12 || return 1
+    validate_cron_field "${fields[4]}" 0 7
+}
+
 # Поиск существующей установки по Docker или конфигурационным файлам
 detect_existing_dir() {
     if [ -f "$CONFIG_FILE_RECORD" ]; then
-        local saved_dir
-        saved_dir="$(cat "$CONFIG_FILE_RECORD" | tr -d '[:space:]')"
-        if [ -n "$saved_dir" ] && [ -d "$saved_dir" ] && [ -f "$saved_dir/compose.yaml" ]; then
-            echo "$saved_dir"
+        local saved_dir canonical_dir
+        saved_dir="$(tr -d '\r\n' < "$CONFIG_FILE_RECORD")"
+        canonical_dir="$(canonicalize_install_dir "$saved_dir" 2>/dev/null || true)"
+        if [ -n "$canonical_dir" ] && ! is_protected_install_dir "$canonical_dir" && [ -d "$canonical_dir" ] && [ -f "$canonical_dir/compose.yaml" ]; then
+            echo "$canonical_dir"
             return
         fi
     fi
 
     # Проверяем, запущен ли контейнер в Docker и где лежит его compose
     if command -v docker &>/dev/null; then
-        local docker_workdir
+        local docker_workdir canonical_dir
         docker_workdir="$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}' geo-routing-server 2>/dev/null || true)"
-        if [ -n "$docker_workdir" ] && [ -d "$docker_workdir" ] && [ -f "$docker_workdir/compose.yaml" ]; then
-            save_install_dir "$docker_workdir"
-            echo "$docker_workdir"
+        canonical_dir="$(canonicalize_install_dir "$docker_workdir" 2>/dev/null || true)"
+        if [ -n "$canonical_dir" ] && ! is_protected_install_dir "$canonical_dir" && [ -d "$canonical_dir" ] && [ -f "$canonical_dir/compose.yaml" ]; then
+            save_install_dir "$canonical_dir"
+            echo "$canonical_dir"
             return
         fi
     fi
@@ -661,14 +782,24 @@ get_install_dir() {
     if [ -n "$detected" ]; then
         echo "$detected"
     elif [ -f "$CONFIG_FILE_RECORD" ]; then
-        cat "$CONFIG_FILE_RECORD" | tr -d '[:space:]'
+        local saved_dir canonical_dir
+        saved_dir="$(tr -d '\r\n' < "$CONFIG_FILE_RECORD")"
+        canonical_dir="$(canonicalize_install_dir "$saved_dir" 2>/dev/null || true)"
+        if [ -n "$canonical_dir" ] && ! is_protected_install_dir "$canonical_dir"; then
+            echo "$canonical_dir"
+        else
+            echo "/opt/geo-routing-server"
+        fi
     else
         echo "/opt/geo-routing-server"
     fi
 }
 
 save_install_dir() {
-    echo "$1" > "$CONFIG_FILE_RECORD"
+    local canonical_dir
+    canonical_dir="$(canonicalize_install_dir "${1:-}")" || return 1
+    is_protected_install_dir "$canonical_dir" && return 1
+    printf '%s\n' "$canonical_dir" > "$CONFIG_FILE_RECORD"
 }
 
 create_cli_shortcut() {
@@ -679,9 +810,8 @@ create_cli_shortcut() {
 #!/usr/bin/env bash
 TARGET_SCRIPT="$target_dir/install.sh"
 if [ ! -s "\$TARGET_SCRIPT" ] || ! grep -q "Geo Routing Server" "\$TARGET_SCRIPT" 2>/dev/null; then
-    mkdir -p "$target_dir"
-    curl -fsSL "https://raw.githubusercontent.com/xdeptu5/geo-routing-server/main/install.sh" -o "\$TARGET_SCRIPT" 2>/dev/null || true
-    chmod +x "\$TARGET_SCRIPT" 2>/dev/null || true
+    echo "geo-routing-server: install.sh is missing; reinstall it from a reviewed release." >&2
+    exit 1
 fi
 exec bash "\$TARGET_SCRIPT" "\$@"
 EOF
@@ -965,6 +1095,7 @@ REMNAWAVE_BASE_URL=${input_base}
 REMNAWAVE_TOKEN=${input_token}
 ${cf_env}${squads_env}
 EOF
+        secure_env_file "$env_file"
         echo -e "\n${GREEN}[+] Настройки Remnawave сохранены! Перезапускаем контейнер...${NC}"
         cd "$target_dir"
         local saved_net
@@ -982,54 +1113,15 @@ EOF
 }
 
 update_script_only() {
-    local target_dir
-    target_dir="$(get_install_dir)"
     print_header
     if [ "${UI_LANG:-ru}" = "en" ]; then
-        echo -e "${BOLD}[>] Updating management script from GitHub...${NC}\n"
+        echo -e "${YELLOW}[!] Automatic management-script updates are disabled.${NC}"
+        echo -e "Download a reviewed release manually, inspect install.sh, then replace the local file.\n"
     else
-        echo -e "${BOLD}[>] Обновление скрипта управления из GitHub...${NC}\n"
+        echo -e "${YELLOW}[!] Автоматическое обновление скрипта управления отключено.${NC}"
+        echo -e "Скачайте проверенный релиз вручную, изучите install.sh и только затем замените локальный файл.\n"
     fi
-
-    local cur_v="${SCRIPT_VERSION}"
-    if curl -fsSL "https://raw.githubusercontent.com/xdeptu5/geo-routing-server/main/install.sh" -o "$target_dir/install.sh.new" 2>/dev/null; then
-        if bash -n "$target_dir/install.sh.new" 2>/dev/null; then
-            local new_v
-            new_v=$(grep -E '^SCRIPT_VERSION=' "$target_dir/install.sh.new" | head -n 1 | cut -d'"' -f2 || true)
-            mv "$target_dir/install.sh.new" "$target_dir/install.sh"
-            chmod +x "$target_dir/install.sh"
-            create_cli_shortcut "$target_dir"
-            rm -f /tmp/.geoserver_ver_cache 2>/dev/null || true
-            if [ -n "$new_v" ] && [ "$new_v" != "$cur_v" ]; then
-                if [ "${UI_LANG:-ru}" = "en" ]; then
-                    echo -e "${GREEN}[+] Script successfully updated:${NC} v${cur_v} → ${BOLD}v${new_v}${NC}\n"
-                else
-                    echo -e "${GREEN}[+] Скрипт успешно обновлён:${NC} v${cur_v} → ${BOLD}v${new_v}${NC}\n"
-                fi
-            else
-                if [ "${UI_LANG:-ru}" = "en" ]; then
-                    echo -e "${GREEN}[+] Script is already at the latest version:${NC} v${cur_v}\n"
-                else
-                    echo -e "${GREEN}[+] У вас уже установлена актуальная версия скрипта:${NC} v${cur_v}\n"
-                fi
-            fi
-        else
-            rm -f "$target_dir/install.sh.new"
-            if [ "${UI_LANG:-ru}" = "en" ]; then
-                echo -e "${RED}[!] Downloaded script contains syntax errors. Update canceled.${NC}\n"
-            else
-                echo -e "${RED}[!] Скачанный скрипт содержит ошибки синтаксиса. Обновление отменено.${NC}\n"
-            fi
-        fi
-    else
-        if [ "${UI_LANG:-ru}" = "en" ]; then
-            echo -e "${RED}[!] Failed to download script. Check internet connection.${NC}\n"
-        else
-            echo -e "${RED}[!] Не удалось загрузить скрипт. Проверьте интернет-соединение.${NC}\n"
-        fi
-    fi
-    pause_menu "Нажмите Enter для перезапуска меню..."
-    exec bash "$target_dir/install.sh"
+    pause_menu
 }
 
 update_project() {
@@ -1042,34 +1134,14 @@ update_project() {
         echo -e "${BOLD}[>] Комплексное обновление geo-routing-server...${NC}\n"
     fi
 
-    # [1/3] Проверка и обновление скрипта управления
+    # [1/3] Скрипт управления остаётся без изменений: автозагрузка кода отключена.
     if [ "${UI_LANG:-ru}" = "en" ]; then
-        echo -e "${CYAN}${BOLD}[1/3] Checking and updating management script...${NC}"
+        echo -e "${CYAN}${BOLD}[1/3] Keeping the installed management script...${NC}"
     else
-        echo -e "${CYAN}${BOLD}[1/3] Проверка и обновление скрипта управления...${NC}"
+        echo -e "${CYAN}${BOLD}[1/3] Скрипт управления остаётся без изменений...${NC}"
     fi
 
-    local cur_v="${SCRIPT_VERSION}"
-    if curl -fsSL -m 3 "https://raw.githubusercontent.com/xdeptu5/geo-routing-server/main/install.sh" -o "$target_dir/install.sh.new" 2>/dev/null; then
-        if bash -n "$target_dir/install.sh.new" 2>/dev/null; then
-            local new_v
-            new_v=$(grep -E '^SCRIPT_VERSION=' "$target_dir/install.sh.new" | head -n 1 | cut -d'"' -f2 || true)
-            mv "$target_dir/install.sh.new" "$target_dir/install.sh"
-            chmod +x "$target_dir/install.sh"
-            create_cli_shortcut "$target_dir"
-            rm -f /tmp/.geoserver_ver_cache 2>/dev/null || true
-            if [ -n "$new_v" ] && [ "$new_v" != "$cur_v" ]; then
-                echo -e "      ${GREEN}[+] Скрипт обновлён:${NC} v${cur_v} → ${BOLD}v${new_v}${NC}"
-            else
-                echo -e "      ${GREEN}[+] Скрипт актуален:${NC} v${cur_v}"
-            fi
-        else
-            rm -f "$target_dir/install.sh.new"
-            echo -e "      ${YELLOW}[!] Синтаксическая ошибка в удаленном скрипте, оставлена текущая версия.${NC}"
-        fi
-    else
-        echo -e "      ${YELLOW}[!] Не удалось загрузить скрипт из GitHub, переход к образу.${NC}"
-    fi
+    echo -e "      ${YELLOW}[i] Автозагрузка install.sh из ветки main отключена.${NC}"
 
     # [2/3] Загрузка свежего Docker-образа
     if [ "${UI_LANG:-ru}" = "en" ]; then
@@ -1289,6 +1361,7 @@ TELEGRAM_CHAT_ID=${input_chat}
 TELEGRAM_THREAD_ID=${input_thread}
 TELEGRAM_NOTIFY_SUCCESS=${input_notify}
 EOF
+        secure_env_file "$env_file"
         echo -e "\n${GREEN}[+] Настройки Telegram сохранены в .env!${NC}"
         echo -e "${YELLOW}[*] Перезапускаем контейнер для применения настроек...${NC}"
         cd "$target_dir"
@@ -1321,25 +1394,11 @@ uninstall_project() {
         # Принудительное удаление контейнера на случай, если compose.yaml был поврежден
         docker rm -f geo-routing-server 2>/dev/null || true
 
-        # Безопасное удаление каталога установки с защитой системных папок
+        # Удаляем каталог только при маркере, созданном установщиком.
         if [ -n "$target_dir" ] && [ -d "$target_dir" ]; then
-            case "$target_dir" in
-                /|/root|/home|/opt|/var|/usr|/etc|/bin|/sbin|/tmp)
-                    echo -e "${YELLOW}[!] Каталог $target_dir является системным. Удаляются только файлы geo-routing-server...${NC}"
-                    rm -f "$target_dir/compose.yaml" "$target_dir/docker-compose.yml" "$target_dir/.env" "$target_dir/.env.backup" "$target_dir/.sync.lock" 2>/dev/null || true
-                    rm -rf "$target_dir/custom_geo" 2>/dev/null || true
-                    ;;
-                *)
-                    if [ -f "$target_dir/compose.yaml" ] && grep -q "geo-routing-server" "$target_dir/compose.yaml" 2>/dev/null; then
-                        rm -rf "$target_dir"
-                    elif [ -f "$target_dir/.env" ] && grep -q "ROUTING_TOKEN" "$target_dir/.env" 2>/dev/null; then
-                        rm -rf "$target_dir"
-                    else
-                        echo -e "${YELLOW}[!] В каталоге $target_dir не обнаружен маркер geo-routing-server. Удаляются только файлы конфигурации...${NC}"
-                        rm -f "$target_dir/compose.yaml" "$target_dir/docker-compose.yml" "$target_dir/.env" "$target_dir/.env.backup" 2>/dev/null || true
-                    fi
-                    ;;
-            esac
+            if ! reset_install_dir "$target_dir"; then
+                echo -e "${YELLOW}[!] Каталог $target_dir не имеет маркера geo-routing-server. Каталог сохранён.${NC}"
+            fi
         fi
 
         rm -f "$CONFIG_FILE_RECORD" "$LANG_RECORD"
@@ -1372,10 +1431,11 @@ install_wizard() {
     fi
     echo -e "  ${DIM}Каталог, куда будут сохранены файлы compose.yaml и .env${NC}"
     read -r -p "  ▸ Путь [Enter = ${current_suggested_dir}]: " input_dir
-    input_dir="$(echo "$input_dir" | tr -d '\r' | sed 's/[^a-zA-Z0-9_\/\.-]//g')"
     INSTALL_DIR="${input_dir:-$current_suggested_dir}"
-    INSTALL_DIR="$(echo "$INSTALL_DIR" | tr -d '\r' | sed 's/[^a-zA-Z0-9_\/\.-]//g')"
-    mkdir -p "$INSTALL_DIR"
+    if ! INSTALL_DIR="$(prepare_install_dir "$INSTALL_DIR")"; then
+        echo -e "${RED}[!] Укажите абсолютный отдельный каталог для geo-routing-server. Общие и непроектные каталоги запрещены.${NC}"
+        return 1
+    fi
     chmod 755 "$INSTALL_DIR" 2>/dev/null || true
     save_install_dir "$INSTALL_DIR"
     echo -e "  ${GREEN}[+] Каталог сохранён: ${BOLD}$INSTALL_DIR${NC}\n"
@@ -1947,6 +2007,10 @@ CLOUDFLARE_ZERO_TRUST_CLIENT_SECRET=${prev_cf_secret}
         3)
             read -r -p "  ▸ Введите cron-выражение [${prev_schedule:-0 10 * * *}]: " custom_sched
             SCHEDULE="${custom_sched:-${prev_schedule:-0 10 * * *}}"
+            if ! validate_cron_schedule "$SCHEDULE"; then
+                echo -e "  ${RED}[!] Неверное cron-выражение. Используется расписание 0 10 * * *.${NC}"
+                SCHEDULE="0 10 * * *"
+            fi
             ;;
         *) SCHEDULE="0 10 * * *" ;;
     esac
@@ -2063,7 +2127,7 @@ CLOUDFLARE_ZERO_TRUST_CLIENT_SECRET=${prev_cf_secret}
         echo "TELEGRAM_NOTIFY_SUCCESS=${TG_NOTIFY_SUCCESS}"
         [ -n "$EXT_NETWORK" ] && echo "DOCKER_NETWORK=${EXT_NETWORK}"
     } > "$INSTALL_DIR/.env"
-    chmod 644 "$INSTALL_DIR/.env" 2>/dev/null || true
+    secure_env_file "$INSTALL_DIR/.env"
     [ -f "$INSTALL_DIR/.env.backup" ] && chmod 600 "$INSTALL_DIR/.env.backup" 2>/dev/null || true
 
     local networks_block=""
@@ -2114,18 +2178,17 @@ EOF
     chmod 755 "$INSTALL_DIR" 2>/dev/null || true
     chmod 755 "$INSTALL_DIR/custom_geo" 2>/dev/null || true
     chmod 644 "$INSTALL_DIR/compose.yaml" 2>/dev/null || true
-    chmod 644 "$INSTALL_DIR/.env" 2>/dev/null || true
+    secure_env_file "$INSTALL_DIR/.env"
     [ -f "$INSTALL_DIR/.env.backup" ] && chmod 600 "$INSTALL_DIR/.env.backup" 2>/dev/null || true
     rm -f "$INSTALL_DIR/docker-compose.yml" 2>/dev/null || true
 
-    # Сохраняем скрипт установщика в каталог проекта для работы команды geoserver
-    if [ -f "$0" ] && grep -q "Geo Routing Server" "$0" 2>/dev/null; then
-        cp "$0" "$INSTALL_DIR/install.sh" 2>/dev/null || true
+    # Сохраняем именно выполняемый скрипт; не подменяем его новым кодом из сети.
+    if grep -q "Geo Routing Server" "$0" 2>/dev/null && cat "$0" > "$INSTALL_DIR/install.sh"; then
+        chmod +x "$INSTALL_DIR/install.sh"
+        create_cli_shortcut "$INSTALL_DIR"
     else
-        curl -fsSL "https://raw.githubusercontent.com/xdeptu5/geo-routing-server/main/install.sh" -o "$INSTALL_DIR/install.sh" 2>/dev/null || true
+        echo -e "${YELLOW}[!] Не удалось сохранить запущенный install.sh. Контейнер будет установлен, но команда geoserver не создана.${NC}"
     fi
-    chmod +x "$INSTALL_DIR/install.sh" 2>/dev/null || true
-    create_cli_shortcut "$INSTALL_DIR"
 
     echo -e "${BLUE}[*] Загрузка и запуск контейнера Geo Routing Server...${NC}"
     cd "$INSTALL_DIR"
@@ -2152,6 +2215,7 @@ EOF
             new_port="${new_port:-$new_free_port}"
             HTTP_PORT="$new_port"
             sed -i "s/^HTTP_PORT=.*/HTTP_PORT=${HTTP_PORT}/" "$INSTALL_DIR/.env"
+            secure_env_file "$INSTALL_DIR/.env"
             sed -i "s/HTTP_PORT:-[0-9]*/HTTP_PORT:-${HTTP_PORT}/" "$INSTALL_DIR/compose.yaml"
             echo -e "${BLUE}[*] Повторная попытка запуска на порту $HTTP_PORT...${NC}\n"
         else
@@ -2446,8 +2510,10 @@ main() {
                 main_menu
                 ;;
             1) 
-                if [ -n "$target_dir" ] && [ "$target_dir" != "/" ] && [ "$target_dir" != "/root" ] && [ -d "$target_dir" ]; then
-                    rm -rf "$target_dir"
+                if ! reset_install_dir "$target_dir"; then
+                    echo -e "${RED}[!] Reset отменён: каталог не принадлежит geo-routing-server или небезопасен для удаления.${NC}"
+                    main_menu
+                    return
                 fi
                 install_wizard
                 main_menu
