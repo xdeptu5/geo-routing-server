@@ -233,10 +233,7 @@ Happ принимает правила через Base64-диплинк `happ://
 | `SYNC_ON_START` | `true` | Выполнять синхронизацию при запуске контейнера |
 | `GEOIP_SOURCE_URL` | *пусто* | Кастомный источник `geoip.dat` |
 | `GEOSITE_SOURCE_URL` | *пусто* | Кастомный источник `geosite.dat` |
-| `ALLOW_PRIVATE_GEO_SOURCES` | `false` | Разрешить адреса внутренней сети из `DEFAULT.JSON` |
 | `ROUTING_SOURCE_REPO` | *roscomvpn* | Репозиторий правил GitHub |
-| `ROUTING_CONFIG_FILES_HAPP` | *пусто* | Список JSON HAPP для собственного raw-источника |
-| `ROUTING_CONFIG_FILES_INCY` | *пусто* | Список JSON INCY для собственного raw-источника |
 | **Telegram** | | |
 | `TELEGRAM_BOT_TOKEN` | *пусто* | Токен бота Telegram для алертов |
 | `TELEGRAM_CHAT_ID` | *пусто* | ID чата / группы |

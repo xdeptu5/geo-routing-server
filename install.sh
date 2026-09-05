@@ -653,13 +653,12 @@ has_project_marker() {
     local target_dir="${1:-}"
     [ -f "$target_dir/.geo-routing-server-install" ] && return 0
 
-    # Установки до появления маркера опознаём по compose-файлу. Это позволяет
-    # штатно обновлять и удалять старые установки, не принимая любой каталог за проект.
     local compose_file=""
     [ -f "$target_dir/compose.yaml" ] && compose_file="$target_dir/compose.yaml"
     [ -z "$compose_file" ] && [ -f "$target_dir/docker-compose.yml" ] && compose_file="$target_dir/docker-compose.yml"
     [ -n "$compose_file" ] || return 1
-    grep -qE '^[[:space:]]*container_name:[[:space:]]*geo-routing-server[[:space:]]*$' "$compose_file" 2>/dev/null
+    grep -qE '^[[:space:]]*container_name:[[:space:]]*geo-routing-server[[:space:]]*$' "$compose_file" 2>/dev/null || return 1
+    [ -f "$target_dir/.env" ] && grep -q '^ROUTING_TOKEN=' "$target_dir/.env" 2>/dev/null
 }
 
 prepare_install_dir() {

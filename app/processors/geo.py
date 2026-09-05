@@ -75,7 +75,7 @@ class GeoManager:
                     url,
                     f"global_{geo_type}_{url_hash}",
                     kind="binary",
-                    trusted_url=Config.ALLOW_PRIVATE_GEO_SOURCES,
+                    trusted_url=False,
                 )
                 self._memory_cache[url] = data
                 return data
