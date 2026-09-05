@@ -16,7 +16,7 @@ DIM='\033[2m'
 NC='\033[0m'
 
 # Повышайте версию при каждом изменении install.sh. GitHub Actions это проверяет.
-SCRIPT_VERSION="1.0.2"
+SCRIPT_VERSION="1.0.3"
 CHECKED_REMOTE_VER=""
 UPDATE_AVAILABLE=false
 
@@ -917,11 +917,13 @@ show_proxy_snippets() {
 
     local domain="geo.example.com"
     local port="8080"
+    local token="TOKEN"
     local clients="HAPP,INCY"
 
     if [ -f "$env_file" ]; then
         domain=$(grep "^DOMAIN=" "$env_file" | cut -d'=' -f2- || echo "geo.example.com")
         port=$(grep "^HTTP_PORT=" "$env_file" | cut -d'=' -f2- || echo "8080")
+        token=$(grep "^ROUTING_TOKEN=" "$env_file" | cut -d'=' -f2- || echo "TOKEN")
         clients=$(grep "^ENABLED_CLIENTS=" "$env_file" | cut -d'=' -f2- || echo "HAPP,INCY")
     fi
 
@@ -935,18 +937,10 @@ show_proxy_snippets() {
     echo -e "${CYAN}${BOLD}===============================================================================${NC}"
     echo -e "${YELLOW}${BOLD}  ГОТОВЫЕ КОНФИГУРАЦИИ ДЛЯ ВАШЕГО РЕВЕРС-ПРОКСИ (HTTPS)${NC}"
     echo -e "${CYAN}${BOLD}===============================================================================${NC}"
-    echo -e "Чтобы ссылки стали доступны по безопасному HTTPS, добавьте один из блоков:\n"
+    echo -e "Выберите конфигурацию под ваш веб-сервер и сценарий развёртывания:\n"
 
-    echo -e "${GREEN}${BOLD}[ ВАРИАНТ 1: CADDY ]${NC} (добавьте в /etc/caddy/Caddyfile):"
-    echo -e "${CYAN}-------------------------------------------------------------------------------${NC}"
-    echo -e "${BOLD}${domain} {${NC}"
-    echo -e "    ${BOLD}reverse_proxy 127.0.0.1:${port}${NC}"
-    echo -e "${BOLD}}${NC}"
-    echo -e "${CYAN}-------------------------------------------------------------------------------${NC}"
-    echo -e "После сохранения примените: ${YELLOW}sudo systemctl reload caddy${NC}\n"
-
-    echo -e "${GREEN}${BOLD}[ ВАРИАНТ 2: NGINX ]${NC} (в конфигурацию вашего сайта с SSL):"
-    echo -e "${CYAN}-------------------------------------------------------------------------------${NC}"
+    echo -e "${GREEN}${BOLD}[ ВАРИАНТ 1: NGINX ]${NC}"
+    echo -e "  ${CYAN}── Сценарий А: Отдельный субдомен (${domain}) ──${NC}"
     echo -e "${BOLD}server {${NC}"
     echo -e "    ${BOLD}server_name ${domain};${NC}\n"
     echo -e "    ${BOLD}location / {${NC}"
@@ -957,13 +951,36 @@ show_proxy_snippets() {
     echo -e "        ${BOLD}proxy_set_header X-Forwarded-Proto \$scheme;${NC}"
     echo -e "    ${BOLD}}${NC}"
     echo -e "${BOLD}}${NC}"
-    echo -e "${CYAN}-------------------------------------------------------------------------------${NC}"
-    echo -e "После сохранения примените: ${YELLOW}sudo nginx -t && sudo nginx -s reload${NC}\n"
+    echo -e "\n  ${CYAN}── Сценарий Б: Существующий сайт (добавьте внутрь вашего server { ... }) ──${NC}"
+    echo -e "${BOLD}    location /${token}/ {${NC}"
+    echo -e "        ${BOLD}proxy_pass http://127.0.0.1:${port};${NC}"
+    echo -e "        ${BOLD}proxy_set_header Host \$host;${NC}"
+    echo -e "        ${BOLD}proxy_set_header X-Real-IP \$remote_addr;${NC}"
+    echo -e "        ${BOLD}proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;${NC}"
+    echo -e "        ${BOLD}proxy_set_header X-Forwarded-Proto \$scheme;${NC}"
+    echo -e "${BOLD}    }${NC}"
+    echo -e "  После сохранения примените: ${YELLOW}sudo nginx -t && sudo nginx -s reload${NC}\n"
 
-    echo -e "${GREEN}${BOLD}[ ВАРИАНТ 3: NGINX PROXY MANAGER (GUI) ]${NC}:"
-    echo -e "Forward Hostname / IP: ${BOLD}127.0.0.1${NC} (или IP хоста / имя контейнера, если NPM в Docker)"
-    echo -e "Forward Port:          ${BOLD}${port}${NC}"
-    echo -e "SSL:                   ${BOLD}Request a new SSL Certificate (Force SSL: ON)${NC}"
+    echo -e "${GREEN}${BOLD}[ ВАРИАНТ 2: CADDY ]${NC} (/etc/caddy/Caddyfile)"
+    echo -e "  ${CYAN}── Сценарий А: Отдельный субдомен (${domain}) ──${NC}"
+    echo -e "${BOLD}${domain} {${NC}"
+    echo -e "    ${BOLD}reverse_proxy 127.0.0.1:${port}${NC}"
+    echo -e "${BOLD}}${NC}"
+    echo -e "\n  ${CYAN}── Сценарий Б: Существующий сайт (добавьте внутрь блока вашего домена) ──${NC}"
+    echo -e "${BOLD}    handle /${token}/* {${NC}"
+    echo -e "        ${BOLD}reverse_proxy 127.0.0.1:${port}${NC}"
+    echo -e "${BOLD}    }${NC}"
+    echo -e "  После сохранения примените: ${YELLOW}sudo systemctl reload caddy${NC}\n"
+
+    echo -e "${GREEN}${BOLD}[ ВАРИАНТ 3: NGINX PROXY MANAGER (GUI) ]${NC}"
+    echo -e "  ${CYAN}── Сценарий А: Отдельный Proxy Host ──${NC}"
+    echo -e "    Domain Names:          ${BOLD}${domain}${NC}"
+    echo -e "    Forward Hostname / IP: ${BOLD}127.0.0.1${NC}   Port: ${BOLD}${port}${NC}"
+    echo -e "    SSL:                   Request a new SSL Certificate (Force SSL: ON)"
+    echo -e "\n  ${CYAN}── Сценарий Б: На существующем Proxy Host сайта ──${NC}"
+    echo -e "    В настройках вашего Proxy Host перейдите во вкладку ${BOLD}Custom Locations${NC} -> Add location:"
+    echo -e "    Location:              ${BOLD}/${token}/${NC}"
+    echo -e "    Forward Hostname / IP: ${BOLD}127.0.0.1${NC}   Port: ${BOLD}${port}${NC}"
     echo -e "${CYAN}===============================================================================${NC}\n"
     pause_menu
 }
@@ -1833,7 +1850,9 @@ install_wizard() {
 
     if [ "$NEEDS_PUBLIC_DOMAIN" = true ]; then
         ui_step "3/8" "Публичный домен для HTTPS"
-        echo -e "  ${DIM}Имя хоста, по которому клиенты будут скачивать правила и базы${NC}"
+        echo -e "  ${DIM}Имя хоста, по которому клиенты будут скачивать правила и базы.${NC}"
+        echo -e "  ${DIM}💡 Подходит как отдельный субдомен (geo.example.com), так и${NC}"
+        echo -e "  ${DIM}   СУЩЕСТВУЮЩИЙ домен с сайтом — трафик изолирован в пути /<TOKEN>/${NC}"
         read -r -p "  ▸ Домен [${prev_domain:-geo.example.com}]: " input_domain
         DOMAIN="${input_domain:-${prev_domain:-geo.example.com}}"
         DOMAIN="$(echo "$DOMAIN" | tr -d '[:space:]' | sed -e 's~^https\?://~~' -e 's~/*$~~')"
@@ -1864,24 +1883,85 @@ install_wizard() {
 
         # ШАГ 5: Локальный порт
         ui_step "5/8" "Локальный порт веб-сервера"
+        echo -e "  ${DIM}Локальный порт для реверс-прокси (Nginx, Caddy, NPM) на 127.0.0.1${NC}"
+
+        # Если визард запущен для перенастройки и старый контейнер запущен — останавливаем его,
+        # чтобы освободить его порт (напр. 8080) и не предлагать лишний порт (8081, 8082 и т.д.)
+        if command -v docker &>/dev/null && docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "geo-routing-server"; then
+            echo -e "  ${YELLOW}[*] Остановка ранее запущенного контейнера geo-routing-server для перенастройки...${NC}"
+            docker stop geo-routing-server 2>/dev/null || true
+            sleep 1
+        fi
+
         local suggested_port="${prev_port:-8080}"
         if is_port_in_use "$suggested_port"; then
-            local free_p
-            free_p="$(find_free_port 8081)"
-            echo -e "  ${YELLOW}[!] Порт $suggested_port занят. Предлагаем свободный порт: ${BOLD}${free_p}${NC}"
-            suggested_port="$free_p"
+            local c_holder=""
+            if command -v docker &>/dev/null; then
+                c_holder=$(docker ps --format '{{.Names}}' 2>/dev/null | while read -r cn; do
+                    if docker port "$cn" 2>/dev/null | grep -qE "[:.]${suggested_port}$"; then
+                        echo "$cn"
+                        break
+                    fi
+                done)
+            fi
+            if [ -n "$c_holder" ]; then
+                echo -e "  ${YELLOW}[!] Порт $suggested_port занят Docker-контейнером: ${BOLD}${c_holder}${NC}"
+                local stop_c_idx
+                stop_c_idx=$(tui_select "Что сделать с занятым портом $suggested_port?" 0 \
+                    "Остановить контейнер $c_holder и занять порт $suggested_port" \
+                    "Выбрать другой свободный порт")
+                if [ "$stop_c_idx" -eq 0 ]; then
+                    docker stop "$c_holder" 2>/dev/null || true
+                    sleep 1
+                    echo -e "  ${GREEN}[+] Контейнер $c_holder остановлен. Порт $suggested_port свободен.${NC}"
+                else
+                    suggested_port="$(find_free_port 8081)"
+                fi
+            else
+                local free_p
+                free_p="$(find_free_port 8081)"
+                echo -e "  ${YELLOW}[!] Порт $suggested_port занят другим процессом. Предлагаем свободный порт: ${BOLD}${free_p}${NC}"
+                suggested_port="$free_p"
+            fi
         fi
+
         read -r -p "  ▸ Порт веб-сервера [${suggested_port}]: " input_port
         HTTP_PORT="${input_port:-$suggested_port}"
         while is_port_in_use "$HTTP_PORT"; do
-            echo -e "${RED}[!] Порт $HTTP_PORT занят другим процессом!${NC}"
+            local c_busy=""
+            if command -v docker &>/dev/null; then
+                c_busy=$(docker ps --format '{{.Names}}' 2>/dev/null | while read -r cn; do
+                    if docker port "$cn" 2>/dev/null | grep -qE "[:.]${HTTP_PORT}$"; then
+                        echo "$cn"
+                        break
+                    fi
+                done)
+            fi
+            if [ -n "$c_busy" ]; then
+                echo -e "  ${YELLOW}[!] Порт $HTTP_PORT занят контейнером: ${BOLD}${c_busy}${NC}"
+                local act_idx
+                act_idx=$(tui_select "Остановить контейнер $c_busy?" 0 \
+                    "Да, остановить $c_busy и занять порт $HTTP_PORT" \
+                    "Нет, выбрать другой свободный порт")
+                if [ "$act_idx" -eq 0 ]; then
+                    docker stop "$c_busy" 2>/dev/null || true
+                    sleep 1
+                    break
+                fi
+            else
+                echo -e "  ${RED}[!] Порт $HTTP_PORT занят другим процессом!${NC}"
+            fi
             local next_free
             next_free="$(find_free_port $((HTTP_PORT + 1)))"
-            read -r -p "Введите другой порт [${next_free}]: " input_port
+            read -r -p "  ▸ Введите другой порт [${next_free}]: " input_port
             HTTP_PORT="${input_port:-$next_free}"
         done
-        echo -e "${GREEN}[+] Порт: $HTTP_PORT${NC}\n"
+        echo -e "  ${GREEN}[+] Порт: $HTTP_PORT${NC}\n"
     else
+        if command -v docker &>/dev/null && docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "geo-routing-server"; then
+            docker stop geo-routing-server 2>/dev/null || true
+            sleep 1
+        fi
         local default_local_port="${prev_port:-8080}"
         if is_port_in_use "$default_local_port"; then
             default_local_port="$(find_free_port 8081)"
