@@ -16,7 +16,7 @@ DIM='\033[2m'
 NC='\033[0m'
 
 # Повышайте версию при каждом изменении install.sh. GitHub Actions это проверяет.
-SCRIPT_VERSION="1.1.4"
+SCRIPT_VERSION="1.1.5"
 CHECKED_REMOTE_VER=""
 UPDATE_AVAILABLE=false
 CHECKED_REMOTE_IMG_DIGEST=""
@@ -370,11 +370,7 @@ print_header() {
         clear 2>/dev/null || true
     fi
     printf '\n%bGEO ROUTING SERVER%b  v%s\n' "${CYAN}${BOLD}" "$NC" "$SCRIPT_VERSION"
-    if [ "${UI_LANG:-ru}" = en ]; then
-        printf '  Script: %s • Docker: %s\n\n' "$(component_status_label "${SCRIPT_CHECK_STATUS:-unchecked}")" "$(component_status_label "${IMAGE_CHECK_STATUS:-unchecked}")"
-    else
-        printf '  Скрипт: %s • Docker: %s\n\n' "$(component_status_label "${SCRIPT_CHECK_STATUS:-unchecked}")" "$(component_status_label "${IMAGE_CHECK_STATUS:-unchecked}")"
-    fi
+    printf '\n'
 }
 
 ui_step() {
@@ -2530,6 +2526,9 @@ manage_container_menu() {
 
 update_server_menu() {
     while true; do
+        # Network requests belong only to the update screen, never to the main menu.
+        check_script_version
+        check_docker_image_version
         print_header
         local img_status script_status
         img_status=$(component_status_label "${IMAGE_CHECK_STATUS:-unchecked}")
