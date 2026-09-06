@@ -16,7 +16,7 @@ DIM='\033[2m'
 NC='\033[0m'
 
 # Повышайте версию при каждом изменении install.sh. GitHub Actions это проверяет.
-SCRIPT_VERSION="1.1.1"
+SCRIPT_VERSION="1.1.2"
 CHECKED_REMOTE_VER=""
 UPDATE_AVAILABLE=false
 CHECKED_REMOTE_IMG_DIGEST=""
@@ -614,6 +614,7 @@ save_install_dir() {
 create_cli_shortcut() {
     local target_dir="$1" wrapper_script="/usr/local/bin/geoserver"
     local wrapper_tmp
+    mkdir -p /usr/local/bin || return 1
     wrapper_tmp=$(mktemp /usr/local/bin/.geoserver.XXXXXX) || return 1
     {
         printf '#!/usr/bin/env bash\n'
@@ -639,6 +640,16 @@ WRAPPER
     chmod 755 "$wrapper_tmp"
     mv -- "$wrapper_tmp" "$wrapper_script"
     ln -sf "$wrapper_script" /usr/bin/geoserver 2>/dev/null || true
+}
+
+# Existing installations from older releases may have no geoserver command yet.
+# A direct launch of install.sh repairs that compatibility path automatically.
+ensure_cli_shortcut() {
+    local target_dir="$1"
+    [ "$(id -u)" -eq 0 ] || return 0
+    [ -f "$target_dir/install.sh" ] || return 0
+    grep -q "Geo Routing Server" "$target_dir/install.sh" 2>/dev/null || return 0
+    create_cli_shortcut "$target_dir"
 }
 
 pause_menu() {
@@ -2853,6 +2864,9 @@ HELP
     
     # 1. Если compose-файл существует — это готовая рабочая установка
     if [ -d "$target_dir" ] && { [ -f "$target_dir/compose.yaml" ] || [ -f "$target_dir/docker-compose.yml" ]; }; then
+        if ! ensure_cli_shortcut "$target_dir"; then
+            echo -e "${YELLOW}[!] Не удалось создать команду geoserver. Запустите скрипт через root/sudo.${NC}"
+        fi
         main_menu
     # 2. Если каталога нет, либо в нем нет файла .env с токеном — это чистая установка!
     elif [ ! -d "$target_dir" ] || [ ! -f "$target_dir/.env" ] || ! grep -q '^ROUTING_TOKEN=' "$target_dir/.env" 2>/dev/null; then
