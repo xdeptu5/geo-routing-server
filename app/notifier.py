@@ -94,18 +94,45 @@ class TelegramNotifier:
                 
         geo_block = "\n".join(geo_lines) if geo_lines else "—"
         
-        # Формируем список ссылок на autorouting
-        autorouting_lines = []
+        # Формируем информацию о правилах и интеграциях
+        info_lines = []
+        rules = Config.ROUTING_RULES if Config.ROUTING_RULES else ["JSONSUB"]
+        
+        # 1. Интеграция с Remnawave API (если настроена)
+        from app.remnawave import RemnawaveSync
+        if RemnawaveSync.is_configured():
+            info_lines.append("⚡ <b>Remnawave API:</b> сквады маршрутизации синхронизированы")
+        elif "HAPP" in Config.ENABLED_CLIENTS:
+            happ_rules = [f"• <b>{r}:</b> <code>{base_url}/HAPP/{r}.DEEPLINK</code>" for r in rules]
+            happ_block = "\n".join(happ_rules)
+            info_lines.append(f"📱 <b>Happ (диплинки правил):</b>\n{happ_block}")
+
+        # 2. Ссылки на заголовок autorouting для Incy
         if "INCY" in Config.ENABLED_CLIENTS:
-            autorouting_lines.append(f"🔗 <b>Autorouting Header (Remnawave / Marzban):</b>\n<code>incy://autorouting/onadd/{base_url}/INCY/JSONSUB.JSON</code>")
+            incy_rules = [f"• <b>{r}:</b> <code>incy://autorouting/onadd/{base_url}/INCY/{r}.JSON</code>" for r in rules]
+            incy_block = "\n".join(incy_rules)
+            info_lines.append(f"🔗 <b>Autorouting Header (Incy):</b>\n{incy_block}")
             
-        autorouting_block = "\n\n".join(autorouting_lines)
+        extra_block = ("\n\n" + "\n\n".join(info_lines)) if info_lines else ""
         
         text = (
             f"🚀 <b>[Geo Routing Server] Вышли обновленные базы!</b>\n\n"
             f"🌐 <b>Домен:</b> <code>{safe_domain}</code>\n"
             f"⏱ <b>Время:</b> {now_str}\n\n"
-            f"📊 <b>Geo-базы:</b>\n{geo_block}\n\n"
-            f"{autorouting_block}"
+            f"📊 <b>Geo-базы:</b>\n{geo_block}"
+            f"{extra_block}"
         )
         cls._send_message(text)
+
+    @classmethod
+    def send_test_message(cls) -> bool:
+        """Отправляет тестовое уведомление для проверки настроек бота."""
+        safe_domain = html.escape(Config.DOMAIN)
+        text = (
+            f"🔔 <b>[Geo Routing Server] Тестовое уведомление</b>\n\n"
+            f"🌐 <b>Домен:</b> <code>{safe_domain}</code>\n"
+            f"✅ Связь с Telegram Bot API успешно установлена!\n"
+            f"Бот готов присылать отчёты об обновлениях баз и предупреждения об ошибках."
+        )
+        return cls._send_message(text)
+

@@ -16,7 +16,7 @@ DIM='\033[2m'
 NC='\033[0m'
 
 # Повышайте версию при каждом изменении install.sh. GitHub Actions это проверяет.
-SCRIPT_VERSION="1.0.13"
+SCRIPT_VERSION="1.0.14"
 CHECKED_REMOTE_VER=""
 UPDATE_AVAILABLE=false
 CHECKED_REMOTE_IMG_DIGEST=""
@@ -1620,7 +1620,35 @@ test_telegram() {
     fi
 }
 
+send_telegram_test_action() {
+    local target_dir
+    target_dir="$(get_install_dir)"
+    local env_file="$target_dir/.env"
+
+    local token=""
+    local chat=""
+    local thread=""
+    if [ -f "$env_file" ]; then
+        token=$(grep "^TELEGRAM_BOT_TOKEN=" "$env_file" | cut -d'=' -f2- || true)
+        chat=$(grep "^TELEGRAM_CHAT_ID=" "$env_file" | cut -d'=' -f2- || true)
+        thread=$(grep "^TELEGRAM_THREAD_ID=" "$env_file" | cut -d'=' -f2- || true)
+    fi
+
+    if [ -z "$token" ] || [ -z "$chat" ]; then
+        echo -e "\n${RED}${BOLD}[!] Telegram-уведомления не настроены!${NC}"
+        echo -e "Сначала укажите токен бота и Chat ID в пункте настройки.\n"
+        pause_menu
+        return 0
+    fi
+
+    echo -e "\n${BLUE}[*] Проверка отправки тестового сообщения...${NC}"
+    test_telegram "$token" "$chat" "$thread" || true
+    pause_menu
+    return 0
+}
+
 configure_telegram() {
+
     local target_dir
     target_dir="$(get_install_dir)"
     local env_file="$target_dir/.env"
@@ -2718,17 +2746,20 @@ configure_integrations_menu() {
         if [ "${UI_LANG:-ru}" = "en" ]; then
             choice=$(tui_select "Integration Settings:" 0 \
                 "Configure Remnawave API sync" \
-                "Configure Telegram notifications" \
+                "Configure / Change Telegram notifications" \
+                "Send Telegram test message" \
                 "Back to main menu")
         else
             choice=$(tui_select "Настройки интеграций:" 0 \
                 "Настроить прямую синхронизацию с Remnawave" \
                 "Настроить / Изменить Telegram-уведомления" \
+                "Отправить тестовое уведомление в Telegram" \
                 "Назад в главное меню")
         fi
         case "$choice" in
             0) configure_remnawave ;;
             1) configure_telegram ;;
+            2) send_telegram_test_action ;;
             *) return 0 ;;
         esac
     done
