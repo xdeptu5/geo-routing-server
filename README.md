@@ -4,7 +4,9 @@
 
 # 🚀 Geo Routing Server
 
-**Self-Hosted сервис для автономной раздачи geo-баз (`geoip.dat`, `geosite.dat`) и правил маршрутизации трафика (`HAPP`, `INCY`) с высокой доступностью и локальным кэшированием.**
+**Генератор и синхронизатор routing-правил для Happ, Incy и Remnawave: скачивает GeoIP/GeoSite, подготавливает клиентские JSON и deeplink, затем публикует результат на вашем сервере.**
+
+> Caddy или Nginx здесь нужны только для HTTPS-раздачи готовых файлов. Основная работа проекта — получение, адаптация и синхронизация правил.
 
 [![Docker Multi-Arch](https://img.shields.io/badge/docker-amd64%20%7C%20arm64-blue?logo=docker)](https://github.com/xdeptu5/geo-routing-server)
 [![GitHub Container Registry](https://img.shields.io/badge/image-ghcr.io%2Fxdeptu5%2Fgeo--routing--server-blue?logo=github)](https://github.com/xdeptu5/geo-routing-server/pkgs/container/geo-routing-server)
@@ -14,6 +16,14 @@
 [![Zero Dependencies](https://img.shields.io/badge/dependencies-standard%20library-brightgreen)](https://github.com/xdeptu5/geo-routing-server)
 
 </div>
+
+---
+
+## 🎯 Что делает проект
+
+1. Забирает GeoIP, GeoSite и исходные правила из upstream или локальных файлов.
+2. Подставляет нужные URL, создаёт JSON-подписки для Incy и deeplink для Happ.
+3. Публикует готовые файлы по HTTPS и, при настройке Remnawave, обновляет правила в его external squads.
 
 ---
 
