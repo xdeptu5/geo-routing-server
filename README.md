@@ -74,7 +74,9 @@ bash <(curl -fsSL https://raw.githubusercontent.com/xdeptu5/geo-routing-server/m
 
 ---
 
-### 🛠️ Способ 2. Ручной запуск через Docker Compose (для опытных пользователей / Portainer / Dockge / 1Panel)
+<details>
+<summary><b>🛠️ Способ 2. Ручной запуск через Docker Compose (Portainer / Dockge / 1Panel)</b></summary>
+<br>
 
 Если вы управляете стеками через **Dockge**, **Portainer**, **1Panel**, **Coolify** или разворачиваете сервис через CI/CD:
 
@@ -136,6 +138,9 @@ bash <(curl -fsSL https://raw.githubusercontent.com/xdeptu5/geo-routing-server/m
    ```
    > Статус `healthy` и строка `Synchronization completed successfully.` в логах подтверждают успешный запуск.
 
+</details>
+
+
 ---
 
 ## 🗺️ Сценарии развертывания
@@ -150,7 +155,9 @@ bash <(curl -fsSL https://raw.githubusercontent.com/xdeptu5/geo-routing-server/m
 | **4** | **Интеграция с Remnawave** | Генератор диплинков для сквадов Remnawave (базы на внешнем сервере) | `HAPP_DEEPLINK` (домен не требуется) |
 | **5** | **Только правила Incy** | Раздача JSON-подписки Incy по HTTPS, базы на внешнем узле | `INCY` + `PUBLIC_GEO_BASE_URL` |
 
-### Примеры конфигураций `.env` под каждый сценарий:
+<details>
+<summary><b>📋 Примеры готовых конфигураций .env под каждый сценарий</b></summary>
+<br>
 
 #### 1. Всё в одном (Раздача файлов + Remnawave API)
 Раздаёт базы и правила по HTTPS, а также автоматически обновляет правила маршрутизации в сквадах панели Remnawave:
@@ -204,6 +211,9 @@ ENABLED_CLIENTS=INCY
 PUBLIC_GEO_BASE_URL=https://geo-node.example.com/секретный_токен
 ```
 
+</details>
+
+
 ---
 
 ## 📱 Подключение клиентов
@@ -232,7 +242,9 @@ Happ принимает правила через Base64-диплинк `happ://
 
 ---
 
-## ⚙️ Сводная таблица параметров (`.env`)
+<details>
+<summary><b>⚙️ Полный справочник всех параметров конфигурации (.env)</b></summary>
+<br>
 
 | Переменная | По умолчанию | Описание |
 | :--- | :--- | :--- |
@@ -267,6 +279,8 @@ Happ принимает правила через Base64-диплинк `happ://
 | `CLOUDFLARE_ZERO_TRUST_CLIENT_ID` | *пусто* | Client ID сервисного токена Cloudflare Zero Trust |
 | `CLOUDFLARE_ZERO_TRUST_CLIENT_SECRET` | *пусто* | Client Secret сервисного токена Cloudflare Zero Trust |
 
+</details>
+
 ---
 
 ## 🌐 Настройка HTTPS Реверс-Прокси
@@ -275,9 +289,12 @@ Happ принимает правила через Base64-диплинк `happ://
 1. **Отдельный субдомен** (например, `geo.example.com`).
 2. **Существующий сайт** (проксирование только путей `/<ROUTING_TOKEN>/` без выделения нового домена).
 
-Готовые конфигурации под **Caddy**, **Nginx** и **Nginx Proxy Manager (NPM)** генерируются автоматически в меню `geoserver` (пункт 3).
+> 💡 **Автоматическая генерация конфигов:**  
+> Интерактивный генератор готовых конфигов под ваш домен и порт встроен прямо в меню `geoserver` (пункт `3`).
 
-### Примеры конфигурации:
+<details>
+<summary><b>📄 Примеры конфигураций для Caddy и Nginx</b></summary>
+<br>
 
 **Caddy (субдомен):**
 ```caddy
@@ -302,6 +319,9 @@ server {
     }
 }
 ```
+
+</details>
+
 
 ---
 
