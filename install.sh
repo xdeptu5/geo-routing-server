@@ -16,7 +16,7 @@ DIM='\033[2m'
 NC='\033[0m'
 
 # Повышайте версию при каждом изменении install.sh. GitHub Actions это проверяет.
-SCRIPT_VERSION="1.1.2"
+SCRIPT_VERSION="1.1.3"
 CHECKED_REMOTE_VER=""
 UPDATE_AVAILABLE=false
 CHECKED_REMOTE_IMG_DIGEST=""
@@ -32,7 +32,13 @@ handle_error() {
     trap - ERR
     [ "$code" -eq 0 ] && return 0
     if [ "$code" -eq 130 ] || [ "$code" -eq 143 ]; then
-        exit "$code"
+        # A cancelled nested dialog must return to the program, not close the user's shell.
+        if [ "${NONINTERACTIVE:-false}" != true ]; then
+            printf '\n[i] Действие отменено.\n' >&2
+            main_menu
+            exit 0
+        fi
+        return 0
     fi
     if [ "${UI_LANG:-ru}" = "en" ]; then
         printf '\n[!] Operation failed (code %s, line %s).\n' "$code" "$line" >&2
@@ -55,53 +61,104 @@ trap 'handle_error $LINENO' ERR
 tui_select() {
     local prompt_title="$1" default_idx="${2:-0}"
     shift 2
-    local items=("$@") action_count=0 back_idx=-1 item input pick
-    printf '%b\n' "$prompt_title" >&2
-    for item in "${items[@]}"; do
-        if [[ "$item" == HEADER:* ]]; then
-            printf '\n  %s\n' "${item#HEADER:}" >&2
-            continue
+    local raw_items=("$@") action_count=0
+    local visual_items=() is_header=() action_num=() visual_to_action=()
+    local line v_idx
+
+    for line in "${raw_items[@]}"; do
+        v_idx=${#visual_items[@]}
+        visual_items+=("$line")
+        if [[ "$line" == HEADER:* ]]; then
+            is_header+=(1); action_num+=(0); visual_to_action+=(-1)
+        else
+            is_header+=(0)
+            action_count=$((action_count + 1))
+            action_num+=("$action_count")
+            visual_to_action+=("$((action_count - 1))")
         fi
-        case "$item" in
-            Back*|Exit*|Cancel*|Назад*|Выход*|Отмена*) back_idx=$action_count ;;
-        esac
-        action_count=$((action_count + 1))
-        printf '  %d) %b\n' "$action_count" "$item" >&2
     done
     [ "$action_count" -gt 0 ] || return 130
-    if ! [[ "$default_idx" =~ ^[0-9]+$ ]] || [ "$default_idx" -ge "$action_count" ]; then
-        default_idx=0
-    fi
-    local input_source=/dev/stdin
-    if [ ! -t 0 ] && [ "${NONINTERACTIVE:-false}" != true ] && ( : </dev/tty ) 2>/dev/null; then
-        input_source=/dev/tty
-    fi
-    while true; do
-        if [ "${UI_LANG:-ru}" = en ]; then
-            printf 'Number [1-%s, Enter = %s, 0 = back/cancel]: ' "$action_count" "$((default_idx + 1))" >&2
-        else
-            printf 'Номер [1-%s, Enter = %s, 0 = назад/отмена]: ' "$action_count" "$((default_idx + 1))" >&2
-        fi
-        IFS= read -r input < "$input_source" || return 130
-        case "$input" in
-            '') printf '%s\n' "$default_idx"; return 0 ;;
-            0|q|Q)
-                [ "$back_idx" -ge 0 ] || return 130
-                printf '%s\n' "$back_idx"; return 0 ;;
-        esac
-        # Limit the length before arithmetic, so oversized input cannot overflow.
-        if [[ "$input" =~ ^[0-9]{1,5}$ ]]; then
-            pick=$((10#$input))
-            if [ "$pick" -ge 1 ] && [ "$pick" -le "$action_count" ]; then
-                printf '%s\n' "$((pick - 1))"; return 0
+    if ! [[ "$default_idx" =~ ^[0-9]+$ ]] || [ "$default_idx" -ge "$action_count" ]; then default_idx=0; fi
+
+    # Server terminals keep the old direct navigation: arrows or j/k, Enter, and digits.
+    if [ ! -t 0 ]; then
+        printf '%b\n' "$prompt_title" >&2
+        for v_idx in "${!visual_items[@]}"; do
+            if [ "${is_header[v_idx]}" -eq 1 ]; then
+                printf '\n  %s\n' "${visual_items[v_idx]#HEADER:}" >&2
+            else
+                printf '  %d) %b\n' "${action_num[v_idx]}" "${visual_items[v_idx]}" >&2
             fi
-        fi
-        if [ "${UI_LANG:-ru}" = en ]; then
-            printf 'Invalid selection. Enter a listed number.\n' >&2
+        done
+        local fallback_pick=""
+        IFS= read -r fallback_pick || true
+        fallback_pick="${fallback_pick:-$((default_idx + 1))}"
+        if [[ "$fallback_pick" =~ ^[0-9]+$ ]] && [ "$fallback_pick" -ge 1 ] && [ "$fallback_pick" -le "$action_count" ]; then
+            printf '%s\n' "$((fallback_pick - 1))"
         else
-            printf 'Неверный пункт. Введите номер из списка.\n' >&2
+            printf '%s\n' "$default_idx"
         fi
+        return 0
+    fi
+
+    local selected="$default_idx" input_buf="" key rest candidate
+    local total_visual_lines=${#visual_items[@]}
+    tput civis >&2 2>/dev/null || true
+    _tui_restore_cursor() { tput cnorm >&2 2>/dev/null || true; }
+    draw_tui_menu() {
+        printf '%b\n' "$prompt_title" >&2
+        for v_idx in "${!visual_items[@]}"; do
+            if [ "${is_header[v_idx]}" -eq 1 ]; then
+                printf '\n  \033[0;36m── %s ──\033[0m\n' "${visual_items[v_idx]#HEADER:}" >&2
+            elif [ "${visual_to_action[v_idx]}" -eq "$selected" ]; then
+                printf '  \033[1;36m▸ %d) %s\033[0m\n' "${action_num[v_idx]}" "${visual_items[v_idx]}" >&2
+            else
+                printf '    \033[2m%d)\033[0m %s\n' "${action_num[v_idx]}" "${visual_items[v_idx]}" >&2
+            fi
+        done
+        if [ -n "$input_buf" ]; then
+            printf '  \033[2mВведено: %s; Enter — подтвердить. Стрелки ↑/↓ — выбор.\033[0m\n' "$input_buf" >&2
+        else
+            printf '  \033[2mСтрелки ↑/↓ или j/k — выбор; Enter — подтвердить; цифра — пункт.\033[0m\n' >&2
+        fi
+    }
+    clear_tui_menu() {
+        local rows=$((total_visual_lines + 2)) row
+        printf '\033[%dA' "$rows" >&2
+        for ((row=0; row<rows; row++)); do
+            printf '\033[2K\r' >&2
+            [ "$row" -lt $((rows - 1)) ] && printf '\033[1B' >&2
+        done
+        printf '\033[%dA' $((rows - 1)) >&2
+    }
+
+    draw_tui_menu
+    while true; do
+        key=""
+        IFS= read -rsn1 key 2>/dev/null || { _tui_restore_cursor; return 130; }
+        if [ "$key" = $'\x1b' ]; then IFS= read -rsn2 -t 0.1 rest 2>/dev/null || true; key="$key$rest"; fi
+        case "$key" in
+            $'\x1b[A'|$'\x1bOA'|k|K) input_buf=""; selected=$(((selected - 1 + action_count) % action_count)) ;;
+            $'\x1b[B'|$'\x1bOB'|j|J) input_buf=""; selected=$(((selected + 1) % action_count)) ;;
+            ''|' ') break ;;
+            $'\x7f'|$'\x08') input_buf="${input_buf%?}" ;;
+            0|q|Q) selected=$((action_count - 1)); break ;;
+            [1-9])
+                candidate="${input_buf}${key}"
+                if [[ "$candidate" =~ ^[0-9]+$ ]] && [ "$candidate" -ge 1 ] && [ "$candidate" -le "$action_count" ]; then
+                    input_buf="$candidate"; selected=$((candidate - 1))
+                elif [ "$key" -le "$action_count" ]; then
+                    input_buf="$key"; selected=$((key - 1))
+                fi
+                ;;
+            $'\x03') _tui_restore_cursor; return 130 ;;
+        esac
+        clear_tui_menu
+        draw_tui_menu
     done
+    clear_tui_menu
+    _tui_restore_cursor
+    printf '%s\n' "$selected"
 }
 
 # Секреты не выводятся в терминал. Пустая строка сохраняет текущее значение.
@@ -1373,7 +1430,7 @@ wizard_choose_port() {
 wizard_advanced() {
     local choice key value current label hint
     while true; do
-        choice=$(tui_select "Нестандартная схема работы\nОбычной установке эти параметры не нужны. Enter и 0: назад без изменений." 7 \
+        choice=$(tui_select "Дополнительные параметры\nОбычной установке они не нужны. Стрелки — выбор, Enter — открыть, 0 — назад." 7 \
             "Где слушать HTTP (обычно 127.0.0.1)" \
             "Синхронизировать данные при запуске контейнера" \
             "Какие файлы отдавать клиентам" \
@@ -1390,14 +1447,21 @@ wizard_advanced() {
             4) key=GEOIP_SOURCE_URL; label="URL файла GeoIP"; hint="Необязательно. Пусто — используется источник из правил." ;;
             5) key=GEOSITE_SOURCE_URL; label="URL файла GeoSite"; hint="Необязательно. Пусто — используется источник из правил." ;;
             6) key=PUBLIC_GEO_BASE_URL; label="Адрес другого Geo-сервера"; hint="Укажите URL с токеном, только если GeoIP/GeoSite отдаются другим сервером." ;;
-            *) return 0 ;;
+            *) WIZARD_ADVANCED_CANCELLED=true; return 0 ;;
         esac
         current="${!key}"
         if [ "$key" = SYNC_ON_START ]; then
             local default=0
             [ "$current" = false ] && default=1
-            choice=$(tui_select "Запускать синхронизацию при старте?" "$default" "Да" "Нет") || return 130
-            value=true; [ "$choice" = 1 ] && value=false
+            choice=$(tui_select "Синхронизировать при запуске контейнера?" "$default" \
+                "Да — сразу загрузить свежие данные" \
+                "Нет — ждать ручной или плановой синхронизации" \
+                "Назад к дополнительным параметрам") || return 130
+            case "$choice" in
+                0) value=true ;;
+                1) value=false ;;
+                *) continue ;;
+            esac
         else
             echo "  $hint"
             read -r -p "  ▸ $label [$current]: " value || return 130
@@ -2386,7 +2450,9 @@ install_wizard() {
             wizard_keys=(SCHEDULE)
             ;;
         advanced)
+            WIZARD_ADVANCED_CANCELLED=false
             wizard_advanced || return $?
+            [ "$WIZARD_ADVANCED_CANCELLED" = true ] && return 0
             wizard_keys=(HTTP_BIND SYNC_ON_START SERVE_FORMATS ROUTING_SOURCE_REPO GEOIP_SOURCE_URL GEOSITE_SOURCE_URL PUBLIC_GEO_BASE_URL)
             ;;
         *) echo "[!] Неизвестный раздел: $wizard_section"; return 1 ;;
@@ -2402,38 +2468,7 @@ install_wizard() {
 # ==============================================================================
 
 configure_settings_menu() {
-    while true; do
-        print_header
-        local choice
-        if [ "${UI_LANG:-ru}" = en ]; then
-            choice=$(tui_select "What do you want to change?\nEnter and 0 return to the main menu." 6 \
-                "What to serve: clients, routing rules and Geo databases" \
-                "How clients connect: domain, access token, port and Docker network" \
-                "When to update: synchronization schedule" \
-                "Integrations: Remnawave and Telegram" \
-                "Non-standard setup: sources, bind address and file formats" \
-                "Run the complete setup wizard" \
-                "Back to main menu") || return 0
-        else
-            choice=$(tui_select "Что вы хотите изменить?\nEnter и 0: вернуться в главное меню." 6 \
-                "Что раздавать: клиенты, правила и Geo-базы" \
-                "Как подключаются клиенты: домен, токен, порт и Docker-сеть" \
-                "Когда обновлять: расписание синхронизации" \
-                "Интеграции: Remnawave и Telegram" \
-                "Нестандартная схема: источники, адрес сервера и форматы" \
-                "Пройти полную настройку заново" \
-                "Назад в главное меню") || return 0
-        fi
-        case "$choice" in
-            0) install_wizard files ;;
-            1) install_wizard network ;;
-            2) install_wizard schedule ;;
-            3) configure_integrations_menu ;;
-            4) install_wizard advanced ;;
-            5) install_wizard ;;
-            *) return 0 ;;
-        esac
-    done
+    install_wizard
 }
 
 configure_integrations_menu() {
@@ -2724,7 +2759,8 @@ main_menu() {
             local en_options=(
                 "Status and public links"
                 "Synchronize now"
-                "Change settings"
+                "Guided setup / reconfigure server"
+                "Integrations: Remnawave and Telegram"
                 "Reverse-proxy configs (Caddy / Nginx / NPM)"
                 "$upd_label_en"
                 "View container logs"
@@ -2753,7 +2789,8 @@ main_menu() {
             local ru_options=(
                 "Статус и ссылки"
                 "Синхронизировать сейчас"
-                "Изменить настройки"
+                "Пошаговая настройка / перенастройка сервера"
+                "Интеграции: Remnawave и Telegram"
                 "Конфиги обратного прокси (Caddy / Nginx / NPM)"
                 "$upd_label_ru"
                 "Посмотреть логи контейнера"
@@ -2769,13 +2806,14 @@ main_menu() {
         case "$menu_idx" in
             0) show_links ;;
             1) run_sync_now ;;
-            2) configure_settings_menu ;;
-            3) show_proxy_snippets true ;;
-            4) update_server_menu ;;
-            5) view_logs ;;
-            6) manage_container_menu ;;
-            7) system_advanced_menu ;;
-            8) return 0 ;;
+            2) install_wizard ;;
+            3) configure_integrations_menu ;;
+            4) show_proxy_snippets true ;;
+            5) update_server_menu ;;
+            6) view_logs ;;
+            7) manage_container_menu ;;
+            8) system_advanced_menu ;;
+            9) return 0 ;;
             *) return 0 ;;
         esac
     done
