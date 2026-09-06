@@ -16,7 +16,7 @@ DIM='\033[2m'
 NC='\033[0m'
 
 # Повышайте версию при каждом изменении install.sh. GitHub Actions это проверяет.
-SCRIPT_VERSION="1.1.3"
+SCRIPT_VERSION="1.1.4"
 CHECKED_REMOTE_VER=""
 UPDATE_AVAILABLE=false
 CHECKED_REMOTE_IMG_DIGEST=""
@@ -1657,8 +1657,8 @@ wizard_choose_mode() {
 
     local role_idx
     role_idx=$(tui_select "Выберите режим работы сервера:" "$default_role_idx" \
-        "Всё в одном (раздача баз и правил + автообновление Remnawave)" \
-        "Сервер раздачи (раздача баз и правил по HTTPS, без Remnawave)" \
+        "Раздача правил и Geo-баз + синхронизация с Remnawave" \
+        "Раздача правил и Geo-баз (обычный вариант, без Remnawave)" \
         "Только базы (раздача geoip.dat и geosite.dat без правил)" \
         "Только Remnawave (автообновление сквадов, базы на внешнем сервере)" \
         "Только Incy (раздача подписки JSON, базы на внешнем сервере)") || return 130
@@ -2377,6 +2377,10 @@ install_wizard() {
             prev_ext_network="$fixed_candidate"
         fi
     fi
+    # A mount such as "routing_data:/app/www" is a volume, never a Docker network.
+    if [ -n "$prev_ext_network" ] && [[ ! "$prev_ext_network" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]*$ ]]; then
+        prev_ext_network=""
+    fi
 
     # Если в compose.yaml не найдено, проверяем подключённые сети живого контейнера geo-routing-server
     if [ -z "$prev_ext_network" ] && command -v docker &>/dev/null; then
@@ -2416,8 +2420,12 @@ install_wizard() {
         full)
             wizard_choose_mode || return $?
             wizard_public_connection || return $?
-            wizard_remnawave || return $?
-            wizard_network || return $?
+            if [ "$config_remna" = true ]; then
+                wizard_remnawave || return $?
+                wizard_network || return $?
+            else
+                EXT_NETWORK=""
+            fi
             wizard_schedule || return $?
             wizard_telegram || return $?
             wizard_change_remna=true
