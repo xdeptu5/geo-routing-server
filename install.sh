@@ -16,7 +16,7 @@ DIM='\033[2m'
 NC='\033[0m'
 
 # Повышайте версию при каждом изменении install.sh. GitHub Actions это проверяет.
-SCRIPT_VERSION="1.1.9"
+SCRIPT_VERSION="1.1.10"
 CHECKED_REMOTE_VER=""
 UPDATE_AVAILABLE=false
 CHECKED_REMOTE_IMG_DIGEST=""
@@ -68,7 +68,7 @@ tui_select() {
             printf '\n  %b\n' "${item#HEADER:}" >&2
             continue
         fi
-        case "$item" in Back*|Exit*|Cancel*|Назад*|Выход*|Отмена*) back_idx=$action_count ;; esac
+        case "$item" in Back*|Cancel*|Назад*|Отмена*) back_idx=$action_count ;; esac
         action_count=$((action_count + 1))
         printf '  %d) %b\n' "$action_count" "$item" >&2
     done
@@ -2414,7 +2414,7 @@ install_wizard() {
 # ==============================================================================
 
 configure_settings_menu() {
-    install_wizard
+    install_wizard || return 0
 }
 
 configure_integrations_menu() {
@@ -2551,8 +2551,6 @@ system_advanced_menu() {
 # ==============================================================================
 
 main_menu() {
-    check_script_version 2>/dev/null || true
-    check_docker_image_version 2>/dev/null || true
     while true; do
         print_header
         local target_dir
@@ -2715,7 +2713,7 @@ main_menu() {
             )
 
             local menu_idx
-            menu_idx=$(tui_select "Choose an action:" 0 "${en_options[@]}") || return 0
+            menu_idx=$(tui_select "Choose an action:" 0 "${en_options[@]}") || continue
         else
             echo -e "  Статус: $status_msg • Синхронизация: $sync_msg"
             echo -e "  Модули: ${GREEN}$full_mod_ru${NC}"
@@ -2747,21 +2745,23 @@ main_menu() {
             )
 
             local menu_idx
-            menu_idx=$(tui_select "Выберите действие:" 0 "${ru_options[@]}") || return 0
+            menu_idx=$(tui_select "Выберите действие:" 0 "${ru_options[@]}") || continue
         fi
 
         case "$menu_idx" in
-            0) show_links ;;
-            1) run_sync_now ;;
-            2) install_wizard access ;;
-            3) install_wizard schedule ;;
-            4) install_wizard ;;
-            5) configure_integrations_menu ;;
-            6) show_proxy_snippets true ;;
-            7) update_server_menu ;;
-            8) view_logs ;;
-            9) manage_container_menu ;;
-            10) system_advanced_menu ;;
+            # Interactive actions use 130 for cancellation. Stay in this loop
+            # so cancelling an inner dialog can never close the SSH session.
+            0) show_links || continue ;;
+            1) run_sync_now || continue ;;
+            2) install_wizard access || continue ;;
+            3) install_wizard schedule || continue ;;
+            4) install_wizard || continue ;;
+            5) configure_integrations_menu || continue ;;
+            6) show_proxy_snippets true || continue ;;
+            7) update_server_menu || continue ;;
+            8) view_logs || continue ;;
+            9) manage_container_menu || continue ;;
+            10) system_advanced_menu || continue ;;
             11) return 0 ;;
             *) return 0 ;;
         esac
@@ -2842,7 +2842,7 @@ HELP
     detect_or_ask_language "${language_args[@]}"
     case "$command" in
         --uninstall|-u|uninstall) uninstall_project; return $? ;;
-        --reconfigure|-r|reconfigure|install) install_wizard; main_menu; return $? ;;
+        --reconfigure|-r|reconfigure|install) install_wizard || true; main_menu; return $? ;;
         --menu|-m|menu) main_menu; return $? ;;
     esac
 
@@ -2857,7 +2857,7 @@ HELP
         main_menu
     # 2. Если каталога нет, либо в нем нет файла .env с токеном — это чистая установка!
     elif [ ! -d "$target_dir" ] || [ ! -f "$target_dir/.env" ] || ! grep -q '^ROUTING_TOKEN=' "$target_dir/.env" 2>/dev/null; then
-        install_wizard
+        install_wizard || true
         main_menu
     # 3. Иначе: каталог есть, в нем есть .env c токеном, но нет compose-файла -> действительно незавершенная установка
     else
@@ -2876,7 +2876,7 @@ HELP
         fi
         case "$init_idx" in
             0) 
-                install_wizard
+                install_wizard || true
                 main_menu
                 ;;
             1) 
@@ -2884,7 +2884,7 @@ HELP
                     echo -e "${RED}[!] Каталог не подтверждён как установка geo-routing-server; очистка отменена.${NC}"
                     return 1
                 fi
-                install_wizard
+                install_wizard || true
                 main_menu
                 ;;
             2) 
@@ -2892,7 +2892,7 @@ HELP
                 exit 0
                 ;;
             *) 
-                install_wizard
+                install_wizard || true
                 main_menu
                 ;;
         esac
