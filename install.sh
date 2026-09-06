@@ -16,7 +16,7 @@ DIM='\033[2m'
 NC='\033[0m'
 
 # Повышайте версию при каждом изменении install.sh. GitHub Actions это проверяет.
-SCRIPT_VERSION="1.1.8"
+SCRIPT_VERSION="1.1.9"
 CHECKED_REMOTE_VER=""
 UPDATE_AVAILABLE=false
 CHECKED_REMOTE_IMG_DIGEST=""
@@ -1812,13 +1812,13 @@ wizard_public_connection() {
         local auto_token
         if [ -n "$prev_token" ] && [ "$prev_token" != "local" ]; then
             auto_token="$prev_token"
-            echo "  Текущий токен сохранится при Enter."
+            echo "  Текущий URL-токен: ${BOLD}$auto_token${NC}"
         else
             auto_token="$(openssl rand -hex 16)"
-            echo "  Сгенерирован новый токен."
+            echo "  Сгенерированный URL-токен: ${BOLD}$auto_token${NC}"
         fi
         
-        read -r -s -p "  ▸ Секретный токен [Enter = сохранить]: " input_token || return 130
+        read -r -p "  ▸ URL-токен [$auto_token]: " input_token || return 130
         ROUTING_TOKEN="${input_token:-$auto_token}"
         ROUTING_TOKEN="$(echo "$ROUTING_TOKEN" | tr -d '[:space:]/\\')"
         while [[ ! "$ROUTING_TOKEN" =~ ^[A-Za-z0-9_-]+$ ]] || [ "${#ROUTING_TOKEN}" -lt 8 ]; do
@@ -2391,6 +2391,10 @@ install_wizard() {
             wizard_schedule || return $?
             wizard_keys=(SCHEDULE)
             ;;
+        access)
+            wizard_public_connection || return $?
+            wizard_keys=(DOMAIN ROUTING_TOKEN HTTP_PORT)
+            ;;
         advanced)
             WIZARD_ADVANCED_CANCELLED=false
             wizard_advanced || return $?
@@ -2698,6 +2702,8 @@ main_menu() {
             local en_options=(
                 "Status and public links"
                 "Synchronize now"
+                "Change domain, URL token or port"
+                "Change synchronization schedule"
                 "Guided setup / reconfigure server"
                 "Integrations: Remnawave and Telegram"
                 "Reverse-proxy configs (Caddy / Nginx / NPM)"
@@ -2728,6 +2734,8 @@ main_menu() {
             local ru_options=(
                 "Статус и ссылки"
                 "Синхронизировать сейчас"
+                "Изменить домен, URL-токен или порт"
+                "Изменить расписание синхронизации"
                 "Пошаговая настройка / перенастройка сервера"
                 "Интеграции: Remnawave и Telegram"
                 "Конфиги обратного прокси (Caddy / Nginx / NPM)"
@@ -2745,14 +2753,16 @@ main_menu() {
         case "$menu_idx" in
             0) show_links ;;
             1) run_sync_now ;;
-            2) install_wizard ;;
-            3) configure_integrations_menu ;;
-            4) show_proxy_snippets true ;;
-            5) update_server_menu ;;
-            6) view_logs ;;
-            7) manage_container_menu ;;
-            8) system_advanced_menu ;;
-            9) return 0 ;;
+            2) install_wizard access ;;
+            3) install_wizard schedule ;;
+            4) install_wizard ;;
+            5) configure_integrations_menu ;;
+            6) show_proxy_snippets true ;;
+            7) update_server_menu ;;
+            8) view_logs ;;
+            9) manage_container_menu ;;
+            10) system_advanced_menu ;;
+            11) return 0 ;;
             *) return 0 ;;
         esac
     done
