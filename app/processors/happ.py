@@ -41,9 +41,9 @@ class HappProcessor(BaseProcessor):
         # 1. Синхронизируем geo-базы (только если включен модуль geo-баз)
         if needs_geo:
             if Config.SERVE_GEOIP or Config.SERVE_GEOSITE:
-                logger.info("Processing HAPP GEO databases...")
                 if not self.geo_manager.sync_client_geo(client, target_dir, default_json_data):
                     success = False
+
             else:
                 for f in ("geoip.dat", "geosite.dat"):
                     old_f = target_dir / f
