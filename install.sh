@@ -16,7 +16,7 @@ DIM='\033[2m'
 NC='\033[0m'
 
 # Повышайте версию при каждом изменении install.sh. GitHub Actions это проверяет.
-SCRIPT_VERSION="1.1.0"
+SCRIPT_VERSION="1.1.1"
 CHECKED_REMOTE_VER=""
 UPDATE_AVAILABLE=false
 CHECKED_REMOTE_IMG_DIGEST=""
@@ -1360,20 +1360,26 @@ wizard_choose_port() {
 }
 
 wizard_advanced() {
-    local choice key value current
+    local choice key value current label hint
     while true; do
-        choice=$(tui_select "Дополнительные настройки (Enter сохраняет значение; '-' очищает необязательное):" 0 \
-            "Готово" "Адрес привязки HTTP" "Синхронизация при запуске" "Форматы файлов" \
-            "Репозиторий правил" "Источник GeoIP" "Источник GeoSite" "Внешний адрес баз") || return 130
+        choice=$(tui_select "Нестандартная схема работы\nОбычной установке эти параметры не нужны. Enter и 0: назад без изменений." 7 \
+            "Где слушать HTTP (обычно 127.0.0.1)" \
+            "Синхронизировать данные при запуске контейнера" \
+            "Какие файлы отдавать клиентам" \
+            "Свой источник правил маршрутизации" \
+            "Свой источник GeoIP" \
+            "Свой источник GeoSite" \
+            "Geo-базы находятся на другом сервере" \
+            "Назад без изменений") || return 130
         case "$choice" in
-            0) return 0 ;;
-            1) key=HTTP_BIND ;;
-            2) key=SYNC_ON_START ;;
-            3) key=SERVE_FORMATS ;;
-            4) key=ROUTING_SOURCE_REPO ;;
-            5) key=GEOIP_SOURCE_URL ;;
-            6) key=GEOSITE_SOURCE_URL ;;
-            7) key=PUBLIC_GEO_BASE_URL ;;
+            0) key=HTTP_BIND; label="Адрес HTTP-сервера"; hint="Оставьте 127.0.0.1, если прокси работает на этом же сервере." ;;
+            1) key=SYNC_ON_START ;;
+            2) key=SERVE_FORMATS; label="Форматы для клиентов"; hint="Обычно CLIENT_OPTIMIZED: Happ получает .DEEPLINK, Incy — .JSON." ;;
+            3) key=ROUTING_SOURCE_REPO; label="URL источника правил"; hint="Меняйте только для собственного репозитория с правилами." ;;
+            4) key=GEOIP_SOURCE_URL; label="URL файла GeoIP"; hint="Необязательно. Пусто — используется источник из правил." ;;
+            5) key=GEOSITE_SOURCE_URL; label="URL файла GeoSite"; hint="Необязательно. Пусто — используется источник из правил." ;;
+            6) key=PUBLIC_GEO_BASE_URL; label="Адрес другого Geo-сервера"; hint="Укажите URL с токеном, только если GeoIP/GeoSite отдаются другим сервером." ;;
+            *) return 0 ;;
         esac
         current="${!key}"
         if [ "$key" = SYNC_ON_START ]; then
@@ -1382,8 +1388,8 @@ wizard_advanced() {
             choice=$(tui_select "Запускать синхронизацию при старте?" "$default" "Да" "Нет") || return 130
             value=true; [ "$choice" = 1 ] && value=false
         else
-            [ "$key" = SERVE_FORMATS ] && echo "  CLIENT_OPTIMIZED, ALL, JSON или DEEPLINK."
-            read -r -p "  ▸ $key [$current]: " value || return 130
+            echo "  $hint"
+            read -r -p "  ▸ $label [$current]: " value || return 130
             value="${value:-$current}"
             if [ "$value" = - ]; then
                 case "$key" in GEOIP_SOURCE_URL|GEOSITE_SOURCE_URL|PUBLIC_GEO_BASE_URL) value="" ;; *) echo "[!] Значение обязательно."; continue ;; esac
@@ -2389,22 +2395,22 @@ configure_settings_menu() {
         print_header
         local choice
         if [ "${UI_LANG:-ru}" = en ]; then
-            choice=$(tui_select "Settings:" 0 \
-                "Clients, routing rules and databases" \
-                "Domain, access token, port and Docker network" \
-                "Synchronization schedule" \
-                "Integrations (Remnawave, Telegram)" \
-                "Advanced settings and data sources" \
-                "Full configuration wizard" \
+            choice=$(tui_select "What do you want to change?\nEnter and 0 return to the main menu." 6 \
+                "What to serve: clients, routing rules and Geo databases" \
+                "How clients connect: domain, access token, port and Docker network" \
+                "When to update: synchronization schedule" \
+                "Integrations: Remnawave and Telegram" \
+                "Non-standard setup: sources, bind address and file formats" \
+                "Run the complete setup wizard" \
                 "Back to main menu") || return 0
         else
-            choice=$(tui_select "Настройки:" 0 \
-                "Клиенты, правила маршрутизации и базы" \
-                "Домен, токен доступа, порт и Docker-сеть" \
-                "Расписание синхронизации" \
-                "Интеграции (Remnawave, Telegram)" \
-                "Дополнительные настройки и источники данных" \
-                "Полный мастер настройки" \
+            choice=$(tui_select "Что вы хотите изменить?\nEnter и 0: вернуться в главное меню." 6 \
+                "Что раздавать: клиенты, правила и Geo-базы" \
+                "Как подключаются клиенты: домен, токен, порт и Docker-сеть" \
+                "Когда обновлять: расписание синхронизации" \
+                "Интеграции: Remnawave и Telegram" \
+                "Нестандартная схема: источники, адрес сервера и форматы" \
+                "Пройти полную настройку заново" \
                 "Назад в главное меню") || return 0
         fi
         case "$choice" in
