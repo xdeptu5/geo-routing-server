@@ -16,7 +16,7 @@ DIM='\033[2m'
 NC='\033[0m'
 
 # Повышайте версию при каждом изменении install.sh. GitHub Actions это проверяет.
-SCRIPT_VERSION="1.0.12"
+SCRIPT_VERSION="1.0.13"
 CHECKED_REMOTE_VER=""
 UPDATE_AVAILABLE=false
 CHECKED_REMOTE_IMG_DIGEST=""
@@ -1013,7 +1013,9 @@ show_proxy_snippets() {
     if [ "$clients" = "HAPP_DEEPLINK" ] || [ "$clients" = "HAPP_LOCAL" ]; then
         echo -e "${GREEN}${BOLD}[i] Режим «Только генератор для Remnawave»: сервер работает локально внутри Docker-сети.${NC}"
         echo -e "Настройка внешнего реверс-прокси не требуется, если вы не планируете открывать сервер наружу.\n"
-        pause_menu
+        if [ "$is_menu" = true ]; then
+            pause_menu
+        fi
         return 0
     fi
 
@@ -1051,7 +1053,6 @@ show_proxy_snippets() {
             echo -e "${BOLD}    }${NC}"
             echo -e "\nПрименить: ${YELLOW}sudo nginx -t && sudo nginx -s reload${NC}"
             echo -e "${CYAN}===============================================================================${NC}\n"
-            [ "$is_menu" = true ] && pause_menu
             ;;
         1)
             echo -e "\n${CYAN}${BOLD}===============================================================================${NC}"
@@ -1067,7 +1068,6 @@ show_proxy_snippets() {
             echo -e "${BOLD}    }${NC}"
             echo -e "\nПрименить: ${YELLOW}sudo systemctl reload caddy${NC}"
             echo -e "${CYAN}===============================================================================${NC}\n"
-            [ "$is_menu" = true ] && pause_menu
             ;;
         2)
             echo -e "\n${CYAN}${BOLD}===============================================================================${NC}"
@@ -1082,7 +1082,6 @@ show_proxy_snippets() {
             echo -e "    Location:              ${BOLD}/${token}/${NC}"
             echo -e "    Forward Hostname / IP: ${BOLD}127.0.0.1${NC}   Port: ${BOLD}${port}${NC}"
             echo -e "${CYAN}===============================================================================${NC}\n"
-            [ "$is_menu" = true ] && pause_menu
             ;;
         3)
             echo -e "\n${CYAN}${BOLD}===============================================================================${NC}"
@@ -1129,13 +1128,24 @@ show_proxy_snippets() {
             echo -e "    Location:              ${BOLD}/${token}/${NC}"
             echo -e "    Forward Hostname / IP: ${BOLD}127.0.0.1${NC}   Port: ${BOLD}${port}${NC}"
             echo -e "${CYAN}===============================================================================${NC}\n"
-            [ "$is_menu" = true ] && pause_menu
             ;;
         *)
             return 0
             ;;
     esac
+
+    if [ "$is_menu" = true ]; then
+        pause_menu
+    else
+        if [ "${UI_LANG:-ru}" = "en" ]; then
+            pause_menu "Press Enter to proceed to links and integrations..."
+        else
+            pause_menu "Нажмите Enter для перехода к ссылкам и интеграциям..."
+        fi
+    fi
+    return 0
 }
+
 
 configure_remnawave() {
     local target_dir
