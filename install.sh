@@ -16,7 +16,7 @@ DIM='\033[2m'
 NC='\033[0m'
 
 # Повышайте версию при каждом изменении install.sh. GitHub Actions это проверяет.
-SCRIPT_VERSION="1.1.7"
+SCRIPT_VERSION="1.1.8"
 CHECKED_REMOTE_VER=""
 UPDATE_AVAILABLE=false
 CHECKED_REMOTE_IMG_DIGEST=""
@@ -61,107 +61,42 @@ trap 'handle_error $LINENO' ERR
 tui_select() {
     local prompt_title="$1" default_idx="${2:-0}"
     shift 2
-    local raw_items=("$@") action_count=0
-    local visual_items=() is_header=() action_num=() visual_to_action=()
-    local line v_idx
-
-    for line in "${raw_items[@]}"; do
-        v_idx=${#visual_items[@]}
-        visual_items+=("$line")
-        if [[ "$line" == HEADER:* ]]; then
-            is_header+=(1); action_num+=(0); visual_to_action+=(-1)
-        else
-            is_header+=(0)
-            action_count=$((action_count + 1))
-            action_num+=("$action_count")
-            visual_to_action+=("$((action_count - 1))")
+    local items=("$@") action_count=0 back_idx=-1 item input pick
+    printf '%b\n' "$prompt_title" >&2
+    for item in "${items[@]}"; do
+        if [[ "$item" == HEADER:* ]]; then
+            printf '\n  %b\n' "${item#HEADER:}" >&2
+            continue
         fi
+        case "$item" in Back*|Exit*|Cancel*|Назад*|Выход*|Отмена*) back_idx=$action_count ;; esac
+        action_count=$((action_count + 1))
+        printf '  %d) %b\n' "$action_count" "$item" >&2
     done
     [ "$action_count" -gt 0 ] || return 130
     if ! [[ "$default_idx" =~ ^[0-9]+$ ]] || [ "$default_idx" -ge "$action_count" ]; then default_idx=0; fi
-
-    # Server terminals keep the old direct navigation: arrows or j/k, Enter, and digits.
-    if [ ! -t 0 ]; then
-        printf '%b\n' "$prompt_title" >&2
-        for v_idx in "${!visual_items[@]}"; do
-            if [ "${is_header[v_idx]}" -eq 1 ]; then
-                printf '\n  %s\n' "${visual_items[v_idx]#HEADER:}" >&2
-            else
-                printf '  %d) %b\n' "${action_num[v_idx]}" "${visual_items[v_idx]}" >&2
-            fi
-        done
-        local fallback_pick=""
-        IFS= read -r fallback_pick || true
-        fallback_pick="${fallback_pick:-$((default_idx + 1))}"
-        if [[ "$fallback_pick" =~ ^[0-9]+$ ]] && [ "$fallback_pick" -ge 1 ] && [ "$fallback_pick" -le "$action_count" ]; then
-            printf '%s\n' "$((fallback_pick - 1))"
-        else
-            printf '%s\n' "$default_idx"
-        fi
-        return 0
-    fi
-
-    local selected="$default_idx" input_buf="" key rest candidate title_lines
-    local total_visual_lines=${#visual_items[@]}
-    # printf %b expands the \n escapes used by menu titles before counting lines.
-    title_lines=$(printf '%b' "$prompt_title" | awk 'END { print NR }')
-    [ "$title_lines" -gt 0 ] || title_lines=1
-    tput civis >&2 2>/dev/null || true
-    _tui_restore_cursor() { tput cnorm >&2 2>/dev/null || true; }
-    draw_tui_menu() {
-        printf '%b\n' "$prompt_title" >&2
-        for v_idx in "${!visual_items[@]}"; do
-            if [ "${is_header[v_idx]}" -eq 1 ]; then
-                printf '\n  \033[0;36m── %s ──\033[0m\n' "${visual_items[v_idx]#HEADER:}" >&2
-            elif [ "${visual_to_action[v_idx]}" -eq "$selected" ]; then
-                printf '  \033[1;36m▸ %d) %s\033[0m\n' "${action_num[v_idx]}" "${visual_items[v_idx]}" >&2
-            else
-                printf '    \033[2m%d)\033[0m %s\n' "${action_num[v_idx]}" "${visual_items[v_idx]}" >&2
-            fi
-        done
-        if [ -n "$input_buf" ]; then
-            printf '  \033[2mВведено: %s; Enter — подтвердить. Стрелки ↑/↓ — выбор.\033[0m\n' "$input_buf" >&2
-        else
-            printf '  \033[2mСтрелки ↑/↓ или j/k — выбор; Enter — подтвердить; цифра — пункт.\033[0m\n' >&2
-        fi
-    }
-    clear_tui_menu() {
-        local rows=$((title_lines + total_visual_lines + 1)) row
-        printf '\033[%dA' "$rows" >&2
-        for ((row=0; row<rows; row++)); do
-            printf '\033[2K\r' >&2
-            [ "$row" -lt $((rows - 1)) ] && printf '\033[1B' >&2
-        done
-        printf '\033[%dA' $((rows - 1)) >&2
-    }
-
-    draw_tui_menu
     while true; do
-        key=""
-        IFS= read -rsn1 key 2>/dev/null || { _tui_restore_cursor; return 130; }
-        if [ "$key" = $'\x1b' ]; then IFS= read -rsn2 -t 0.1 rest 2>/dev/null || true; key="$key$rest"; fi
-        case "$key" in
-            $'\x1b[A'|$'\x1bOA'|k|K) input_buf=""; selected=$(((selected - 1 + action_count) % action_count)) ;;
-            $'\x1b[B'|$'\x1bOB'|j|J) input_buf=""; selected=$(((selected + 1) % action_count)) ;;
-            ''|' ') break ;;
-            $'\x7f'|$'\x08') input_buf="${input_buf%?}" ;;
-            0|q|Q) selected=$((action_count - 1)); break ;;
-            [1-9])
-                candidate="${input_buf}${key}"
-                if [[ "$candidate" =~ ^[0-9]+$ ]] && [ "$candidate" -ge 1 ] && [ "$candidate" -le "$action_count" ]; then
-                    input_buf="$candidate"; selected=$((candidate - 1))
-                elif [ "$key" -le "$action_count" ]; then
-                    input_buf="$key"; selected=$((key - 1))
-                fi
+        if [ "${UI_LANG:-ru}" = en ]; then
+            printf 'Number [1-%s, Enter = %s, 0 = back]: ' "$action_count" "$((default_idx + 1))" >&2
+        else
+            printf 'Номер [1-%s, Enter = %s, 0 = назад]: ' "$action_count" "$((default_idx + 1))" >&2
+        fi
+        IFS= read -r input || return 130
+        case "$input" in
+            '') printf '%s\n' "$default_idx"; return 0 ;;
+            0|q|Q)
+                [ "$back_idx" -ge 0 ] || return 130
+                printf '%s\n' "$back_idx"; return 0
                 ;;
-            $'\x03') _tui_restore_cursor; return 130 ;;
         esac
-        clear_tui_menu
-        draw_tui_menu
+        if [[ "$input" =~ ^[0-9]{1,5}$ ]]; then
+            pick=$((10#$input))
+            if [ "$pick" -ge 1 ] && [ "$pick" -le "$action_count" ]; then
+                printf '%s\n' "$((pick - 1))"; return 0
+            fi
+        fi
+        if [ "${UI_LANG:-ru}" = en ]; then printf 'Enter a number from the list.\n' >&2
+        else printf 'Введите номер из списка.\n' >&2; fi
     done
-    clear_tui_menu
-    _tui_restore_cursor
-    printf '%s\n' "$selected"
 }
 
 # Секреты не выводятся в терминал. Пустая строка сохраняет текущее значение.
