@@ -16,7 +16,7 @@ DIM='\033[2m'
 NC='\033[0m'
 
 # Повышайте версию при каждом изменении install.sh. GitHub Actions это проверяет.
-SCRIPT_VERSION="1.1.6"
+SCRIPT_VERSION="1.1.7"
 CHECKED_REMOTE_VER=""
 UPDATE_AVAILABLE=false
 CHECKED_REMOTE_IMG_DIGEST=""
@@ -2529,25 +2529,19 @@ manage_container_menu() {
 
 update_server_menu() {
     while true; do
-        # Network requests belong only to the update screen, never to the main menu.
-        check_script_version
-        check_docker_image_version
         print_header
-        local img_status script_status
-        img_status=$(component_status_label "${IMAGE_CHECK_STATUS:-unchecked}")
-        script_status=$(component_status_label "${SCRIPT_CHECK_STATUS:-unchecked}")
         local choice
         if [ "${UI_LANG:-ru}" = "en" ]; then
             choice=$(tui_select "Server Component Updates:" 0 \
                 "Update everything (Docker image & script)" \
-                "Update Docker image ($img_status)" \
-                "Update management script ($script_status)" \
+                "Update Docker image" \
+                "Update management script" \
                 "Back to main menu") || return 0
         else
             choice=$(tui_select "Обновление компонентов сервера:" 0 \
                 "Обновить всё сразу (Docker-образ и скрипт)" \
-                "Обновить только Docker-образ ($img_status)" \
-                "Обновить только скрипт управления ($script_status)" \
+                "Обновить только Docker-образ" \
+                "Обновить только скрипт управления" \
                 "Назад в главное меню") || return 0
         fi
         case "$choice" in
