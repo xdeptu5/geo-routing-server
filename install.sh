@@ -16,7 +16,7 @@ DIM='\033[2m'
 NC='\033[0m'
 
 # Повышайте версию при каждом изменении install.sh. GitHub Actions это проверяет.
-SCRIPT_VERSION="1.1.5"
+SCRIPT_VERSION="1.1.6"
 CHECKED_REMOTE_VER=""
 UPDATE_AVAILABLE=false
 CHECKED_REMOTE_IMG_DIGEST=""
@@ -101,8 +101,11 @@ tui_select() {
         return 0
     fi
 
-    local selected="$default_idx" input_buf="" key rest candidate
+    local selected="$default_idx" input_buf="" key rest candidate title_lines
     local total_visual_lines=${#visual_items[@]}
+    # printf %b expands the \n escapes used by menu titles before counting lines.
+    title_lines=$(printf '%b' "$prompt_title" | awk 'END { print NR }')
+    [ "$title_lines" -gt 0 ] || title_lines=1
     tput civis >&2 2>/dev/null || true
     _tui_restore_cursor() { tput cnorm >&2 2>/dev/null || true; }
     draw_tui_menu() {
@@ -123,7 +126,7 @@ tui_select() {
         fi
     }
     clear_tui_menu() {
-        local rows=$((total_visual_lines + 2)) row
+        local rows=$((title_lines + total_visual_lines + 1)) row
         printf '\033[%dA' "$rows" >&2
         for ((row=0; row<rows; row++)); do
             printf '\033[2K\r' >&2
