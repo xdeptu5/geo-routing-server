@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="./assets/banner.jpg" alt="Geo Routing Server" width="100%">
+
 # 🚀 Geo Routing Server
 
 **Self-Hosted сервис для автономной раздачи geo-баз (`geoip.dat`, `geosite.dat`) и правил маршрутизации трафика (`HAPP`, `INCY`) с высокой доступностью и локальным кэшированием.**

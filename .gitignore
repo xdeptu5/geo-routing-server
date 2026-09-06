@@ -17,6 +17,7 @@ custom_geo/*.dat
 __pycache__/
 *.py[cod]
 .coverage
+.pytest_cache/
 
 # Logs and runtime artifacts
 *.log
@@ -27,3 +28,6 @@ Thumbs.db
 *.swp
 *~
 *.bak
+.vscode/
+.idea/
+
