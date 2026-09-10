@@ -436,16 +436,14 @@ cmd_update_script() {
     echo -e "  Текущая версия:   ${C_WHITE}v${SCRIPT_VERSION}${C_RESET}"
     echo -e "  Версия на GitHub: ${C_GREEN}v${remote_ver}${C_RESET}"
 
-    if [ "$remote_ver" = "$SCRIPT_VERSION" ]; then
-        echo -e "\n${C_CYAN}[i] Номер версии совпадает (v${SCRIPT_VERSION}).${C_RESET}"
-        read -r -p "Перезаписать локальный скрипт свежей версией с GitHub? [y/N, Enter = отмена]: " re_ans
-        if [[ ! "$re_ans" =~ ^[Yy]$ ]]; then
-            rm -f "$tmp_script"
-            echo -e "${C_GRAY}Отмена обновления скрипта.${C_RESET}"
-            return 0
-        fi
+    # Если локальный файл существует и полностью идентичен версии с GitHub
+    if [ -f "$install_dir/install.sh" ] && cmp -s "$install_dir/install.sh" "$tmp_script" 2>/dev/null; then
+        rm -f "$tmp_script"
+        echo -e "\n${C_GREEN}[✓] Скрипт уже актуален и содержит последние изменения (v${remote_ver}).${C_RESET}\n"
+        return 0
     fi
 
+    echo -e "\n${C_YELLOW}[*] Установка обновлений...${C_RESET}"
     chmod +x "$tmp_script"
     mkdir -p "$install_dir"
     mv -f "$tmp_script" "$install_dir/install.sh"
@@ -455,7 +453,7 @@ cmd_update_script() {
         cp -f "$install_dir/install.sh" "$0" 2>/dev/null || true
     fi
 
-    echo -e "\n${C_GREEN}[✓] Скрипт управления успешно обновлён до v${remote_ver}!${C_RESET}\n"
+    echo -e "${C_GREEN}[✓] Скрипт управления успешно обновлён!${C_RESET}\n"
     sleep 1
 
     if [ -t 0 ] && [ -f "$install_dir/install.sh" ]; then
