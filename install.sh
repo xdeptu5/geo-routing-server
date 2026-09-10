@@ -405,15 +405,16 @@ cmd_status() {
         local happ_geo_base="https://${domain}/${token}/HAPP"
         [ -n "$ext_geo" ] && happ_geo_base="${ext_geo%/}/HAPP"
         echo -e "  ${C_CYAN}${C_BOLD}[ Happ ]${C_RESET}"
-        echo -e "  • Диплинки правил:"
-        for r in "${r_arr[@]}"; do
-            r="$(echo "$r" | tr -d ' ' | tr '[:lower:]' '[:upper:]')"
-            [ -z "$r" ] && continue
-            echo -e "      ${C_GRAY}• ${r}:${C_RESET} https://${domain}/${token}/HAPP/${r}.DEEPLINK"
-        done
         if [ "$happ_has_geo" = "true" ]; then
             [ "$serve_geoip" = "true" ] && echo -e "  • GeoIP база:     ${happ_geo_base}/geoip.dat"
             [ "$serve_geosite" = "true" ] && echo -e "  • GeoSite база:   ${happ_geo_base}/geosite.dat"
+        fi
+        local remna_check
+        remna_check="$(get_env_val "REMNAWAVE_BASE_URL" "$env_file" "")"
+        if [ -n "$remna_check" ]; then
+            echo -e "  • Маршруты:       ${C_GRAY}Внедряются автоматически в сквады Remnawave (см. блок ниже)${C_RESET}"
+        else
+            echo -e "  • Маршруты:       ${C_YELLOW}Требуется подключение Remnawave (пункт 4 в меню)${C_RESET}"
         fi
         echo ""
     fi
