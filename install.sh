@@ -470,9 +470,10 @@ cmd_uninstall() {
     print_banner
     echo -e "${C_RED}${C_BOLD}[!] ВНИМАНИЕ: Удаление Geo Routing Server${C_RESET}"
     echo -e "${C_GRAY}Будут остановлены контейнеры и удалены все конфигурационные файлы.${C_RESET}\n"
-    read -r -p "Вы абсолютно уверены, что хотите удалить сервис? [y/N]: " confirm
+    read -r -p "Вы абсолютно уверены, что хотите удалить сервис? [y/N, Enter = отмена]: " confirm
     if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
         echo -e "${C_GRAY}Отмена удаления.${C_RESET}"
+        sleep 1
         return 0
     fi
 
@@ -532,9 +533,17 @@ menu_remnawave() {
             read -r -p "Выберите действие [0-1]: " choice
             case "$choice" in
                 1)
-                    read -r -p "URL API панели [Enter = http://remnawave:3000/api]: " input_url
+                    read -r -p "URL API панели [Enter = http://remnawave:3000/api, 0 = отмена]: " input_url
+                    if [ "$input_url" = "0" ]; then
+                        continue
+                    fi
                     remna_url="${input_url:-http://remnawave:3000/api}"
-                    read -r -p "JWT токен администратора: " remna_token
+                    read -r -p "JWT токен администратора [Enter = отмена]: " remna_token
+                    if [ -z "$remna_token" ] || [ "$remna_token" = "0" ]; then
+                        echo -e "${C_GRAY}Отмена.${C_RESET}"
+                        sleep 1
+                        continue
+                    fi
                     set_env_val "REMNAWAVE_BASE_URL" "$remna_url" "$env_file"
                     set_env_val "REMNAWAVE_TOKEN" "$remna_token" "$env_file"
                     echo -e "${C_GREEN}[✓] Подключение сохранено!${C_RESET}"
@@ -594,9 +603,18 @@ menu_remnawave() {
 
                 local api_resp
                 api_resp=$(curl "${curl_args[@]}" "${remna_url%/}/external-squads" 2>/dev/null || true)
+                if [ -z "$api_resp" ] && [ "$(docker inspect -f '{{.State.Running}}' geo-routing-server 2>/dev/null || true)" = "true" ]; then
+                    api_resp=$(docker exec -e REMNAWAVE_BASE_URL="$remna_url" -e REMNAWAVE_TOKEN="$remna_token" geo-routing-server python3 -c '
+from app.remnawave import RemnawaveSync
+import json
+data = RemnawaveSync._api_request("GET", f"{RemnawaveSync.get_api_url()}/external-squads")
+if data:
+    print(json.dumps(data))
+' 2>/dev/null || true)
+                fi
                 if [ -z "$api_resp" ]; then
                     echo -e "${C_RED}[!] Не удалось получить ответ от API Remnawave. Проверьте URL и токен.${C_RESET}"
-                    read -r -p "Нажмите Enter для продолжения..."
+                    read -r -p "Нажмите Enter для возврата в меню..."
                     continue
                 fi
 
@@ -609,6 +627,8 @@ import sys, json
 try:
     data = json.load(sys.stdin)
     items = data.get("response", data) if isinstance(data, dict) else data
+    if isinstance(items, dict):
+        items = items.get("externalSquads", items.get("items", []))
     if isinstance(items, list):
         for s in items:
             uuid = s.get("uuid", "")
@@ -621,7 +641,7 @@ except Exception:
 
                 if [ ${#squad_lines[@]} -eq 0 ]; then
                     echo -e "${C_YELLOW}[i] Внешние сквады (External Squads) не найдены в панели.${C_RESET}"
-                    read -r -p "Нажмите Enter для продолжения..."
+                    read -r -p "Нажмите Enter для возврата в меню..."
                     continue
                 fi
 
@@ -636,8 +656,11 @@ except Exception:
                 done
 
                 echo ""
-                read -r -p "Привязать сквад по номеру [1-${#squad_lines[@]}, Enter для отмены]: " pick_sq
-                if [ -n "$pick_sq" ] && [ "$pick_sq" -ge 1 ] && [ "$pick_sq" -le "${#squad_lines[@]}" ] 2>/dev/null; then
+                read -r -p "Привязать сквад по номеру [1-${#squad_lines[@]}, Enter = отмена]: " pick_sq
+                if [ -z "$pick_sq" ] || [ "$pick_sq" = "0" ]; then
+                    continue
+                fi
+                if [ "$pick_sq" -ge 1 ] && [ "$pick_sq" -le "${#squad_lines[@]}" ] 2>/dev/null; then
                     local sel_line="${squad_lines[$((pick_sq - 1))]}"
                     local sel_uuid sel_name
                     sel_uuid=$(echo "$sel_line" | cut -f1)
@@ -647,7 +670,11 @@ except Exception:
                     echo "  1) JSONSUB.JSON (маршрут подписок)"
                     echo "  2) WHITELIST.JSON (белый список)"
                     echo "  3) DEFAULT.JSON"
-                    read -r -p "Номер правила [1-3, Enter = 1]: " r_choice
+                    echo "  0) ⬅️ Отмена"
+                    read -r -p "Номер правила [1-3, Enter = 1, 0 = отмена]: " r_choice
+                    if [ "$r_choice" = "0" ]; then
+                        continue
+                    fi
                     local sel_rule="JSONSUB.JSON"
                     [ "$r_choice" = "2" ] && sel_rule="WHITELIST.JSON"
                     [ "$r_choice" = "3" ] && sel_rule="DEFAULT.JSON"
@@ -669,7 +696,10 @@ except Exception:
                     continue
                 fi
                 read -r -p "Введите номер сквада [1-$count, Enter = отмена]: " pick_num
-                if [ -n "$pick_num" ] && [ "$pick_num" -ge 1 ] && [ "$pick_num" -le "$count" ] 2>/dev/null; then
+                if [ -z "$pick_num" ] || [ "$pick_num" = "0" ]; then
+                    continue
+                fi
+                if [ "$pick_num" -ge 1 ] && [ "$pick_num" -le "$count" ] 2>/dev/null; then
                     local cur_r cur_n
                     cur_r="$(get_env_val "REMNAWAVE_SQUAD_${pick_num}_RULE" "$env_file" "JSONSUB.JSON")"
                     cur_n="$(get_env_val "REMNAWAVE_SQUAD_${pick_num}_NAME" "$env_file" "Сквад #$pick_num")"
@@ -679,7 +709,11 @@ except Exception:
                     echo "  1) JSONSUB.JSON"
                     echo "  2) WHITELIST.JSON"
                     echo "  3) DEFAULT.JSON"
-                    read -r -p "Номер [1-3, Enter = оставить $cur_r]: " new_r_opt
+                    echo "  0) ⬅️ Отмена"
+                    read -r -p "Номер [1-3, Enter = оставить $cur_r, 0 = отмена]: " new_r_opt
+                    if [ "$new_r_opt" = "0" ]; then
+                        continue
+                    fi
                     local new_rule="$cur_r"
                     [ "$new_r_opt" = "1" ] && new_rule="JSONSUB.JSON"
                     [ "$new_r_opt" = "2" ] && new_rule="WHITELIST.JSON"
@@ -692,30 +726,47 @@ except Exception:
                 fi
                 ;;
             3)
-                read -r -p "Введите UUID сквада из Remnawave: " new_uuid
-                if [ -n "$new_uuid" ]; then
-                    read -r -p "Название сквада (для себя): " new_name
-                    new_name="${new_name:-Сквад}"
-                    echo "Выберите правило:"
-                    echo "  1) JSONSUB.JSON"
-                    echo "  2) WHITELIST.JSON"
-                    read -r -p "Номер [1-2, Enter = 1]: " r_opt
-                    local r_val="JSONSUB.JSON"
-                    [ "$r_opt" = "2" ] && r_val="WHITELIST.JSON"
-
-                    local n_idx=$((count + 1))
-                    set_env_val "REMNAWAVE_SQUAD_${n_idx}_UUID" "$new_uuid" "$env_file"
-                    set_env_val "REMNAWAVE_SQUAD_${n_idx}_RULE" "$r_val" "$env_file"
-                    set_env_val "REMNAWAVE_SQUAD_${n_idx}_NAME" "$new_name" "$env_file"
-                    echo -e "${C_GREEN}[✓] Сквад добавлен.${C_RESET}"
-                    (cd "$install_dir" && $(detect_compose) restart >/dev/null 2>&1 || true)
-                    sleep 1
+                read -r -p "Введите UUID сквада из Remnawave [Enter = отмена]: " new_uuid
+                if [ -z "$new_uuid" ] || [ "$new_uuid" = "0" ]; then
+                    continue
                 fi
+                read -r -p "Название сквада (для себя) [Enter = Сквад, 0 = отмена]: " new_name
+                if [ "$new_name" = "0" ]; then
+                    continue
+                fi
+                new_name="${new_name:-Сквад}"
+                echo "Выберите правило:"
+                echo "  1) JSONSUB.JSON"
+                echo "  2) WHITELIST.JSON"
+                echo "  3) DEFAULT.JSON"
+                echo "  0) ⬅️ Отмена"
+                read -r -p "Номер [1-3, Enter = 1, 0 = отмена]: " r_opt
+                if [ "$r_opt" = "0" ]; then
+                    continue
+                fi
+                local r_val="JSONSUB.JSON"
+                [ "$r_opt" = "2" ] && r_val="WHITELIST.JSON"
+                [ "$r_opt" = "3" ] && r_val="DEFAULT.JSON"
+
+                local n_idx=$((count + 1))
+                set_env_val "REMNAWAVE_SQUAD_${n_idx}_UUID" "$new_uuid" "$env_file"
+                set_env_val "REMNAWAVE_SQUAD_${n_idx}_RULE" "$r_val" "$env_file"
+                set_env_val "REMNAWAVE_SQUAD_${n_idx}_NAME" "$new_name" "$env_file"
+                echo -e "${C_GREEN}[✓] Сквад добавлен.${C_RESET}"
+                (cd "$install_dir" && $(detect_compose) restart >/dev/null 2>&1 || true)
+                sleep 1
                 ;;
             4)
-                if [ "$count" -eq 0 ]; then continue; fi
+                if [ "$count" -eq 0 ]; then
+                    echo -e "${C_YELLOW}Нет привязанных сквадов для удаления.${C_RESET}"
+                    sleep 1
+                    continue
+                fi
                 read -r -p "Введите номер сквада для удаления [1-$count, Enter = отмена]: " del_num
-                if [ -n "$del_num" ] && [ "$del_num" -ge 1 ] && [ "$del_num" -le "$count" ] 2>/dev/null; then
+                if [ -z "$del_num" ] || [ "$del_num" = "0" ]; then
+                    continue
+                fi
+                if [ "$del_num" -ge 1 ] && [ "$del_num" -le "$count" ] 2>/dev/null; then
                     delete_env_val "REMNAWAVE_SQUAD_${del_num}_UUID" "$env_file"
                     delete_env_val "REMNAWAVE_SQUAD_${del_num}_RULE" "$env_file"
                     delete_env_val "REMNAWAVE_SQUAD_${del_num}_NAME" "$env_file"
@@ -724,9 +775,15 @@ except Exception:
                 fi
                 ;;
             5)
-                read -r -p "Новый URL API [Enter = $remna_url]: " new_url
+                read -r -p "Новый URL API [Enter = оставить $remna_url, 0 = отмена]: " new_url
+                if [ "$new_url" = "0" ]; then
+                    continue
+                fi
                 new_url="${new_url:-$remna_url}"
-                read -r -p "Новый JWT токен [Enter = оставить текущий]: " new_token
+                read -r -p "Новый JWT токен [Enter = оставить текущий, 0 = отмена]: " new_token
+                if [ "$new_token" = "0" ]; then
+                    continue
+                fi
                 new_token="${new_token:-$remna_token}"
                 set_env_val "REMNAWAVE_BASE_URL" "$new_url" "$env_file"
                 set_env_val "REMNAWAVE_TOKEN" "$new_token" "$env_file"
@@ -734,11 +791,14 @@ except Exception:
                 sleep 1
                 ;;
             6)
-                read -r -p "Вы уверены, что хотите отключить Remnawave? [y/N]: " conf_dis
+                read -r -p "Вы уверены, что хотите отключить Remnawave? [y/N, Enter = отмена]: " conf_dis
                 if [[ "$conf_dis" =~ ^[Yy]$ ]]; then
                     delete_env_val "REMNAWAVE_BASE_URL" "$env_file"
                     delete_env_val "REMNAWAVE_TOKEN" "$env_file"
                     echo -e "${C_YELLOW}[✓] Интеграция с Remnawave отключена.${C_RESET}"
+                    sleep 1
+                else
+                    echo -e "${C_GRAY}Отмена.${C_RESET}"
                     sleep 1
                 fi
                 ;;
@@ -778,7 +838,10 @@ menu_schedule() {
                 echo ""
                 echo -e "  ${C_GRAY}Введите время суток в формате ЧЧ:ММ (сервер использует UTC).${C_RESET}"
                 echo -e "  ${C_GRAY}Примеры: 12:00, 15:30, 04:15, 9:00${C_RESET}"
-                read -r -p "  Время суток [ЧЧ:ММ]: " input_time
+                read -r -p "  Время суток [ЧЧ:ММ, Enter = отмена]: " input_time
+                if [ -z "$input_time" ] || [ "$input_time" = "0" ]; then
+                    continue
+                fi
                 if [[ "$input_time" =~ ^([0-1]?[0-9]|2[0-3]):([0-5][0-9])$ ]]; then
                     local h=$((10#${BASH_REMATCH[1]}))
                     local m=$((10#${BASH_REMATCH[2]}))
@@ -794,7 +857,10 @@ menu_schedule() {
                 ;;
             2)
                 echo ""
-                read -r -p "  Каждые сколько часов обновлять базы? [1-24, например 4]: " input_hours
+                read -r -p "  Каждые сколько часов обновлять базы? [1-24, Enter = отмена]: " input_hours
+                if [ -z "$input_hours" ] || [ "$input_hours" = "0" ]; then
+                    continue
+                fi
                 if [[ "$input_hours" =~ ^[0-9]+$ ]] && [ "$input_hours" -ge 1 ] && [ "$input_hours" -le 24 ]; then
                     if [ "$input_hours" -eq 1 ]; then
                         new_sched="0 * * * *"
@@ -814,8 +880,11 @@ menu_schedule() {
             5) new_sched="0 */6 * * *" ;;
             6) new_sched="0 */12 * * *" ;;
             7)
-                read -r -p "Введите cron-выражение [например: 0 12 * * *]: " input_sched
-                new_sched="${input_sched:-$cur_schedule}"
+                read -r -p "Введите cron-выражение [например: 0 12 * * *, Enter = отмена]: " input_sched
+                if [ -z "$input_sched" ] || [ "$input_sched" = "0" ]; then
+                    continue
+                fi
+                new_sched="$input_sched"
                 ;;
             0) return 0 ;;
             *) continue ;;
@@ -884,23 +953,30 @@ menu_telegram() {
                     fi
                     read -r -p "Нажмите Enter для продолжения..."
                 else
-                    read -r -p "Bot Token (от @BotFather): " input_token
-                    read -r -p "Chat ID: " input_chat
-                    read -r -p "Thread ID (ID темы/топика, если есть, иначе Enter): " input_thread
-                    if [ -n "$input_token" ] && [ -n "$input_chat" ]; then
-                        set_env_val "TELEGRAM_BOT_TOKEN" "$input_token" "$env_file"
-                        set_env_val "TELEGRAM_CHAT_ID" "$input_chat" "$env_file"
-                        [ -n "$input_thread" ] && set_env_val "TELEGRAM_THREAD_ID" "$input_thread" "$env_file"
-                        echo -e "${C_GREEN}[✓] Telegram настроен!${C_RESET}"
-                        (cd "$install_dir" && $(detect_compose) up -d >/dev/null 2>&1 || true)
-                        sleep 1
+                    read -r -p "Bot Token (от @BotFather, Enter = отмена): " input_token
+                    if [ -z "$input_token" ] || [ "$input_token" = "0" ]; then
+                        continue
                     fi
+                    read -r -p "Chat ID [Enter = отмена]: " input_chat
+                    if [ -z "$input_chat" ] || [ "$input_chat" = "0" ]; then
+                        continue
+                    fi
+                    read -r -p "Thread ID (ID темы/топика, если есть, Enter = пропустить): " input_thread
+                    set_env_val "TELEGRAM_BOT_TOKEN" "$input_token" "$env_file"
+                    set_env_val "TELEGRAM_CHAT_ID" "$input_chat" "$env_file"
+                    [ -n "$input_thread" ] && set_env_val "TELEGRAM_THREAD_ID" "$input_thread" "$env_file"
+                    echo -e "${C_GREEN}[✓] Telegram настроен!${C_RESET}"
+                    (cd "$install_dir" && $(detect_compose) up -d >/dev/null 2>&1 || true)
+                    sleep 1
                 fi
                 ;;
             2)
-                read -r -p "Новый Bot Token [Enter = оставить]: " new_tok
-                read -r -p "Новый Chat ID [Enter = оставить]: " new_c
-                read -r -p "Новый Thread ID [Enter = оставить]: " new_th
+                read -r -p "Новый Bot Token [Enter = оставить, 0 = отмена]: " new_tok
+                if [ "$new_tok" = "0" ]; then continue; fi
+                read -r -p "Новый Chat ID [Enter = оставить, 0 = отмена]: " new_c
+                if [ "$new_c" = "0" ]; then continue; fi
+                read -r -p "Новый Thread ID [Enter = оставить, 0 = отмена]: " new_th
+                if [ "$new_th" = "0" ]; then continue; fi
                 [ -n "$new_tok" ] && set_env_val "TELEGRAM_BOT_TOKEN" "$new_tok" "$env_file"
                 [ -n "$new_c" ] && set_env_val "TELEGRAM_CHAT_ID" "$new_c" "$env_file"
                 [ -n "$new_th" ] && set_env_val "TELEGRAM_THREAD_ID" "$new_th" "$env_file"
@@ -915,11 +991,17 @@ menu_telegram() {
                 sleep 1
                 ;;
             4)
-                delete_env_val "TELEGRAM_BOT_TOKEN" "$env_file"
-                delete_env_val "TELEGRAM_CHAT_ID" "$env_file"
-                delete_env_val "TELEGRAM_THREAD_ID" "$env_file"
-                echo -e "${C_YELLOW}[✓] Telegram-уведомления отключены.${C_RESET}"
-                sleep 1
+                read -r -p "Отключить Telegram-уведомления? [y/N, Enter = отмена]: " conf_tg
+                if [[ "$conf_tg" =~ ^[Yy]$ ]]; then
+                    delete_env_val "TELEGRAM_BOT_TOKEN" "$env_file"
+                    delete_env_val "TELEGRAM_CHAT_ID" "$env_file"
+                    delete_env_val "TELEGRAM_THREAD_ID" "$env_file"
+                    echo -e "${C_YELLOW}[✓] Telegram-уведомления отключены.${C_RESET}"
+                    sleep 1
+                else
+                    echo -e "${C_GRAY}Отмена.${C_RESET}"
+                    sleep 1
+                fi
                 ;;
             0) return 0 ;;
         esac
@@ -966,12 +1048,17 @@ menu_clients_bases() {
                 echo "  2) Только HAPP"
                 echo "  3) Только INCY"
                 echo "  4) HAPP_DEEPLINK (только апдейтер сквадов Remnawave, базы внешние)"
-                read -r -p "Номер [1-4]: " c_opt
+                echo "  0) ⬅️ Назад"
+                read -r -p "Номер [1-4, Enter = отмена]: " c_opt
+                if [ -z "$c_opt" ] || [ "$c_opt" = "0" ]; then
+                    continue
+                fi
                 case "$c_opt" in
                     1) set_env_val "ENABLED_CLIENTS" "HAPP,INCY" "$env_file" ;;
                     2) set_env_val "ENABLED_CLIENTS" "HAPP" "$env_file" ;;
                     3) set_env_val "ENABLED_CLIENTS" "INCY" "$env_file" ;;
                     4) set_env_val "ENABLED_CLIENTS" "HAPP_DEEPLINK" "$env_file" ;;
+                    *) continue ;;
                 esac
                 echo -e "${C_GREEN}[✓] Сохранено.${C_RESET}"
                 sleep 1
@@ -991,14 +1078,19 @@ menu_clients_bases() {
                 sleep 1
                 ;;
             4)
-                echo -e "${C_GRAY}Если базы отдаются с другого сервера, укажите базовый URL (или Enter чтобы очистить):${C_RESET}"
-                read -r -p "URL [Enter = локальные базы]: " in_ext
-                if [ -n "$in_ext" ]; then
-                    set_env_val "PUBLIC_GEO_BASE_URL" "$in_ext" "$env_file"
-                else
-                    delete_env_val "PUBLIC_GEO_BASE_URL" "$env_file"
+                echo -e "${C_GRAY}Текущее значение: ${ext_geo:-локальные базы (не задано)}${C_RESET}"
+                echo -e "${C_GRAY}Укажите базовый URL (или 'none' для сброса на локальные базы):${C_RESET}"
+                read -r -p "URL [Enter = оставить без изменений, 0 = отмена]: " in_ext
+                if [ -z "$in_ext" ] || [ "$in_ext" = "0" ]; then
+                    continue
                 fi
-                echo -e "${C_GREEN}[✓] Сохранено.${C_RESET}"
+                if [ "$in_ext" = "none" ] || [ "$in_ext" = "clear" ]; then
+                    delete_env_val "PUBLIC_GEO_BASE_URL" "$env_file"
+                    echo -e "${C_GREEN}[✓] Сброшено на локальные базы.${C_RESET}"
+                else
+                    set_env_val "PUBLIC_GEO_BASE_URL" "$in_ext" "$env_file"
+                    echo -e "${C_GREEN}[✓] Сохранено: $in_ext${C_RESET}"
+                fi
                 sleep 1
                 ;;
             0) return 0 ;;
@@ -1101,11 +1193,12 @@ EOF
         fi
     fi
 
-    chmod 600 "$install_dir/.env"
+    chmod 644 "$install_dir/.env"
 
     # Создание compose.yaml
     echo -e "${C_YELLOW}[*] Создание compose.yaml...${C_RESET}"
     generate_compose_yaml "$install_dir" "$remna_net"
+    chmod 644 "$install_dir/compose.yaml" 2>/dev/null || true
 
     # Сохранение скрипта и CLI ссылки
     cp "$0" "$install_dir/install.sh" 2>/dev/null || true
@@ -1147,7 +1240,7 @@ main_menu() {
         echo "  2) 🔄 Запустить синхронизацию баз прямо сейчас"
         echo "  3) 📜 Логи контейнера (docker logs)"
         echo "  4) ⚡ Настройка сквадов Remnawave"
-        echo "  5) ⏰ Расписание автообновления (Cron)"
+        echo "  5) ⏰ Расписание автообновления (Cron / Время)"
         echo "  6) 🤖 Telegram-уведомления"
         echo "  7) 🌐 Клиенты, форматы и Geo-базы"
         echo "  8) 📋 Сниппеты Caddy / Nginx"
@@ -1160,16 +1253,16 @@ main_menu() {
         read -r -p "  Выберите действие [0-12]: " choice
 
         case "$choice" in
-            1) cmd_status; echo ""; read -r -p "Нажмите Enter для продолжения..." ;;
-            2) cmd_sync; echo ""; read -r -p "Нажмите Enter для продолжения..." ;;
+            1) cmd_status; echo ""; read -r -p "Нажмите Enter для возврата в меню..." ;;
+            2) cmd_sync; echo ""; read -r -p "Нажмите Enter для возврата в меню..." ;;
             3) cmd_logs ;;
             4) menu_remnawave ;;
             5) menu_schedule ;;
             6) menu_telegram ;;
             7) menu_clients_bases ;;
-            8) cmd_proxy; echo ""; read -r -p "Нажмите Enter для продолжения..." ;;
-            9) cmd_update; echo ""; read -r -p "Нажмите Enter для продолжения..." ;;
-            10) cmd_restart; echo ""; read -r -p "Нажмите Enter для продолжения..." ;;
+            8) cmd_proxy; echo ""; read -r -p "Нажмите Enter для возврата в меню..." ;;
+            9) cmd_update; echo ""; read -r -p "Нажмите Enter для возврата в меню..." ;;
+            10) cmd_restart; echo ""; read -r -p "Нажмите Enter для возврата в меню..." ;;
             11) cmd_edit ;;
             12) cmd_uninstall; exit 0 ;;
             0|q|exit) clear 2>/dev/null || true; exit 0 ;;
