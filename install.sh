@@ -412,9 +412,9 @@ cmd_status() {
         local remna_check
         remna_check="$(get_env_val "REMNAWAVE_BASE_URL" "$env_file" "")"
         if [ -n "$remna_check" ]; then
-            echo -e "  • Маршруты:       ${C_GRAY}Внедряются автоматически в сквады Remnawave (см. блок ниже)${C_RESET}"
+            echo -e "  • Правила:        ${C_GRAY}Применяются автоматически в сквады Remnawave (см. блок ниже)${C_RESET}"
         else
-            echo -e "  • Маршруты:       ${C_YELLOW}Требуется подключение Remnawave (пункт 4 в меню)${C_RESET}"
+            echo -e "  • Правила:        ${C_GRAY}Настраиваются в сквадах панели (подключение API: пункт 4)${C_RESET}"
         fi
         echo ""
     fi
