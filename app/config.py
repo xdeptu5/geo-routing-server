@@ -15,7 +15,7 @@ class Config:
     LOCK_FILE = BASE_DIR / ".sync.lock"
     
     DOMAIN = re.sub(r"^https?://", "", os.getenv("DOMAIN", "geo.example.com").strip()).rstrip("/")
-    SCHEDULE = os.getenv("SCHEDULE", "40 8 * * *").strip()
+    SCHEDULE = os.getenv("SCHEDULE", "0 10 * * *").strip()
     SYNC_ON_START = os.getenv("SYNC_ON_START", "true").lower() in ("true", "1", "yes")
     
     # Список активных модулей: HAPP, HAPP_DEEPLINK, HAPP_GEO, INCY, INCY_GEO
@@ -38,15 +38,7 @@ class Config:
     SERVE_GEOSITE = os.getenv("SERVE_GEOSITE", "true").lower() in ("true", "1", "yes")
 
     # Форматы правил: CLIENT_OPTIMIZED (Happ -> .DEEPLINK, Incy -> .JSON), ALL, JSON, DEEPLINK
-    SERVE_FORMATS = os.getenv("SERVE_FORMATS", "ALL").strip().upper()
-
-    @classmethod
-    def should_serve_rule(cls, rule_name: str) -> bool:
-        """Проверяет, разрешено ли правило к генерации и отдаче."""
-        if not cls.ROUTING_RULES:
-            return True
-        clean = rule_name.strip().upper().removesuffix(".JSON")
-        return clean in cls.ROUTING_RULES
+    SERVE_FORMATS = os.getenv("SERVE_FORMATS", "CLIENT_OPTIMIZED").strip().upper()
 
     @classmethod
     def should_serve_json(cls, client: str) -> bool:
@@ -156,15 +148,6 @@ class Config:
     def get_base_url(cls, token: str) -> str:
         """Формирует базовый публичный HTTPS URL."""
         return f"https://{cls.DOMAIN}/{token}"
-
-    @classmethod
-    def get_github_api_base(cls) -> str:
-        """Извлекает GitHub API endpoint из URL сырого репозитория."""
-        match = re.search(r"raw\.githubusercontent\.com/([^/]+)/([^/]+)", cls.ROUTING_SOURCE_REPO, re.IGNORECASE)
-        if match:
-            owner, repo = match.group(1), match.group(2)
-            return f"https://api.github.com/repos/{owner}/{repo}/contents"
-        return "https://api.github.com/repos/hydraponique/roscomvpn-routing/contents"
 
     @classmethod
     def get_github_contents_url(cls, client: str) -> str:

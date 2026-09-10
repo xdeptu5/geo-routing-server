@@ -27,7 +27,7 @@ class HappProcessor(BaseProcessor):
         
         # Определяем, какие подмодули активны для HAPP
         clients_set = set(Config.ENABLED_CLIENTS)
-        needs_geo = "HAPP" in clients_set or "HAPP_GEO" in clients_set
+        needs_geo = ("HAPP" in clients_set or "HAPP_GEO" in clients_set) and not bool(Config.PUBLIC_GEO_BASE_URL)
         needs_deeplink = "HAPP" in clients_set or "HAPP_DEEPLINK" in clients_set or "HAPP_LOCAL" in clients_set
         
         default_json_data = None
@@ -136,8 +136,7 @@ class HappProcessor(BaseProcessor):
                     
                     if Config.should_serve_deeplink(client) or RemnawaveSync.is_configured():
                         if Publisher.publish_file(target_dir, deeplink_filename, deeplink_content):
-                            if Config.should_serve_deeplink(client):
-                                published_files.add(deeplink_filename)
+                            published_files.add(deeplink_filename)
                         else:
                             success = False
                         

@@ -11,10 +11,11 @@ logger = logging.getLogger("geo-routing-server")
 class GeoManager:
     """Управление загрузкой и публикацией geo-баз (geoip.dat и geosite.dat)."""
     
+    _memory_cache: Dict[str, bytes] = {}
+
     def __init__(self, downloader: Downloader, custom_geo_dir: Path):
         self.downloader = downloader
         self.custom_geo_dir = custom_geo_dir
-        self._memory_cache: Dict[str, bytes] = {}
         
     def resolve_and_fetch(self, client: str, geo_type: str, default_json_data: Optional[dict] = None) -> bytes:
         """
@@ -45,11 +46,10 @@ class GeoManager:
                 logger.info(f"  Reusing already downloaded {geo_type} for {client}")
                 return self._memory_cache[custom_url]
             logger.info(f"  Downloading {geo_type} for {client} from custom URL: {custom_url}")
-            url_hash = hashlib.sha256(custom_url.encode("utf-8")).hexdigest()[:8]
             try:
                 data = self.downloader.fetch(
                     custom_url,
-                    f"geo_{geo_type}_custom_{url_hash}",
+                    f"geo_{geo_type}_custom",
                     kind="binary",
                     trusted_url=True,
                 )
@@ -69,11 +69,10 @@ class GeoManager:
                 logger.info(f"  Reusing already downloaded {geo_type} for {client}")
                 return self._memory_cache[url]
             logger.info(f"  Downloading {geo_type} for {client} from repository source: {url}")
-            url_hash = hashlib.sha256(url.encode("utf-8")).hexdigest()[:12]
             try:
                 data = self.downloader.fetch(
                     url,
-                    f"global_{geo_type}_{url_hash}",
+                    f"global_{geo_type}",
                     kind="binary",
                     trusted_url=False,
                 )

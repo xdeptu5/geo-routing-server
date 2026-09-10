@@ -133,6 +133,7 @@ class Downloader:
         if not addresses:
             raise DownloadError(f"Could not resolve URL host '{parsed.hostname}'")
 
+        valid_ips = []
         for address in addresses:
             ip_text = address[4][0]
             try:
@@ -143,8 +144,13 @@ class Downloader:
                 raise DownloadError(
                     f"Rejected URL resolving to private or reserved address '{ip_text}': {url}"
                 )
+            valid_ips.append(resolved_ip)
 
-        return addresses[0][4][0]
+        # Предпочитаем IPv4 для надежной совместимости на VPS без настроенной IPv6-маршрутизации
+        ipv4_candidates = [str(ip) for ip in valid_ips if ip.version == 4]
+        if ipv4_candidates:
+            return ipv4_candidates[0]
+        return str(valid_ips[0])
 
     def fetch(
         self,

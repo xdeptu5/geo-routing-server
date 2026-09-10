@@ -1,12 +1,12 @@
 #!/bin/sh
 set -eu
 
-: "${SCHEDULE:?SCHEDULE must be set}"
+SCHEDULE="${SCHEDULE:-0 10 * * *}"
 SYNC_ON_START="${SYNC_ON_START:-true}"
 
 resolve_routing_token() {
     routing_value="${ROUTING_TOKEN:-}"
-    clients="$(printf '%s' "${ENABLED_CLIENTS:-HAPP,INCY}" | tr -d '[:space:]')"
+    clients="$(printf '%s' "${ENABLED_CLIENTS:-HAPP,INCY}" | tr -d '[:space:]' | tr '[:lower:]' '[:upper:]')"
 
     if [ -z "$routing_value" ] || [ "$routing_value" = "change_me_to_random_secret_token" ]; then
         case ",$clients," in
@@ -72,8 +72,8 @@ RUNNER
 
 chmod 755 /usr/local/bin/run-routing-sync
 
-# Настройка расписания cron
-printf '%s %s\n' "$SCHEDULE" '/usr/local/bin/run-routing-sync' > /etc/crontabs/root
+# Настройка расписания cron (с перенаправлением вывода в stdout контейнера)
+printf '%s %s > /proc/1/fd/1 2>&1\n' "$SCHEDULE" '/usr/local/bin/run-routing-sync' > /etc/crontabs/root
 
 echo "[geo-routing-server] starting internal web server (nginx) on port 80..."
 nginx -g 'daemon off;' &

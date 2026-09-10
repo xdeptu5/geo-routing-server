@@ -119,8 +119,3 @@ class Publisher:
             is_updated=is_updated
         )
         return True
-
-    @classmethod
-    def publish_geo_with_checksum(cls, dest_dir: Path, filename: str, content: bytes) -> bool:
-        """Публикует бинарную базу (legacy alias для совместимости)."""
-        return cls.publish_file(dest_dir, filename, content)

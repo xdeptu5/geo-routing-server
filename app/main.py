@@ -55,17 +55,18 @@ def ensure_internal_symlinks(storage_dir: Path, token: str):
         target = storage_dir / token / client
         link = storage_dir / client
         if target.is_dir():
+            rel_target = Path(token) / client
             tmp_link = storage_dir / f".{client}.tmp_link"
             try:
                 if tmp_link.is_symlink() or tmp_link.exists():
                     tmp_link.unlink()
-                tmp_link.symlink_to(target, target_is_directory=True)
+                tmp_link.symlink_to(rel_target, target_is_directory=True)
                 os.replace(tmp_link, link)
             except Exception:
                 try:
                     if link.is_symlink() or link.is_file():
                         link.unlink()
-                    link.symlink_to(target, target_is_directory=True)
+                    link.symlink_to(rel_target, target_is_directory=True)
                 except Exception:
                     pass
 
@@ -110,6 +111,7 @@ def print_summary_banner(token: str):
         happ_lines = ["[HAPP]"]
         if RemnawaveSync.is_configured():
             happ_lines.append("  - Прямая интеграция с Remnawave API: АКТИВНА (автопатч сквадов без сторонних сервисов)")
+            squads = []
             try:
                 squads = RemnawaveSync.load_squad_configs()
                 RemnawaveSync.fetch_all_squad_names()
@@ -123,6 +125,12 @@ def print_summary_banner(token: str):
                         happ_lines.append(f"      Сквад {u} -> {rule}")
             except Exception:
                 pass
+            if not squads and not os.getenv("REMNAWAVE_GLOBAL_RULE"):
+                happ_lines.append("      [i] Сквады ещё не привязаны. Добавьте сквад через: geoserver -> пункт 4")
+                if Config.should_serve_deeplink("HAPP"):
+                    happ_lines.append("  - Доступные диплинки правил (ручной импорт):")
+                    for r in active_rules:
+                        happ_lines.append(f"      • {r}:   {base_url}/HAPP/{r}.DEEPLINK")
         elif happ_deeplink:
             remna_base = os.getenv("REMNAWAVE_BASE_URL", "").strip()
             remna_token = os.getenv("REMNAWAVE_TOKEN", "").strip()
