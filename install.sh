@@ -250,6 +250,30 @@ get_container_status() {
 # ПРЯМЫЕ КОМАНДЫ CLI (Subcommands)
 # ==============================================================================
 
+human_schedule() {
+    local cron="${1:-0 10 * * *}"
+    case "$cron" in
+        "0 10 * * *") echo "Ежедневно в 10:00 UTC (13:00 МСК)" ;;
+        "0 12 * * *") echo "Ежедневно в 12:00 UTC (15:00 МСК)" ;;
+        "0 */6 * * *") echo "Каждые 6 часов" ;;
+        "0 */12 * * *") echo "Каждые 12 часов" ;;
+        *)
+            local m h d mon dow
+            read -r m h d mon dow <<< "$cron"
+            if [ "${d:-}" = "*" ] && [ "${mon:-}" = "*" ] && [ "${dow:-}" = "*" ]; then
+                if [[ "${m:-}" =~ ^[0-9]+$ ]] && [[ "${h:-}" =~ ^[0-9]+$ ]]; then
+                    printf "Ежедневно в %02d:%02d UTC\n" "$h" "$m"
+                    return
+                elif [ "$m" = "0" ] && [[ "$h" =~ ^\*/([0-9]+)$ ]]; then
+                    echo "Каждые ${BASH_REMATCH[1]} ч."
+                    return
+                fi
+            fi
+            echo "$cron"
+            ;;
+    esac
+}
+
 cmd_status() {
     local install_dir
     install_dir="$(get_install_dir)"
@@ -277,7 +301,7 @@ cmd_status() {
     printf "   ${C_LIGHT_GRAY}%-20s${C_RESET} ${C_WHITE}%s${C_RESET}\n" "Локальный порт:" "127.0.0.1:${port}"
     printf "   ${C_LIGHT_GRAY}%-20s${C_RESET} ${C_WHITE}%s${C_RESET}\n" "Токен:" "${token:0:6}...${token: -4}"
     printf "   ${C_LIGHT_GRAY}%-20s${C_RESET} ${C_WHITE}%s${C_RESET}\n" "Клиенты:" "$clients"
-    printf "   ${C_LIGHT_GRAY}%-20s${C_RESET} ${C_WHITE}%s${C_RESET}\n" "Cron расписание:" "$schedule"
+    printf "   ${C_LIGHT_GRAY}%-20s${C_RESET} ${C_WHITE}%s${C_RESET} ${C_GRAY}(%s)${C_RESET}\n" "Расписание:" "$(human_schedule "$schedule")" "$schedule"
     echo ""
 
     echo -e "${C_GREEN}${C_BOLD}🔗 Публичные ссылки для клиентов:${C_RESET}"
@@ -735,24 +759,61 @@ menu_schedule() {
         echo -e "  ${C_WHITE}Раздел:${C_RESET} ⏰ Расписание автоматической синхронизации"
         hr 50
         echo ""
-        echo -e "  ${C_WHITE}Текущее расписание:${C_RESET} ${C_GREEN}${cur_schedule}${C_RESET}"
+        echo -e "  ${C_WHITE}Текущее расписание:${C_RESET} ${C_GREEN}$(human_schedule "$cur_schedule")${C_RESET} ${C_GRAY}($cur_schedule)${C_RESET}"
         echo ""
-        echo "  1) Раз в сутки в 10:00 UTC (13:00 МСК)"
-        echo "  2) Раз в сутки в 12:00 UTC (15:00 МСК)"
-        echo "  3) Каждые 6 часов (4 раза в день)"
-        echo "  4) Каждые 12 часов (2 раза в день)"
-        echo "  5) Ввести своё cron-выражение вручную"
+        echo "  1) 🕐 Задать точное время суток (например: 12:00, 15:30 или 04:00)"
+        echo "  2) ⏳ Задать интервал в часах (например: каждые 4 часа)"
+        echo "  3) ☀️ Раз в сутки в 10:00 UTC (13:00 МСК) — по умолчанию"
+        echo "  4) ⛅ Раз в сутки в 12:00 UTC (15:00 МСК)"
+        echo "  5) 🔄 Каждые 6 часов (4 раза в день)"
+        echo "  6) 🔄 Каждые 12 часов (2 раза в день)"
+        echo "  7) ⚙️ Ввести классическое cron-выражение вручную"
         echo "  0) ⬅️ Назад"
         echo ""
-        read -r -p "Выберите опцию [0-5]: " choice
+        read -r -p "Выберите опцию [0-7]: " choice
 
         local new_sched=""
         case "$choice" in
-            1) new_sched="0 10 * * *" ;;
-            2) new_sched="0 12 * * *" ;;
-            3) new_sched="0 */6 * * *" ;;
-            4) new_sched="0 */12 * * *" ;;
-            5)
+            1)
+                echo ""
+                echo -e "  ${C_GRAY}Введите время суток в формате ЧЧ:ММ (сервер использует UTC).${C_RESET}"
+                echo -e "  ${C_GRAY}Примеры: 12:00, 15:30, 04:15, 9:00${C_RESET}"
+                read -r -p "  Время суток [ЧЧ:ММ]: " input_time
+                if [[ "$input_time" =~ ^([0-1]?[0-9]|2[0-3]):([0-5][0-9])$ ]]; then
+                    local h=$((10#${BASH_REMATCH[1]}))
+                    local m=$((10#${BASH_REMATCH[2]}))
+                    new_sched="$m $h * * *"
+                elif [[ "$input_time" =~ ^([0-1]?[0-9]|2[0-3])$ ]]; then
+                    local h=$((10#${BASH_REMATCH[1]}))
+                    new_sched="0 $h * * *"
+                else
+                    echo -e "\n${C_RED}[!] Неверный формат времени. Используйте ЧЧ:ММ (например: 14:30).${C_RESET}"
+                    sleep 2
+                    continue
+                fi
+                ;;
+            2)
+                echo ""
+                read -r -p "  Каждые сколько часов обновлять базы? [1-24, например 4]: " input_hours
+                if [[ "$input_hours" =~ ^[0-9]+$ ]] && [ "$input_hours" -ge 1 ] && [ "$input_hours" -le 24 ]; then
+                    if [ "$input_hours" -eq 1 ]; then
+                        new_sched="0 * * * *"
+                    elif [ "$input_hours" -eq 24 ]; then
+                        new_sched="0 0 * * *"
+                    else
+                        new_sched="0 */${input_hours} * * *"
+                    fi
+                else
+                    echo -e "\n${C_RED}[!] Введите число от 1 до 24.${C_RESET}"
+                    sleep 2
+                    continue
+                fi
+                ;;
+            3) new_sched="0 10 * * *" ;;
+            4) new_sched="0 12 * * *" ;;
+            5) new_sched="0 */6 * * *" ;;
+            6) new_sched="0 */12 * * *" ;;
+            7)
                 read -r -p "Введите cron-выражение [например: 0 12 * * *]: " input_sched
                 new_sched="${input_sched:-$cur_schedule}"
                 ;;
@@ -762,9 +823,9 @@ menu_schedule() {
 
         if [ -n "$new_sched" ]; then
             set_env_val "SCHEDULE" "$new_sched" "$env_file"
-            echo -e "\n${C_GREEN}[✓] Расписание сохранено: $new_sched${C_RESET}"
+            echo -e "\n${C_GREEN}[✓] Расписание сохранено: $(human_schedule "$new_sched") ($new_sched)${C_RESET}"
             (cd "$install_dir" && $(detect_compose) up -d >/dev/null 2>&1 || true)
-            sleep 1
+            sleep 1.5
             return 0
         fi
     done
