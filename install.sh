@@ -404,6 +404,65 @@ cmd_update() {
     echo -e "${C_GREEN}[✓] Сервис успешно обновлён до последней версии.${C_RESET}\n"
 }
 
+cmd_update_script() {
+    local install_dir
+    install_dir="$(get_install_dir)"
+
+    echo -e "\n${C_YELLOW}[*] Проверка обновлений скрипта на GitHub...${C_RESET}"
+    local tmp_script
+    tmp_script=$(mktemp "${install_dir}/.install.sh.XXXXXX" 2>/dev/null || mktemp "/tmp/.install.sh.XXXXXX")
+    
+    local repo_url="https://raw.githubusercontent.com/xdeptu5/geo-routing-server/main/install.sh"
+    if ! curl -fsSL --connect-timeout 10 --max-time 30 "$repo_url" -o "$tmp_script" 2>/dev/null; then
+        rm -f "$tmp_script"
+        echo -e "${C_RED}[!] Не удалось загрузить скрипт с GitHub. Проверьте интернет-соединение.${C_RESET}"
+        return 1
+    fi
+
+    if ! bash -n "$tmp_script" 2>/dev/null; then
+        rm -f "$tmp_script"
+        echo -e "${C_RED}[!] Загруженный файл повреждён или содержит синтаксические ошибки.${C_RESET}"
+        return 1
+    fi
+
+    local remote_ver
+    remote_ver=$(grep -E '^SCRIPT_VERSION=' "$tmp_script" 2>/dev/null | head -1 | cut -d'"' -f2 || true)
+    if [ -z "$remote_ver" ]; then
+        rm -f "$tmp_script"
+        echo -e "${C_RED}[!] Не удалось определить версию в загруженном файле.${C_RESET}"
+        return 1
+    fi
+
+    echo -e "  Текущая версия:   ${C_WHITE}v${SCRIPT_VERSION}${C_RESET}"
+    echo -e "  Версия на GitHub: ${C_GREEN}v${remote_ver}${C_RESET}"
+
+    if [ "$remote_ver" = "$SCRIPT_VERSION" ]; then
+        echo -e "\n${C_CYAN}[i] Номер версии совпадает (v${SCRIPT_VERSION}).${C_RESET}"
+        read -r -p "Перезаписать локальный скрипт свежей версией с GitHub? [y/N, Enter = отмена]: " re_ans
+        if [[ ! "$re_ans" =~ ^[Yy]$ ]]; then
+            rm -f "$tmp_script"
+            echo -e "${C_GRAY}Отмена обновления скрипта.${C_RESET}"
+            return 0
+        fi
+    fi
+
+    chmod +x "$tmp_script"
+    mkdir -p "$install_dir"
+    mv -f "$tmp_script" "$install_dir/install.sh"
+    create_cli_shortcut "$install_dir"
+
+    if [ -f "$0" ] && [ "$(realpath "$0" 2>/dev/null || true)" != "$(realpath "$install_dir/install.sh" 2>/dev/null || true)" ]; then
+        cp -f "$install_dir/install.sh" "$0" 2>/dev/null || true
+    fi
+
+    echo -e "\n${C_GREEN}[✓] Скрипт управления успешно обновлён до v${remote_ver}!${C_RESET}\n"
+    sleep 1
+
+    if [ -t 0 ] && [ -f "$install_dir/install.sh" ]; then
+        exec bash "$install_dir/install.sh"
+    fi
+}
+
 cmd_edit() {
     local install_dir
     install_dir="$(get_install_dir)"
@@ -496,9 +555,10 @@ cmd_help() {
     echo "  status       Статус сервиса и ссылки на базы/диплинки"
     echo "  sync         Принудительная синхронизация баз прямо сейчас"
     echo "  logs         Просмотр логов контейнера (Ctrl+C для выхода)"
-    echo "  restart      Перезапуск Docker-контейнера"
-    echo "  update       Обновление Docker-образа до актуального"
-    echo "  stop / start Остановка и запуск контейнера"
+    echo "  restart        Перезапуск Docker-контейнера"
+    echo "  update         Обновление Docker-образа до актуального"
+    echo "  update-script  Обновление скрипта управления с GitHub"
+    echo "  stop / start   Остановка и запуск контейнера"
     echo "  config       Редактирование файла .env в редакторе"
     echo "  proxy        Сниппеты для настройки Caddy и Nginx"
     echo "  uninstall    Полное удаление сервиса с сервера"
@@ -1245,12 +1305,13 @@ main_menu() {
         echo "  7) 🌐 Клиенты, форматы и Geo-базы"
         echo "  8) 📋 Сниппеты Caddy / Nginx"
         echo "  9) 🚀 Обновить Docker-образ (pull & up)"
-        echo " 10) 🔄 Перезапустить контейнер"
-        echo " 11) 📝 Редактировать .env напрямую"
-        echo " 12) ❌ Удалить сервис (Uninstall)"
+        echo " 10) 📥 Обновить скрипт управления (install.sh)"
+        echo " 11) 🔄 Перезапустить контейнер"
+        echo " 12) 📝 Редактировать .env напрямую"
+        echo " 13) ❌ Удалить сервис (Uninstall)"
         echo "  0) 🚪 Выход"
         echo ""
-        read -r -p "  Выберите действие [0-12]: " choice
+        read -r -p "  Выберите действие [0-13]: " choice
 
         case "$choice" in
             1) cmd_status; echo ""; read -r -p "Нажмите Enter для возврата в меню..." ;;
@@ -1262,9 +1323,10 @@ main_menu() {
             7) menu_clients_bases ;;
             8) cmd_proxy; echo ""; read -r -p "Нажмите Enter для возврата в меню..." ;;
             9) cmd_update; echo ""; read -r -p "Нажмите Enter для возврата в меню..." ;;
-            10) cmd_restart; echo ""; read -r -p "Нажмите Enter для возврата в меню..." ;;
-            11) cmd_edit ;;
-            12) cmd_uninstall; exit 0 ;;
+            10) cmd_update_script; echo ""; read -r -p "Нажмите Enter для возврата в меню..." ;;
+            11) cmd_restart; echo ""; read -r -p "Нажмите Enter для возврата в меню..." ;;
+            12) cmd_edit ;;
+            13) cmd_uninstall; exit 0 ;;
             0|q|exit) clear 2>/dev/null || true; exit 0 ;;
             *) sleep 0.5 ;;
         esac
@@ -1278,18 +1340,20 @@ main_menu() {
 main() {
     local cmd="${1:-}"
     case "$cmd" in
-        status|info)       cmd_status ;;
-        sync)              cmd_sync ;;
-        logs)              cmd_logs ;;
-        restart)           cmd_restart ;;
-        stop)              cmd_stop ;;
-        start)             cmd_start ;;
-        update)            cmd_update ;;
-        proxy)             cmd_proxy ;;
-        edit|config)       cmd_edit ;;
-        uninstall)         cmd_uninstall ;;
-        install|setup)     wizard_install ;;
-        help|-h|--help)    cmd_help ;;
+        status|info)                 cmd_status ;;
+        sync)                        cmd_sync ;;
+        logs)                        cmd_logs ;;
+        restart)                     cmd_restart ;;
+        stop)                        cmd_stop ;;
+        start)                       cmd_start ;;
+        update)                      cmd_update ;;
+        update-script|self-update)   cmd_update_script ;;
+        update-all)                  cmd_update_script && cmd_update ;;
+        proxy)                       cmd_proxy ;;
+        edit|config)                 cmd_edit ;;
+        uninstall)                   cmd_uninstall ;;
+        install|setup)               wizard_install ;;
+        help|-h|--help)              cmd_help ;;
         "")
             local dir
             dir="$(get_install_dir)"
