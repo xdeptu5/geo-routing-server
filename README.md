@@ -143,6 +143,11 @@ bash install.sh      # запуск установки
          timeout: 5s
          retries: 3
          start_period: 10s
+       logging:
+         driver: "json-file"
+         options:
+           max-size: "10m"
+           max-file: "3"
 
    volumes:
      routing_data:

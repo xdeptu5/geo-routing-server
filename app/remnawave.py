@@ -191,7 +191,7 @@ class RemnawaveSync:
     def _read_deeplink_content(cls, happ_dir: Path, rule_name: str) -> Optional[str]:
         """Читает сгенерированный файл .DEEPLINK для указанного правила."""
         base_name = Path(rule_name).name.rsplit(".", 1)[0].upper()
-        if not re.match(r"^[A-Za-z0-9_-]+$", base_name):
+        if not re.match(r"^[A-Za-z0-9_.-]+$", base_name):
             logger.error(f"[Remnawave] Invalid rule name format: {rule_name}")
             return None
         deeplink_path = (happ_dir / f"{base_name}.DEEPLINK").resolve()

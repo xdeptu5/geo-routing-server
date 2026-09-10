@@ -235,6 +235,11 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 volumes:
   routing_data:
@@ -269,6 +274,11 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 volumes:
   routing_data:
@@ -339,7 +349,7 @@ cmd_status() {
         return 0
     fi
 
-    local domain token clients port schedule rules_str ext_geo
+    local domain token clients port schedule rules_str ext_geo serve_geoip serve_geosite
     domain="$(get_env_val "DOMAIN" "$env_file" "geo.example.com")"
     token="$(get_env_val "ROUTING_TOKEN" "$env_file" "")"
     clients="$(get_env_val "ENABLED_CLIENTS" "$env_file" "HAPP,INCY")"
@@ -347,6 +357,8 @@ cmd_status() {
     schedule="$(get_env_val "SCHEDULE" "$env_file" "0 10 * * *")"
     rules_str="$(get_env_val "ROUTING_RULES" "$env_file" "JSONSUB,WHITELIST")"
     ext_geo="$(get_env_val "PUBLIC_GEO_BASE_URL" "$env_file" "")"
+    serve_geoip="$(get_env_val "SERVE_GEOIP" "$env_file" "true")"
+    serve_geosite="$(get_env_val "SERVE_GEOSITE" "$env_file" "true")"
     [ "$rules_str" = "ALL" ] && rules_str="DEFAULT,JSONSUB,WHITELIST"
 
     echo -e "${C_WHITE}📋 Параметры сервера:${C_RESET}"
@@ -363,6 +375,17 @@ cmd_status() {
     local r_arr=()
     IFS=',' read -r -a r_arr <<< "$rules_str"
 
+    local happ_has_geo=false
+    local c_item
+    local c_arr=()
+    IFS=',' read -r -a c_arr <<< "$clients"
+    for c_item in "${c_arr[@]}"; do
+        c_item="$(echo "$c_item" | tr -d ' ' | tr '[:lower:]' '[:upper:]')"
+        if [ "$c_item" = "HAPP" ] || [ "$c_item" = "HAPP_GEO" ]; then
+            happ_has_geo=true
+        fi
+    done
+
     if [[ "$clients" =~ "INCY" ]]; then
         local incy_geo_base="https://${domain}/${token}/INCY"
         [ -n "$ext_geo" ] && incy_geo_base="${ext_geo%/}/INCY"
@@ -373,8 +396,8 @@ cmd_status() {
             [ -z "$r" ] && continue
             echo -e "      ${C_GRAY}• ${r}:${C_RESET} ${C_WHITE}incy://autorouting/onadd/https://${domain}/${token}/INCY/${r}.JSON${C_RESET}"
         done
-        echo -e "  • GeoIP база:   ${incy_geo_base}/geoip.dat"
-        echo -e "  • GeoSite база: ${incy_geo_base}/geosite.dat"
+        [ "$serve_geoip" = "true" ] && echo -e "  • GeoIP база:   ${incy_geo_base}/geoip.dat"
+        [ "$serve_geosite" = "true" ] && echo -e "  • GeoSite база: ${incy_geo_base}/geosite.dat"
         echo ""
     fi
 
@@ -388,8 +411,10 @@ cmd_status() {
             [ -z "$r" ] && continue
             echo -e "      ${C_GRAY}• ${r}:${C_RESET} https://${domain}/${token}/HAPP/${r}.DEEPLINK"
         done
-        echo -e "  • GeoIP база:     ${happ_geo_base}/geoip.dat"
-        echo -e "  • GeoSite база:   ${happ_geo_base}/geosite.dat"
+        if [ "$happ_has_geo" = "true" ]; then
+            [ "$serve_geoip" = "true" ] && echo -e "  • GeoIP база:     ${happ_geo_base}/geoip.dat"
+            [ "$serve_geosite" = "true" ] && echo -e "  • GeoSite база:   ${happ_geo_base}/geosite.dat"
+        fi
         echo ""
     fi
 
@@ -484,7 +509,7 @@ cmd_update_script() {
     tmp_script=$(mktemp "${install_dir}/.install.sh.XXXXXX" 2>/dev/null || mktemp "/tmp/.install.sh.XXXXXX")
     
     local repo_url="https://raw.githubusercontent.com/xdeptu5/geo-routing-server/main/install.sh"
-    if ! curl -fsSL --connect-timeout 10 --max-time 30 "$repo_url" -o "$tmp_script" 2>/dev/null; then
+    if ! curl -fsSL -H "Cache-Control: no-cache" --connect-timeout 10 --max-time 30 "${repo_url}?t=$(date +%s)" -o "$tmp_script" 2>/dev/null; then
         rm -f "$tmp_script"
         echo -e "${C_RED}[!] Не удалось загрузить скрипт с GitHub. Проверьте интернет-соединение.${C_RESET}"
         return 1
