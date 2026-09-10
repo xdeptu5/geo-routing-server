@@ -32,6 +32,11 @@ jobs:
             exit 0
           fi
 
+          if git log -1 --pretty=%B | grep -qiE '\[skip-version-check\]|\[no-bump\]'; then
+            echo "Skipping version bump requirement based on commit flag"
+            exit 0
+          fi
+
           previous_version=$(git show "$PREVIOUS_SHA:install.sh" | sed -n 's/^SCRIPT_VERSION="\([0-9][0-9.]*\)"/\1/p' | head -n 1)
           current_version=$(sed -n 's/^SCRIPT_VERSION="\([0-9][0-9.]*\)"/\1/p' install.sh | head -n 1)
           if [ -z "$previous_version" ] || [ -z "$current_version" ] || [ "$previous_version" = "$current_version" ]; then

@@ -34,8 +34,8 @@ print_banner() {
     clear 2>/dev/null || true
     echo -e "${C_CYAN}${C_BOLD}"
     echo "  ╔══════════════════════════════════════════════════════╗"
-    echo "  ║         Geo Routing Server  (v${SCRIPT_VERSION})             ║"
-    echo "  ║    Автономная гео-маршрутизация для Remnawave/Happ   ║"
+    echo "  ║              Geo Routing Server (v${SCRIPT_VERSION})             ║"
+    echo "  ║    Автономные Geo-базы и маршрутизация: Happ & Incy  ║"
     echo "  ╚══════════════════════════════════════════════════════╝"
     echo -e "${C_RESET}"
 }
