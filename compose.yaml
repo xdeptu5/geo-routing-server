@@ -1,3 +1,5 @@
+name: geo-routing-server
+
 services:
   geo-routing-server:
     # Готовый официальный образ из GitHub Registry:
