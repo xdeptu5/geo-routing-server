@@ -32,8 +32,9 @@ class HappProcessor(BaseProcessor):
         
         default_json_data = None
         url = Config.get_default_rule_url(client)
+        default_key = f"{client}_{client}" if Config.ROUTING_SOURCE_PRESET == "geogaga" else f"{client}_DEFAULT_orig"
         try:
-            raw_bytes = self.downloader.fetch(url, f"{client}_DEFAULT_orig", kind="rule")
+            raw_bytes = self.downloader.fetch(url, default_key, kind="rule")
             default_json_data = self.parse_rule_payload(raw_bytes, client)
         except Exception as e:
             logger.warning(f"Could not load default rule for {client} from {url}: {e}")

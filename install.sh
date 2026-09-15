@@ -131,7 +131,7 @@ set_env_val() {
     local val="$2"
     local file="$3"
     local escaped_val
-    escaped_val=$(printf '%s\n' "$val" | sed -e 's/[\/&|]/\\&/g')
+    escaped_val=$(printf '%s\n' "$val" | sed -e 's/[\\/&|]/\\&/g')
     if grep -q "^${key}=" "$file" 2>/dev/null; then
         sed -i "s|^${key}=.*|${key}=${escaped_val}|" "$file"
     else
@@ -178,16 +178,14 @@ renumber_squads() {
         delete_env_val "SQUAD_${idx}_RULE" "$file"
         delete_env_val "SQUAD_${idx}_NAME" "$file"
         if [ -n "$u" ]; then
-            tmp_squads+=("$u\t$r\t$n")
+            tmp_squads+=("$u"$'\t'"$r"$'\t'"$n")
         fi
     done
 
     local new_i=1
     for s in "${tmp_squads[@]}"; do
         local u r n
-        u="$(echo "$s" | cut -f1)"
-        r="$(echo "$s" | cut -f2)"
-        n="$(echo "$s" | cut -f3)"
+        IFS=$'\t' read -r u r n <<< "$s"
         set_env_val "REMNAWAVE_SQUAD_${new_i}_UUID" "$u" "$file"
         set_env_val "REMNAWAVE_SQUAD_${new_i}_RULE" "$r" "$file"
         [ -n "$n" ] && set_env_val "REMNAWAVE_SQUAD_${new_i}_NAME" "$n" "$file"

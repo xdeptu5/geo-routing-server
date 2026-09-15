@@ -176,7 +176,8 @@ class RemnawaveSync:
                 logger.warning(f"[Remnawave] Skipping invalid UUID format for squad #{i}: '{uuid}'")
                 continue
                 
-            rule = rule.split("/")[-1] if rule else "JSONSUB.JSON"
+            default_rule = Config.get_active_rules([], "HAPP")[0] if Config.get_active_rules([], "HAPP") else "HAPP.JSON"
+            rule = rule.split("/")[-1] if rule else default_rule
             squad_item = {
                 "uuid": uuid.lower(),
                 "rule": rule.upper()
@@ -200,7 +201,7 @@ class RemnawaveSync:
                 logger.error(f"[Remnawave] Path traversal detected in rule: {rule_name}")
                 return None
         except AttributeError:
-            if not str(deeplink_path).startswith(str(happ_dir.resolve())):
+            if not str(deeplink_path).startswith(str(happ_dir.resolve()) + os.sep):
                 logger.error(f"[Remnawave] Path traversal detected in rule: {rule_name}")
                 return None
         if deeplink_path.is_file():
@@ -296,6 +297,18 @@ class RemnawaveSync:
                 s_desc = f"Squad '{s_name}' ({squad_uuid})" if s_name else f"Squad '{squad_uuid}'"
                 deeplink = cls._read_deeplink_content(happ_dir, rule_name)
                 
+                # Если диплинк не найден, проверяем fallback на дефолтное правило пресета (например, после миграции с hydraponique на geogaga)
+                if not deeplink:
+                    default_rule = Config.get_active_rules([], "HAPP")[0] if Config.get_active_rules([], "HAPP") else "HAPP.JSON"
+                    if default_rule.upper() != rule_name.upper():
+                        fb_deeplink = cls._read_deeplink_content(happ_dir, default_rule)
+                        if fb_deeplink:
+                            logger.warning(
+                                f"[Remnawave] Файл правила '{rule_name}' для {s_desc} не найден. "
+                                f"Текущий пресет '{Config.ROUTING_SOURCE_PRESET}' — автоматически используем {default_rule.rsplit('.', 1)[0].upper()}.DEEPLINK"
+                            )
+                            deeplink = fb_deeplink
+
                 if not deeplink:
                     deeplink_name = f"{Path(rule_name).name.rsplit('.', 1)[0].upper()}.DEEPLINK"
                     error = f"Настроенный файл {deeplink_name} для {s_desc} не найден в {happ_dir}"

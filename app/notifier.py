@@ -96,21 +96,22 @@ class TelegramNotifier:
         
         # Формируем информацию о правилах и интеграциях
         info_lines = []
-        rules = Config.ROUTING_RULES if Config.ROUTING_RULES else ["JSONSUB"]
+        happ_rules = [r.upper().removesuffix(".JSON") for r in Config.get_active_rules([], "HAPP")]
+        incy_rules = [r.upper().removesuffix(".JSON") for r in Config.get_active_rules([], "INCY")]
         
         # 1. Интеграция с Remnawave API (если настроена)
         from app.remnawave import RemnawaveSync
         if RemnawaveSync.is_configured():
             info_lines.append("⚡ <b>Remnawave API:</b> сквады маршрутизации синхронизированы")
         elif "HAPP" in Config.ENABLED_CLIENTS:
-            happ_rules = [f"• <b>{r}:</b> <code>{base_url}/HAPP/{r}.DEEPLINK</code>" for r in rules]
-            happ_block = "\n".join(happ_rules)
+            happ_links = [f"• <b>{r}:</b> <code>{base_url}/HAPP/{r}.DEEPLINK</code>" for r in happ_rules]
+            happ_block = "\n".join(happ_links)
             info_lines.append(f"📱 <b>Happ (диплинки правил):</b>\n{happ_block}")
 
         # 2. Ссылки на заголовок autorouting для Incy
         if "INCY" in Config.ENABLED_CLIENTS:
-            incy_rules = [f"• <b>{r}:</b> <code>incy://autorouting/onadd/{base_url}/INCY/{r}.JSON</code>" for r in rules]
-            incy_block = "\n".join(incy_rules)
+            incy_links = [f"• <b>{r}:</b> <code>incy://autorouting/onadd/{base_url}/INCY/{r}.JSON</code>" for r in incy_rules]
+            incy_block = "\n".join(incy_links)
             info_lines.append(f"🔗 <b>Autorouting Header (Incy):</b>\n{incy_block}")
             
         extra_block = ("\n\n" + "\n\n".join(info_lines)) if info_lines else ""
