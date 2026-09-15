@@ -61,8 +61,16 @@ class Config:
         return True
 
     @classmethod
-    def get_active_rules(cls, discovered_rules: List[str]) -> List[str]:
-        """Возвращает отфильтрованный список правил для генерации."""
+    def get_active_rules(cls, discovered_rules: List[str], client: str = "") -> List[str]:
+        """Возвращает отфильтрованный список правил для генерации с учетом пресета."""
+        preset = cls.ROUTING_SOURCE_PRESET
+        c = client.upper() if client else "HAPP"
+
+        if preset == "geogaga":
+            return [f"{c}.JSON"]
+        if preset == "vahellame":
+            return ["WHITELIST.JSON"]
+
         if not cls.ROUTING_RULES:
             return discovered_rules
         discovered_dict = {r.upper().removesuffix(".JSON"): r for r in discovered_rules}

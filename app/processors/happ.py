@@ -57,7 +57,7 @@ class HappProcessor(BaseProcessor):
         if needs_deeplink:
             logger.info("Processing HAPP configuration and DEEPLINK files...")
             config_files = self._discover_config_files()
-            config_files = Config.get_active_rules(config_files)
+            config_files = Config.get_active_rules(config_files, client="HAPP")
             
             # Если настроены конкретные сквады Remnawave, генерируем ТОЛЬКО запрошенные правила
             squads = RemnawaveSync.load_squad_configs()
@@ -72,7 +72,7 @@ class HappProcessor(BaseProcessor):
                 g_name = global_rule.split("/")[-1]
                 configured_rules.add(g_name if g_name.endswith(".JSON") else f"{g_name}.JSON")
 
-            if configured_rules:
+            if configured_rules and Config.ROUTING_SOURCE_PRESET not in ("geogaga", "vahellame"):
                 discovered_by_rule = {file_name.upper(): file_name for file_name in config_files}
                 for rule_name in configured_rules:
                     discovered_by_rule.setdefault(rule_name, rule_name)

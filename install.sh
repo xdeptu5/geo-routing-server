@@ -736,6 +736,73 @@ cmd_help() {
 # МОДУЛЬНЫЕ НАСТРОЙКИ (В СТИЛЕ DIGNENZZZ)
 # ==============================================================================
 
+select_rule_for_squad() {
+    local preset="$1"
+    local cur_val="${2:-}"
+    local chosen=""
+
+    if [ "$preset" = "geogaga" ]; then
+        echo "  1) HAPP.JSON (GeoGaga Split-tunneling) [По умолчанию]"
+        echo "  2) Другое правило (ввести вручную)"
+        echo "  0) ⬅️ Отмена"
+        local prompt_msg="Номер [1, Enter = HAPP.JSON, 0 = отмена]: "
+        [ -n "$cur_val" ] && prompt_msg="Номер [1, Enter = оставить $cur_val, 0 = отмена]: "
+        read -r -p "$prompt_msg" ans
+        if [ "$ans" = "0" ]; then
+            return 1
+        elif [ "$ans" = "2" ]; then
+            read -r -p "Введите имя правила [например, HAPP.JSON]: " custom_r
+            chosen="${custom_r:-HAPP.JSON}"
+        elif [ -z "$ans" ] && [ -n "$cur_val" ]; then
+            chosen="$cur_val"
+        else
+            chosen="HAPP.JSON"
+        fi
+    elif [ "$preset" = "vahellame" ]; then
+        echo "  1) WHITELIST.JSON (Строгий белый список vahellame)"
+        echo "  2) Другое правило (ввести вручную)"
+        echo "  0) ⬅️ Отмена"
+        local prompt_msg="Номер [1, Enter = WHITELIST.JSON, 0 = отмена]: "
+        [ -n "$cur_val" ] && prompt_msg="Номер [1, Enter = оставить $cur_val, 0 = отмена]: "
+        read -r -p "$prompt_msg" ans
+        if [ "$ans" = "0" ]; then
+            return 1
+        elif [ "$ans" = "2" ]; then
+            read -r -p "Введите имя правила [например, WHITELIST.JSON]: " custom_r
+            chosen="${custom_r:-WHITELIST.JSON}"
+        elif [ -z "$ans" ] && [ -n "$cur_val" ]; then
+            chosen="$cur_val"
+        else
+            chosen="WHITELIST.JSON"
+        fi
+    else
+        echo "  1) JSONSUB.JSON (маршрут подписок)"
+        echo "  2) WHITELIST.JSON (белый список)"
+        echo "  3) DEFAULT.JSON"
+        echo "  4) Другое правило (ввести вручную)"
+        echo "  0) ⬅️ Отмена"
+        local prompt_msg="Номер правила [1-3, Enter = 1, 0 = отмена]: "
+        [ -n "$cur_val" ] && prompt_msg="Номер [1-3, Enter = оставить $cur_val, 0 = отмена]: "
+        read -r -p "$prompt_msg" ans
+        if [ "$ans" = "0" ]; then
+            return 1
+        elif [ "$ans" = "2" ]; then
+            chosen="WHITELIST.JSON"
+        elif [ "$ans" = "3" ]; then
+            chosen="DEFAULT.JSON"
+        elif [ "$ans" = "4" ]; then
+            read -r -p "Введите имя правила: " custom_r
+            chosen="${custom_r:-JSONSUB.JSON}"
+        elif [ -z "$ans" ] && [ -n "$cur_val" ]; then
+            chosen="$cur_val"
+        else
+            chosen="JSONSUB.JSON"
+        fi
+    fi
+    echo "$chosen"
+    return 0
+}
+
 menu_remnawave() {
     local install_dir
     install_dir="$(get_install_dir)"
@@ -895,18 +962,12 @@ except Exception:
                     sel_uuid=$(echo "$sel_line" | cut -f1)
                     sel_name=$(echo "$sel_line" | cut -f2)
 
+                    local cur_preset
+                    cur_preset="$(get_env_val "ROUTING_SOURCE_PRESET" "$env_file" "geogaga")"
                     echo -e "\nВыберите правило для сквада ${C_WHITE}$sel_name${C_RESET}:"
-                    echo "  1) JSONSUB.JSON (маршрут подписок)"
-                    echo "  2) WHITELIST.JSON (белый список)"
-                    echo "  3) DEFAULT.JSON"
-                    echo "  0) ⬅️ Отмена"
-                    read -r -p "Номер правила [1-3, Enter = 1, 0 = отмена]: " r_choice
-                    if [ "$r_choice" = "0" ]; then
-                        continue
-                    fi
-                    local sel_rule="JSONSUB.JSON"
-                    [ "$r_choice" = "2" ] && sel_rule="WHITELIST.JSON"
-                    [ "$r_choice" = "3" ] && sel_rule="DEFAULT.JSON"
+                    local sel_rule
+                    sel_rule="$(select_rule_for_squad "$cur_preset")" || continue
+                    [ -z "$sel_rule" ] && continue
 
                     local new_idx=$((count + 1))
                     set_env_val "REMNAWAVE_SQUAD_${new_idx}_UUID" "$sel_uuid" "$env_file"
@@ -919,7 +980,7 @@ except Exception:
                 fi
                 ;;
             2)
-                # Точечное изменение правила для конкретного сквада — РЕШЕНИЕ ПРОБЛЕМЫ LTE!
+                # Точечное изменение правила для конкретного сквада
                 if [ "$count" -eq 0 ]; then
                     echo -e "${C_YELLOW}Нет сквадов для редактирования.${C_RESET}"
                     sleep 1
@@ -931,24 +992,16 @@ except Exception:
                 fi
                 if [ "$pick_num" -ge 1 ] && [ "$pick_num" -le "$count" ] 2>/dev/null; then
                     local real_idx="${indices[$((pick_num - 1))]}"
-                    local cur_r cur_n
-                    cur_r="$(get_env_val "REMNAWAVE_SQUAD_${real_idx}_RULE" "$env_file" "JSONSUB.JSON")"
+                    local cur_r cur_n cur_preset
+                    cur_r="$(get_env_val "REMNAWAVE_SQUAD_${real_idx}_RULE" "$env_file" "HAPP.JSON")"
                     cur_n="$(get_env_val "REMNAWAVE_SQUAD_${real_idx}_NAME" "$env_file" "Сквад #$pick_num")"
+                    cur_preset="$(get_env_val "ROUTING_SOURCE_PRESET" "$env_file" "geogaga")"
 
                     echo -e "\nТекущее правило для ${C_WHITE}$cur_n${C_RESET}: ${C_GREEN}$cur_r${C_RESET}"
                     echo "Выберите новое правило:"
-                    echo "  1) JSONSUB.JSON"
-                    echo "  2) WHITELIST.JSON"
-                    echo "  3) DEFAULT.JSON"
-                    echo "  0) ⬅️ Отмена"
-                    read -r -p "Номер [1-3, Enter = оставить $cur_r, 0 = отмена]: " new_r_opt
-                    if [ "$new_r_opt" = "0" ]; then
-                        continue
-                    fi
-                    local new_rule="$cur_r"
-                    [ "$new_r_opt" = "1" ] && new_rule="JSONSUB.JSON"
-                    [ "$new_r_opt" = "2" ] && new_rule="WHITELIST.JSON"
-                    [ "$new_r_opt" = "3" ] && new_rule="DEFAULT.JSON"
+                    local new_rule
+                    new_rule="$(select_rule_for_squad "$cur_preset" "$cur_r")" || continue
+                    [ -z "$new_rule" ] && continue
 
                     set_env_val "REMNAWAVE_SQUAD_${real_idx}_RULE" "$new_rule" "$env_file"
                     echo -e "${C_GREEN}[✓] Правило для '$cur_n' изменено на: $new_rule${C_RESET}"
@@ -966,18 +1019,12 @@ except Exception:
                     continue
                 fi
                 new_name="${new_name:-Сквад}"
+                local cur_preset
+                cur_preset="$(get_env_val "ROUTING_SOURCE_PRESET" "$env_file" "geogaga")"
                 echo "Выберите правило:"
-                echo "  1) JSONSUB.JSON"
-                echo "  2) WHITELIST.JSON"
-                echo "  3) DEFAULT.JSON"
-                echo "  0) ⬅️ Отмена"
-                read -r -p "Номер [1-3, Enter = 1, 0 = отмена]: " r_opt
-                if [ "$r_opt" = "0" ]; then
-                    continue
-                fi
-                local r_val="JSONSUB.JSON"
-                [ "$r_opt" = "2" ] && r_val="WHITELIST.JSON"
-                [ "$r_opt" = "3" ] && r_val="DEFAULT.JSON"
+                local r_val
+                r_val="$(select_rule_for_squad "$cur_preset")" || continue
+                [ -z "$r_val" ] && continue
 
                 local n_idx=$((count + 1))
                 set_env_val "REMNAWAVE_SQUAD_${n_idx}_UUID" "$new_uuid" "$env_file"
@@ -1378,18 +1425,21 @@ menu_clients_bases() {
                 case "$s_opt" in
                     1)
                         set_env_val "ROUTING_SOURCE_PRESET" "geogaga" "$env_file"
+                        set_env_val "ROUTING_RULES" "HAPP" "$env_file"
                         delete_env_val "ROUTING_SOURCE_REPO" "$env_file"
                         delete_env_val "GEOIP_SOURCE_URL" "$env_file"
                         delete_env_val "GEOSITE_SOURCE_URL" "$env_file"
                         ;;
                     2)
                         set_env_val "ROUTING_SOURCE_PRESET" "hydraponique" "$env_file"
+                        set_env_val "ROUTING_RULES" "JSONSUB,WHITELIST" "$env_file"
                         delete_env_val "ROUTING_SOURCE_REPO" "$env_file"
                         delete_env_val "GEOIP_SOURCE_URL" "$env_file"
                         delete_env_val "GEOSITE_SOURCE_URL" "$env_file"
                         ;;
                     3)
                         set_env_val "ROUTING_SOURCE_PRESET" "vahellame" "$env_file"
+                        set_env_val "ROUTING_RULES" "WHITELIST" "$env_file"
                         delete_env_val "ROUTING_SOURCE_REPO" "$env_file"
                         delete_env_val "GEOIP_SOURCE_URL" "$env_file"
                         delete_env_val "GEOSITE_SOURCE_URL" "$env_file"
@@ -1467,10 +1517,11 @@ wizard_install() {
     echo "      3) vahellame (Strict Whitelist — строгий белый список)"
     read -r -p "      Выберите вариант [1-3, Enter = 1]: " src_ans
     local source_preset="geogaga"
+    local def_rules="HAPP"
     case "${src_ans:-1}" in
-        2) source_preset="hydraponique" ;;
-        3) source_preset="vahellame" ;;
-        *) source_preset="geogaga" ;;
+        2) source_preset="hydraponique"; def_rules="JSONSUB,WHITELIST" ;;
+        3) source_preset="vahellame"; def_rules="WHITELIST" ;;
+        *) source_preset="geogaga"; def_rules="HAPP" ;;
     esac
 
     echo -e "\n${C_CYAN}[6/6] Локальный HTTP-порт${C_RESET}"
@@ -1506,7 +1557,7 @@ DOMAIN=${domain}
 ROUTING_TOKEN=${token}
 ENABLED_CLIENTS=${clients}
 ROUTING_SOURCE_PRESET=${source_preset}
-ROUTING_RULES=JSONSUB,WHITELIST
+ROUTING_RULES=${def_rules}
 SERVE_FORMATS=CLIENT_OPTIMIZED
 SERVE_GEOIP=true
 SERVE_GEOSITE=true

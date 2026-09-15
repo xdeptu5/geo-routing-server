@@ -56,7 +56,7 @@ class IncyProcessor(BaseProcessor):
         if needs_routing:
             logger.info(f"Processing {client} configuration files...")
             config_files = self._discover_config_files()
-            config_files = Config.get_active_rules(config_files)
+            config_files = Config.get_active_rules(config_files, client="INCY")
             
             ext_geo_url = Config.get_external_geo_url(client)
             if ext_geo_url:

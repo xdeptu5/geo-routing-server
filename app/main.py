@@ -99,7 +99,8 @@ def print_summary_banner(token: str):
     """Выводит чистый, аккуратный блок со ссылками строго под выбранные модули и файлы."""
     base_url = Config.get_base_url(token)
     clients_set = set(Config.ENABLED_CLIENTS)
-    active_rules = Config.ROUTING_RULES or ["JSONSUB", "WHITELIST"]
+    happ_rules = [r.removesuffix(".JSON") for r in Config.get_active_rules([], client="HAPP")]
+    incy_rules = [r.removesuffix(".JSON") for r in Config.get_active_rules([], client="INCY")]
     
     sections = []
     
@@ -129,7 +130,7 @@ def print_summary_banner(token: str):
                 happ_lines.append("      [i] Сквады ещё не привязаны. Добавьте сквад через: geoserver -> пункт 4")
                 if Config.should_serve_deeplink("HAPP"):
                     happ_lines.append("  - Доступные диплинки правил (ручной импорт):")
-                    for r in active_rules:
+                    for r in happ_rules:
                         happ_lines.append(f"      • {r}:   {base_url}/HAPP/{r}.DEEPLINK")
         elif happ_deeplink:
             remna_base = os.getenv("REMNAWAVE_BASE_URL", "").strip()
@@ -140,11 +141,11 @@ def print_summary_banner(token: str):
             else:
                 if Config.should_serve_deeplink("HAPP"):
                     happ_lines.append("  - Правила Happ (диплинки happ://routing/onadd/...):")
-                    for r in active_rules:
+                    for r in happ_rules:
                         happ_lines.append(f"      • {r}:   {base_url}/HAPP/{r}.DEEPLINK")
                 if Config.should_serve_json("HAPP"):
                     happ_lines.append("  - Файлы правил JSON:")
-                    for r in active_rules:
+                    for r in happ_rules:
                         happ_lines.append(f"      • {r}:   {base_url}/HAPP/{r}.JSON")
 
         if happ_geo and (Config.SERVE_GEOIP or Config.SERVE_GEOSITE):
@@ -176,7 +177,7 @@ def print_summary_banner(token: str):
             incy_lines.append("\n".join(geo_lines))
 
         if "INCY" in clients_set and Config.should_serve_json("INCY"):
-            rule_examples = "\n".join([f"      • {r}:   incy://autorouting/onadd/{base_url}/INCY/{r}.JSON" for r in active_rules])
+            rule_examples = "\n".join([f"      • {r}:   incy://autorouting/onadd/{base_url}/INCY/{r}.JSON" for r in incy_rules])
             incy_lines.append(f"""  - Заголовок подписки (Remnawave / Marzban Autorouting):
       Header Name:  autorouting
       Header Value: incy://autorouting/onadd/{base_url}/INCY/<RULE>.JSON
@@ -185,7 +186,7 @@ def print_summary_banner(token: str):
 {rule_examples}""")
 
         if "INCY" in clients_set and Config.should_serve_deeplink("INCY"):
-            dl_examples = "\n".join([f"      • {r}:   {base_url}/INCY/{r}.DEEPLINK" for r in active_rules])
+            dl_examples = "\n".join([f"      • {r}:   {base_url}/INCY/{r}.DEEPLINK" for r in incy_rules])
             incy_lines.append(f"""  - Deep-link файлы для Incy:
 {dl_examples}""")
 
