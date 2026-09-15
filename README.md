@@ -38,14 +38,20 @@
 
 > ℹ️ *Caddy или внешний Nginx выполняют свою прямую роль — служат фронтальным HTTPS-прокси с SSL-сертификатом, в то время как контейнер берёт на себя всю логику подготовки данных и интеграций.*
 
+> 🚀 **Что нового в версии 1.3.0:**
+> * 🟢 **Пресет GeoGaga (Client Flavor):** добавлен рекомендуемый современный источник сбалансированного сплит-туннеля для РФ с легкими и актуальными базами.
+> * 📁 **Чистая экосистемная модель (No-Hybrid & Honest Naming):** честные имена правил (`HAPP.JSON`, `INCY.JSON`) и строгая изоляция несовместимых тегов между авторами.
+> * ⚡ **Интеллектуальный Fallback для Remnawave:** автоматическая плавная миграция сквадов без сбоев синхронизации при переключении пресетов.
+> * 🛠️ **Исправление перенумерации сквадов в CLI:** устранена ошибка обработки табуляции в `install.sh`.
+
 ## 📌 Возможности
 
 * 🛡️ **Автономность раздачи:** после первой успешной синхронизации базы `geoip.dat`, `geosite.dat` и правила раздаются локально с вашего VPS — клиенты не зависят от доступности GitHub или сторонних CDN (пока данные находятся в локальном volume).
 * 📱 **Поддержка Happ и Incy:** генерация Base64-диплинков для Happ (`.DEEPLINK`) и динамических JSON-правил подписки для Incy (`.JSON`).
 * ⚡ **Нативная интеграция с Remnawave API:** прямое автообновление правил сквадов без сторонних скриптов (поддерживается до 10+ сквадов и Cloudflare Zero Trust).
 * 🔒 **Безопасность:** закрытый доступ по секретному URL-токену (`/<ROUTING_TOKEN>/...`). Без токена сервер не отвечает сканерам.
-* 📁 **Гибкость источников:** готовые пресеты и кастомные ссылки:
-  - **GeoGaga (Client Flavor)** — *Рекомендуется*: сбалансированный Split-tunneling для РФ, оптимизированные базы, регулярные апдейты.
+* 📁 **Чистые экосистемные пресеты:** правила маршрутизации и гео-базы согласованы на 100% без несовместимых тегов и гибридов:
+  - **GeoGaga (Client Flavor)** — *Рекомендуется*: сбалансированный Split-tunneling для РФ, актуальные базы, честные файлы `HAPP.JSON` / `HAPP.DEEPLINK` и `INCY.JSON`.
   - **roscomvpn-routing (hydraponique)** — классический источник (правила `DEFAULT`, `JSONSUB`, `WHITELIST`).
   - **vahellame (Strict Whitelist)** — строгий белый список для максимальных ограничений ТСПУ.
   - Поддержка кастомных репозиториев, прямых ссылок и локальных баз в `./custom_geo/`.
@@ -53,11 +59,23 @@
 
 ---
 
+## 🎯 Пресеты источников баз и правил
+
+Каждый пресет является законченной экосистемой. Сервер отдаёт честные имена файлов под выбранный источник:
+
+| Пресет | Источник репозитория | Файлы правил (Happ / Incy) | Теги в geo-базах | Назначение и поведение |
+|---|---|---|---|---|
+| **`geogaga`**<br>🟢 *Рекомендуется* | `bratishkadrugoimamysynishka/geogaga-client-flavor` | **`HAPP.JSON`** (и `.DEEPLINK`)<br>**`INCY.JSON`** | `geogaga-direct`<br>`geogaga-proxy`<br>`geogaga-block` | **Основной выбор для РФ:** умный сплит-туннель (YouTube, Discord, заблокированные ресурсы — через VPN; банки, Госуслуги, VK, локальные сервисы и CDN — напрямую). |
+| **`hydraponique`**<br>📦 *Legacy* | `hydraponique/roscomvpn-routing` | **`JSONSUB.JSON`**<br>**`WHITELIST.JSON`**<br>**`DEFAULT.JSON`** | `category-ru`<br>`ru`<br>`antizapret` | **Классический режим:** старый набор раздельных правил подписки и белого списка. |
+| **`vahellame`**<br>🛡️ *Whitelist* | `vahellame/russia-whitelist-routing` | **`WHITELIST.JSON`** | `russia-whitelist` | **Строгий белый список:** для периодов тотальных блокировок и шатдаунов ТСПУ. |
+
+---
+
 ## 📖 Архитектура
 
 ```text
  ┌───────────────────────────────────────────────────────────┐
- │   Источники: roscomvpn-routing / Custom URLs / ./custom_geo/│
+ │   Источники: GeoGaga / roscomvpn / vahellame / custom_geo │
  └─────────────────────────────┬─────────────────────────────┘
                                │ (ETag 304, SHA-256, atomic write)
                                ▼
@@ -167,7 +185,8 @@ bash install.sh      # запуск установки
    DOMAIN=geo.example.com
    ROUTING_TOKEN=сгенерируйте_случайный_токен_openssl_rand_hex_16
    ENABLED_CLIENTS=HAPP,INCY
-   ROUTING_RULES=JSONSUB,WHITELIST
+   ROUTING_SOURCE_PRESET=geogaga
+   ROUTING_RULES=HAPP
    SERVE_FORMATS=CLIENT_OPTIMIZED
    HTTP_PORT=8080
    SCHEDULE=0 10 * * *
@@ -214,12 +233,13 @@ bash install.sh      # запуск установки
 DOMAIN=geo.example.com
 ROUTING_TOKEN=секретный_токен
 ENABLED_CLIENTS=HAPP,INCY
-ROUTING_RULES=JSONSUB,WHITELIST
+ROUTING_SOURCE_PRESET=geogaga
+ROUTING_RULES=HAPP
 SERVE_FORMATS=CLIENT_OPTIMIZED
 REMNAWAVE_BASE_URL=http://remnawave:3000/api
 REMNAWAVE_TOKEN=jwt_токен_администратора
 REMNAWAVE_SQUAD_1_UUID=uuid_первого_сквада
-REMNAWAVE_SQUAD_1_RULE=JSONSUB.JSON
+REMNAWAVE_SQUAD_1_RULE=HAPP.JSON
 ```
 
 #### 2. Сервер раздачи (Pull-модель без Remnawave)
@@ -228,7 +248,8 @@ REMNAWAVE_SQUAD_1_RULE=JSONSUB.JSON
 DOMAIN=geo.example.com
 ROUTING_TOKEN=секретный_токен
 ENABLED_CLIENTS=HAPP,INCY
-ROUTING_RULES=JSONSUB,WHITELIST
+ROUTING_SOURCE_PRESET=geogaga
+ROUTING_RULES=HAPP
 SERVE_FORMATS=CLIENT_OPTIMIZED
 ```
 
@@ -238,17 +259,20 @@ SERVE_FORMATS=CLIENT_OPTIMIZED
 DOMAIN=geo-node.example.com
 ROUTING_TOKEN=секретный_токен
 ENABLED_CLIENTS=HAPP_GEO,INCY_GEO
+ROUTING_SOURCE_PRESET=geogaga
 ```
 
 #### 4. Интеграция с Remnawave (базы на внешнем узле)
 Работает в изолированном Docker-окружении рядом с Remnawave. **Публичный домен и открытые веб-порты не требуются.** Правила генерируются и сразу пушатся в API сквадов:
 ```env
 ENABLED_CLIENTS=HAPP_DEEPLINK
+ROUTING_SOURCE_PRESET=geogaga
+ROUTING_RULES=HAPP
 PUBLIC_GEO_BASE_URL=https://geo-node.example.com/секретный_токен
 REMNAWAVE_BASE_URL=http://remnawave:3000/api
 REMNAWAVE_TOKEN=jwt_токен_администратора
 REMNAWAVE_SQUAD_1_UUID=uuid_сквада
-REMNAWAVE_SQUAD_1_RULE=JSONSUB.JSON
+REMNAWAVE_SQUAD_1_RULE=HAPP.JSON
 ```
 
 #### 5. Сервер правил Incy (с внешними базами)
@@ -257,6 +281,7 @@ REMNAWAVE_SQUAD_1_RULE=JSONSUB.JSON
 DOMAIN=geo.example.com
 ROUTING_TOKEN=секретный_токен
 ENABLED_CLIENTS=INCY
+ROUTING_SOURCE_PRESET=geogaga
 PUBLIC_GEO_BASE_URL=https://geo-node.example.com/секретный_токен
 ```
 
@@ -274,7 +299,10 @@ Happ принимает правила через Base64-диплинк `happ://
   ```text
   https://<DOMAIN>/<ROUTING_TOKEN>/HAPP/<RULE>.DEEPLINK
   ```
-  Примеры:
+  **GeoGaga (Рекомендуется):**
+  * `https://geo.example.com/<ROUTING_TOKEN>/HAPP/HAPP.DEEPLINK`
+
+  **hydraponique (Legacy):**
   * `https://geo.example.com/<ROUTING_TOKEN>/HAPP/JSONSUB.DEEPLINK`
   * `https://geo.example.com/<ROUTING_TOKEN>/HAPP/WHITELIST.DEEPLINK`
 
@@ -285,7 +313,10 @@ Happ принимает правила через Base64-диплинк `happ://
   ```text
   incy://autorouting/onadd/https://<DOMAIN>/<ROUTING_TOKEN>/INCY/<RULE>.JSON
   ```
-  Примеры:
+  **GeoGaga (Рекомендуется):**
+  * `incy://autorouting/onadd/https://geo.example.com/<ROUTING_TOKEN>/INCY/INCY.JSON`
+
+  **hydraponique (Legacy):**
   * `incy://autorouting/onadd/https://geo.example.com/<ROUTING_TOKEN>/INCY/JSONSUB.JSON`
   * `incy://autorouting/onadd/https://geo.example.com/<ROUTING_TOKEN>/INCY/WHITELIST.JSON`
 
@@ -300,7 +331,8 @@ Happ принимает правила через Base64-диплинк `happ://
 | `DOMAIN` | `geo.example.com` | Домен для HTTPS-прокси (не нужен в режиме `HAPP_DEEPLINK`) |
 | `ROUTING_TOKEN` | — | **Обязательно** для раздачи файлов: минимум 4 символа из `[A-Za-z0-9_-]`; установщик генерирует 32-символьный токен |
 | `ENABLED_CLIENTS` | `HAPP,INCY` | Модули: `HAPP,INCY`, `HAPP`, `INCY`, `HAPP_GEO`, `INCY_GEO`, `HAPP_DEEPLINK` |
-| `ROUTING_RULES` | `JSONSUB,WHITELIST` | Выборочные правила маршрутизации: `JSONSUB,WHITELIST`, `JSONSUB`, `ALL` или кастомный список через запятую |
+| `ROUTING_SOURCE_PRESET` | `geogaga` | Пресет источников: `geogaga` (Рекомендуется), `hydraponique` (Legacy), `vahellame` (Strict Whitelist), `custom` |
+| `ROUTING_RULES` | `HAPP` / `JSONSUB,WHITELIST` | Выборочные правила маршрутизации (`HAPP` для geogaga; `JSONSUB,WHITELIST`, `ALL` для hydraponique) |
 | `SERVE_FORMATS` | `CLIENT_OPTIMIZED` | Форматы файлов: `CLIENT_OPTIMIZED` (Happ → `.DEEPLINK`, Incy → `.JSON`), `ALL`, `JSON`, `DEEPLINK` |
 | `SERVE_GEOIP` | `true` | Раздача файла `geoip.dat` (`true` / `false`) |
 | `SERVE_GEOSITE` | `true` | Раздача файла `geosite.dat` (`true` / `false`) |
@@ -312,7 +344,7 @@ Happ принимает правила через Base64-диплинк `happ://
 | `SYNC_ON_START` | `true` | Выполнять синхронизацию при запуске контейнера |
 | `GEOIP_SOURCE_URL` | *пусто* | Кастомный источник `geoip.dat` |
 | `GEOSITE_SOURCE_URL` | *пусто* | Кастомный источник `geosite.dat` |
-| `ROUTING_SOURCE_REPO` | *roscomvpn* | Репозиторий правил GitHub |
+| `ROUTING_SOURCE_REPO` | *geogaga* | Репозиторий правил GitHub (автоматически определяется пресетом) |
 | **Telegram** | | |
 | `TELEGRAM_BOT_TOKEN` | *пусто* | Токен бота Telegram для алертов |
 | `TELEGRAM_CHAT_ID` | *пусто* | ID чата / группы |
@@ -323,7 +355,7 @@ Happ принимает правила через Base64-диплинк `happ://
 | `REMNAWAVE_TOKEN` | *пусто* | JWT-токен администратора панели |
 | `REMNAWAVE_SQUAD_N_UUID` | *пусто* | UUID сквада N (N = 1..10+) |
 | `REMNAWAVE_SQUAD_N_NAME` | *пусто* | Читаемое имя сквада N (подтягивается из API автоматически) |
-| `REMNAWAVE_SQUAD_N_RULE` | `JSONSUB.JSON` | Имя правила для сквада N (`JSONSUB.JSON`, `WHITELIST.JSON`) |
+| `REMNAWAVE_SQUAD_N_RULE` | `HAPP.JSON` / `JSONSUB.JSON` | Имя правила для сквада N (`HAPP.JSON` для geogaga; `JSONSUB.JSON`, `WHITELIST.JSON` для hydraponique) |
 | `REMNAWAVE_GLOBAL_RULE` | *пусто* | Глобальное правило для всех подписок |
 | `CLOUDFLARE_ZERO_TRUST_CLIENT_ID` | *пусто* | Client ID сервисного токена Cloudflare Zero Trust |
 | `CLOUDFLARE_ZERO_TRUST_CLIENT_SECRET` | *пусто* | Client Secret сервисного токена Cloudflare Zero Trust |
