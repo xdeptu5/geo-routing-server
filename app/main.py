@@ -208,6 +208,8 @@ def main():
     
     logger.info("Starting geo-routing-server synchronization...")
     logger.info(f"Active enabled modules: {', '.join(Config.ENABLED_CLIENTS)}")
+    preset_name = Config.SOURCE_PRESETS.get(Config.ROUTING_SOURCE_PRESET, {}).get("name", "Custom")
+    logger.info(f"Routing source preset: {Config.ROUTING_SOURCE_PRESET} ({preset_name})")
     Publisher.reset_session()
     
     # 1. Читаем токен и настройки

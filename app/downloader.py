@@ -89,11 +89,15 @@ class Downloader:
         if not content:
             return False
             
-        if kind == "json":
+        if kind in ("json", "rule"):
             try:
                 json.loads(content.decode("utf-8"))
                 return True
             except Exception:
+                if kind == "rule":
+                    text = content.decode("utf-8", errors="replace")
+                    if "://routing/onadd/" in text:
+                        return True
                 return False
                 
         if kind == "binary":
@@ -178,7 +182,7 @@ class Downloader:
                 _PublicOnlyHTTPSHandler(self._validate_untrusted_url),
             )
 
-        max_allowed_size = self.MAX_JSON_SIZE if kind == "json" else self.MAX_BINARY_SIZE
+        max_allowed_size = self.MAX_JSON_SIZE if kind in ("json", "rule") else self.MAX_BINARY_SIZE
         safe_cache_key = self._safe_cache_key(cache_key)
         cache_body_file = self.cache_dir / f"{safe_cache_key}.body"
         cache_etag_file = self.cache_dir / f"{safe_cache_key}.etag"

@@ -93,20 +93,87 @@ class Config:
             return f"{root}/{client.upper()}"
         return f"{raw}/{client.upper()}"
     
-    @classmethod
-    def _validate_http_url(cls, url: str) -> str:
+    @staticmethod
+    def _validate_http_url(url: str) -> str:
         """Валидирует URL, разрешая только http:// и https:// схемы."""
         clean = url.strip()
         if clean and clean.startswith(("http://", "https://")):
             return clean
         return ""
 
-    GEOIP_SOURCE_URL = _validate_http_url.__func__(None, os.getenv("GEOIP_SOURCE_URL", ""))
-    GEOSITE_SOURCE_URL = _validate_http_url.__func__(None, os.getenv("GEOSITE_SOURCE_URL", ""))
-    ROUTING_SOURCE_REPO = (
-        _validate_http_url.__func__(None, os.getenv("ROUTING_SOURCE_REPO", ""))
-        or "https://raw.githubusercontent.com/hydraponique/roscomvpn-routing/main"
-    ).rstrip("/")
+    SOURCE_PRESETS = {
+        "geogaga": {
+            "name": "GeoGaga (Client Flavor)",
+            "description": "Сбалансированный Split-tunneling, легкие базы, рабочие CDN (Рекомендуется)",
+            "routing_repo": "https://raw.githubusercontent.com/bratishkadrugoimamysynishka/geogaga-client-flavor/release/routing",
+            "geoip_url": "https://github.com/bratishkadrugoimamysynishka/geogaga-client-flavor/releases/latest/download/geoip.dat",
+            "geosite_url": "https://github.com/bratishkadrugoimamysynishka/geogaga-client-flavor/releases/latest/download/geosite.dat",
+            "rules_format": "geogaga",
+        },
+        "vahellame": {
+            "name": "vahellame (Whitelist)",
+            "description": "Строгий белый список для жестких ограничений ТСПУ",
+            "routing_repo": "https://raw.githubusercontent.com/vahellame/russia-whitelist-routing/main",
+            "geoip_url": "https://github.com/vahellame/russia-whitelist-geoip/releases/latest/download/geoip.dat",
+            "geosite_url": "https://github.com/vahellame/russia-whitelist-geosite/releases/latest/download/geosite.dat",
+            "rules_format": "vahellame",
+        },
+        "hydraponique": {
+            "name": "hydraponique (Legacy)",
+            "description": "Классический источник roscomvpn-routing",
+            "routing_repo": "https://raw.githubusercontent.com/hydraponique/roscomvpn-routing/main",
+            "geoip_url": "https://github.com/hydraponique/roscomvpn-geoip/releases/latest/download/geoip.dat",
+            "geosite_url": "https://github.com/hydraponique/roscomvpn-geosite/releases/latest/download/geosite.dat",
+            "rules_format": "hydraponique",
+        },
+    }
+
+    def _calc_preset(env_preset: str, env_repo: str, presets: dict) -> str:
+        preset = env_preset.strip().lower()
+        if preset in presets or preset == "custom":
+            return preset
+        if "hydraponique" in env_repo:
+            return "hydraponique"
+        elif "vahellame" in env_repo:
+            return "vahellame"
+        elif env_repo:
+            return "custom"
+        return "geogaga"
+
+    ROUTING_SOURCE_PRESET = _calc_preset(
+        os.getenv("ROUTING_SOURCE_PRESET", ""),
+        os.getenv("ROUTING_SOURCE_REPO", ""),
+        SOURCE_PRESETS
+    )
+    _active_preset = SOURCE_PRESETS.get(ROUTING_SOURCE_PRESET, SOURCE_PRESETS["geogaga"])
+
+    _custom_geoip = _validate_http_url(os.getenv("GEOIP_SOURCE_URL", ""))
+    _custom_geosite = _validate_http_url(os.getenv("GEOSITE_SOURCE_URL", ""))
+    _custom_repo = _validate_http_url(os.getenv("ROUTING_SOURCE_REPO", ""))
+
+    GEOIP_SOURCE_URL = _custom_geoip or _active_preset["geoip_url"]
+    GEOSITE_SOURCE_URL = _custom_geosite or _active_preset["geosite_url"]
+    ROUTING_SOURCE_REPO = (_custom_repo or _active_preset["routing_repo"]).rstrip("/")
+
+    @classmethod
+    def get_source_preset(cls) -> str:
+        return cls.ROUTING_SOURCE_PRESET
+
+    @classmethod
+    def get_rule_url(cls, client: str, file_name: str) -> str:
+        """Возвращает URL для загрузки правила с учетом пресета или кастомного репозитория."""
+        preset = cls.ROUTING_SOURCE_PRESET
+        if preset == "geogaga":
+            return f"{cls.ROUTING_SOURCE_REPO}/{client.lower()}.json"
+        elif preset == "vahellame":
+            return f"https://vahellame.github.io/russia-whitelist-routing/{client.lower()}/"
+        else:
+            return f"{cls.ROUTING_SOURCE_REPO}/{client}/{file_name}"
+
+    @classmethod
+    def get_default_rule_url(cls, client: str) -> str:
+        """Возвращает URL дефолтного правила для извлечения upstream-метаданных."""
+        return cls.get_rule_url(client, "DEFAULT.JSON")
     
     # Telegram Notifications (опционально)
     TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
@@ -156,6 +223,9 @@ class Config:
         Custom sources outside GitHub нельзя безопасно сопоставить с Contents API,
         поэтому discovery для них отключается.
         """
+        if cls.ROUTING_SOURCE_PRESET in ("geogaga", "vahellame"):
+            return ""
+
         parsed = urlparse(cls.ROUTING_SOURCE_REPO)
         if parsed.scheme != "https" or parsed.hostname != "raw.githubusercontent.com":
             return ""

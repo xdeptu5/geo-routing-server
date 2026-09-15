@@ -81,8 +81,15 @@ class GeoManager:
             except DownloadError as e:
                 logger.warning(f"  Failed to download from primary source ({e}), trying fallback...")
 
-        # 4. Fallback на GitHub Releases
-        fallback_url = f"https://github.com/hydraponique/roscomvpn-{geo_type}/releases/latest/download/{geo_type}.dat"
+        # 4. Fallback на GitHub Releases в зависимости от пресета
+        fallback_url = Config.GEOIP_SOURCE_URL if geo_type == "geoip" else Config.GEOSITE_SOURCE_URL
+        if not fallback_url:
+            if Config.ROUTING_SOURCE_PRESET == "hydraponique":
+                fallback_url = f"https://github.com/hydraponique/roscomvpn-{geo_type}/releases/latest/download/{geo_type}.dat"
+            elif Config.ROUTING_SOURCE_PRESET == "vahellame":
+                fallback_url = f"https://github.com/vahellame/russia-whitelist-{geo_type}/releases/latest/download/{geo_type}.dat"
+            else:
+                fallback_url = f"https://github.com/bratishkadrugoimamysynishka/geogaga-client-flavor/releases/latest/download/{geo_type}.dat"
         if fallback_url in self._memory_cache:
             logger.info(f"  Reusing fallback {geo_type} for {client}")
             return self._memory_cache[fallback_url]

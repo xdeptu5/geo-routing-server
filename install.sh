@@ -660,6 +660,27 @@ cmd_proxy() {
     proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto \$scheme;
 }${C_RESET}"
+    echo ""
+
+    echo -e "${C_WHITE}${C_BOLD}3. Outbound-правила Xray (GeoGaga Server-Flavor: анти-DMCA, Torrent, SMTP):${C_RESET}"
+    hr 55
+    echo -e "${C_GRAY}Для защиты вашего VPN-сервера от абуз (BitTorrent, спам, локальные утечки)${C_RESET}"
+    echo -e "${C_GRAY}добавьте правила в секцию \"routing\": { \"rules\": [...] } конфигурации Xray:${C_RESET}\n"
+    echo -e "${C_CYAN}  {
+    \"type\": \"field\",
+    \"protocol\": [\"bittorrent\"],
+    \"outboundTag\": \"blocked\"
+  },
+  {
+    \"type\": \"field\",
+    \"port\": \"25,465,587\",
+    \"outboundTag\": \"blocked\"
+  },
+  {
+    \"type\": \"field\",
+    \"ip\": [\"geoip:private\"],
+    \"outboundTag\": \"blocked\"
+  }${C_RESET}"
     echo -e "\n${C_GRAY}Готовые полные примеры доступны в репозитории: Caddyfile.example и nginx.conf.example${C_RESET}\n"
 }
 
@@ -1234,18 +1255,30 @@ menu_clients_bases() {
 
     while true; do
         print_banner
-        echo -e "  ${C_WHITE}Раздел:${C_RESET} 🌐 Клиенты и Geo-базы"
+        echo -e "  ${C_WHITE}Раздел:${C_RESET} 🌐 Клиенты, форматы и Geo-базы"
         hr 50
         echo ""
 
-        local cur_clients cur_geoip cur_geosite cur_rules ext_geo
+        local cur_clients cur_geoip cur_geosite cur_rules ext_geo cur_preset cur_repo
         cur_clients="$(get_env_val "ENABLED_CLIENTS" "$env_file" "HAPP,INCY")"
         cur_geoip="$(get_env_val "SERVE_GEOIP" "$env_file" "true")"
         cur_geosite="$(get_env_val "SERVE_GEOSITE" "$env_file" "true")"
         cur_rules="$(get_env_val "ROUTING_RULES" "$env_file" "JSONSUB,WHITELIST")"
         ext_geo="$(get_env_val "PUBLIC_GEO_BASE_URL" "$env_file" "")"
+        cur_preset="$(get_env_val "ROUTING_SOURCE_PRESET" "$env_file" "geogaga")"
+        cur_repo="$(get_env_val "ROUTING_SOURCE_REPO" "$env_file" "")"
 
-        echo -e "  ${C_WHITE}Клиенты:${C_RESET}      ${C_GREEN}$cur_clients${C_RESET}"
+        local preset_label="GeoGaga (Рекомендуется)"
+        if [ "$cur_preset" = "hydraponique" ] || [[ "$cur_repo" == *"hydraponique"* ]]; then
+            preset_label="hydraponique (Legacy)"
+        elif [ "$cur_preset" = "vahellame" ] || [[ "$cur_repo" == *"vahellame"* ]]; then
+            preset_label="vahellame (Strict Whitelist)"
+        elif [ "$cur_preset" = "custom" ] || [ -n "$cur_repo" ]; then
+            preset_label="Кастомный источник"
+        fi
+
+        echo -e "  ${C_WHITE}Клиенты:${C_RESET}         ${C_GREEN}$cur_clients${C_RESET}"
+        echo -e "  ${C_WHITE}Источник правил:${C_RESET} ${C_CYAN}$preset_label${C_RESET}"
         echo -e "  ${C_WHITE}Раздача GeoIP:${C_RESET}   $cur_geoip"
         echo -e "  ${C_WHITE}Раздача GeoSite:${C_RESET} $cur_geosite"
         echo -e "  ${C_WHITE}Список правил:${C_RESET}   $cur_rules"
@@ -1256,9 +1289,10 @@ menu_clients_bases() {
         echo "  2) Включить / выключить отдачу geoip.dat"
         echo "  3) Включить / выключить отдачу geosite.dat"
         echo "  4) Настроить внешний URL баз (PUBLIC_GEO_BASE_URL)"
+        echo "  5) 📦 Выбрать источник правил и баз (GeoGaga / hydraponique / vahellame)"
         echo "  0) ⬅️ Назад"
         echo ""
-        read -r -p "Выберите опцию [0-4]: " choice
+        read -r -p "Выберите опцию [0-5]: " choice
 
         case "$choice" in
             1)
@@ -1317,6 +1351,65 @@ menu_clients_bases() {
                 fi
                 sleep 1
                 ;;
+            5)
+                echo ""
+                echo -e "  ${C_WHITE}Выберите источник правил маршрутизации и Geo-баз:${C_RESET}"
+                echo ""
+                echo -e "  ${C_GREEN}1) 🟢 GeoGaga (Client Flavor) [Рекомендуется]${C_RESET}"
+                echo "     • Сбалансированный split-tunneling для РФ"
+                echo "     • Регулярные обновления, легкие базы, рабочие CDN"
+                echo "     • Полная совместимость с Happ и Incy"
+                echo ""
+                echo -e "  ${C_YELLOW}2) 📦 hydraponique (Legacy / roscomvpn-routing)${C_RESET}"
+                echo "     • Классический источник roscomvpn-routing"
+                echo "     • Базы roscomvpn-geoip / roscomvpn-geosite"
+                echo ""
+                echo -e "  ${C_CYAN}3) 🛡️ vahellame (Strict Whitelist)${C_RESET}"
+                echo "     • Строгий белый список для жестких ограничений ТСПУ"
+                echo "     • Базы russia-whitelist-geoip / geosite"
+                echo ""
+                echo -e "  ${C_WHITE}4) ⚙️ Кастомный источник (вручную указать репозиторий и базы)${C_RESET}"
+                echo "  0) ⬅️ Назад"
+                echo ""
+                read -r -p "Номер [1-4, Enter = отмена]: " s_opt
+                if [ -z "$s_opt" ] || [ "$s_opt" = "0" ]; then
+                    continue
+                fi
+                case "$s_opt" in
+                    1)
+                        set_env_val "ROUTING_SOURCE_PRESET" "geogaga" "$env_file"
+                        delete_env_val "ROUTING_SOURCE_REPO" "$env_file"
+                        delete_env_val "GEOIP_SOURCE_URL" "$env_file"
+                        delete_env_val "GEOSITE_SOURCE_URL" "$env_file"
+                        ;;
+                    2)
+                        set_env_val "ROUTING_SOURCE_PRESET" "hydraponique" "$env_file"
+                        delete_env_val "ROUTING_SOURCE_REPO" "$env_file"
+                        delete_env_val "GEOIP_SOURCE_URL" "$env_file"
+                        delete_env_val "GEOSITE_SOURCE_URL" "$env_file"
+                        ;;
+                    3)
+                        set_env_val "ROUTING_SOURCE_PRESET" "vahellame" "$env_file"
+                        delete_env_val "ROUTING_SOURCE_REPO" "$env_file"
+                        delete_env_val "GEOIP_SOURCE_URL" "$env_file"
+                        delete_env_val "GEOSITE_SOURCE_URL" "$env_file"
+                        ;;
+                    4)
+                        echo ""
+                        read -r -p "URL репозитория правил (ROUTING_SOURCE_REPO): " in_repo
+                        [ -n "$in_repo" ] && set_env_val "ROUTING_SOURCE_REPO" "$in_repo" "$env_file"
+                        read -r -p "Прямой URL geoip.dat (GEOIP_SOURCE_URL, Enter = пропустить): " in_gip
+                        [ -n "$in_gip" ] && set_env_val "GEOIP_SOURCE_URL" "$in_gip" "$env_file"
+                        read -r -p "Прямой URL geosite.dat (GEOSITE_SOURCE_URL, Enter = пропустить): " in_gst
+                        [ -n "$in_gst" ] && set_env_val "GEOSITE_SOURCE_URL" "$in_gst" "$env_file"
+                        set_env_val "ROUTING_SOURCE_PRESET" "custom" "$env_file"
+                        ;;
+                    *) continue ;;
+                esac
+                (cd "$install_dir" && $(detect_compose) up -d >/dev/null 2>&1 || true)
+                echo -e "${C_GREEN}[✓] Источник успешно изменен и применен.${C_RESET}"
+                sleep 1
+                ;;
             0) return 0 ;;
         esac
     done
@@ -1368,7 +1461,19 @@ wizard_install() {
         *) clients="HAPP,INCY" ;;
     esac
 
-    echo -e "\n${C_CYAN}[5/5] Локальный HTTP-порт${C_RESET}"
+    echo -e "\n${C_CYAN}[5/6] Источник правил и Geo-баз${C_RESET}"
+    echo "      1) GeoGaga (Client Flavor) [Рекомендуется — легкие базы, умный Split-tunneling]"
+    echo "      2) hydraponique (Legacy — классический roscomvpn-routing)"
+    echo "      3) vahellame (Strict Whitelist — строгий белый список)"
+    read -r -p "      Выберите вариант [1-3, Enter = 1]: " src_ans
+    local source_preset="geogaga"
+    case "${src_ans:-1}" in
+        2) source_preset="hydraponique" ;;
+        3) source_preset="vahellame" ;;
+        *) source_preset="geogaga" ;;
+    esac
+
+    echo -e "\n${C_CYAN}[6/6] Локальный HTTP-порт${C_RESET}"
     read -r -p "      Порт для реверс-прокси [Enter = 8080]: " input_port
     local port="${input_port:-8080}"
     if is_port_in_use "$port"; then
@@ -1400,6 +1505,7 @@ wizard_install() {
 DOMAIN=${domain}
 ROUTING_TOKEN=${token}
 ENABLED_CLIENTS=${clients}
+ROUTING_SOURCE_PRESET=${source_preset}
 ROUTING_RULES=JSONSUB,WHITELIST
 SERVE_FORMATS=CLIENT_OPTIMIZED
 SERVE_GEOIP=true

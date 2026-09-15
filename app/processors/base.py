@@ -44,6 +44,28 @@ class BaseProcessor(ABC):
         if not deeplink.startswith(prefix):
             raise ValueError("deeplink client prefix does not match")
         return json.loads(base64.b64decode(deeplink[len(prefix):].strip()).decode("utf-8"))
+
+    @classmethod
+    def parse_rule_payload(cls, raw_bytes: bytes, client: str) -> dict:
+        """Парсит полученные данные правила — чистый JSON либо deeplink onadd/base64."""
+        text = raw_bytes.decode("utf-8", errors="replace").strip()
+        try:
+            data = json.loads(text)
+            if isinstance(data, dict):
+                return data
+        except Exception:
+            pass
+
+        pattern = rf"{client.lower()}://routing/onadd/([A-Za-z0-9+/=]+)"
+        match = re.search(pattern, text)
+        if match:
+            b64_str = match.group(1)
+            decoded_json = base64.b64decode(b64_str).decode("utf-8")
+            data = json.loads(decoded_json)
+            if isinstance(data, dict):
+                return data
+
+        raise ValueError(f"Could not parse {client} rule payload as JSON or deeplink")
         
     @abstractmethod
     def process(self) -> bool:

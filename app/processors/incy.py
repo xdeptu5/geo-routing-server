@@ -30,12 +30,12 @@ class IncyProcessor(BaseProcessor):
         
         default_json_data = None
         if needs_geo or needs_routing:
+            url = Config.get_default_rule_url(client)
             try:
-                url = f"{Config.ROUTING_SOURCE_REPO}/{client}/DEFAULT.JSON"
-                raw_bytes = self.downloader.fetch(url, f"{client}_DEFAULT_orig", kind="json")
-                default_json_data = json.loads(raw_bytes.decode("utf-8"))
+                raw_bytes = self.downloader.fetch(url, f"{client}_DEFAULT_orig", kind="rule")
+                default_json_data = self.parse_rule_payload(raw_bytes, client)
             except Exception as e:
-                logger.warning(f"Could not load {client}/DEFAULT.JSON from repo: {e}")
+                logger.warning(f"Could not load default rule for {client} from {url}: {e}")
             
         # 1. Синхронизируем geoip.dat и geosite.dat (если базы раздаются локально)
         if needs_geo:
@@ -80,11 +80,11 @@ class IncyProcessor(BaseProcessor):
                     
                 logger.info(f"  Processing {file_name}...")
                 file_key = file_name.rsplit(".", 1)[0].upper()
-                url = f"{Config.ROUTING_SOURCE_REPO}/{client}/{file_name}"
+                url = Config.get_rule_url(client, file_name)
                 
                 try:
-                    raw_bytes = self.downloader.fetch(url, f"{client}_{file_key}", kind="json")
-                    data = json.loads(raw_bytes.decode("utf-8"))
+                    raw_bytes = self.downloader.fetch(url, f"{client}_{file_key}", kind="rule")
+                    data = self.parse_rule_payload(raw_bytes, client)
                     if not isinstance(data, dict):
                         logger.error(f"Invalid JSON format for {file_name} (expected object): {type(data)}")
                         success = False
