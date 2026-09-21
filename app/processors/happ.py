@@ -83,9 +83,10 @@ class HappProcessor(BaseProcessor):
             base_public_url = Config.get_base_url(self.token)
             ext_geo_url = Config.get_external_geo_url(client)
             if ext_geo_url:
-                # Указан валидный внешний сервер geo-баз
-                geoip_url = f"{ext_geo_url}/geoip.dat" if Config.SERVE_GEOIP else ""
-                geosite_url = f"{ext_geo_url}/geosite.dat" if Config.SERVE_GEOSITE else ""
+                # Внешний сервер уже раздаёт базы. Его URL должны попадать в
+                # диплинк независимо от флагов локальной раздачи SERVE_GEO*.
+                geoip_url = f"{ext_geo_url}/geoip.dat"
+                geosite_url = f"{ext_geo_url}/geosite.dat"
             elif needs_geo:
                 # Базы раздаются с этого же локального сервера
                 geoip_url = f"{base_public_url}/{client}/geoip.dat" if Config.SERVE_GEOIP else ""
