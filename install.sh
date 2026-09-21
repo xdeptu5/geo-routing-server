@@ -58,6 +58,24 @@ detect_compose() {
     fi
 }
 
+apply_compose() {
+    local install_dir="$1"
+    local compose_cmd
+    compose_cmd="$(detect_compose)"
+
+    if [ -z "$compose_cmd" ]; then
+        echo -e "${C_RED}[!] Docker Compose не найден.${C_RESET}"
+        return 1
+    fi
+
+    if (cd "$install_dir" && $compose_cmd up -d); then
+        return 0
+    fi
+
+    echo -e "${C_RED}[!] Конфигурация сохранена, но контейнер не запущен. Проверьте ошибку Docker Compose выше.${C_RESET}"
+    return 1
+}
+
 check_dependencies() {
     local missing=()
     command -v curl >/dev/null 2>&1 || missing+=("curl")
@@ -483,10 +501,9 @@ cmd_stop() {
 cmd_start() {
     local install_dir
     install_dir="$(get_install_dir)"
-    local compose_cmd
-    compose_cmd="$(detect_compose)"
-    (cd "$install_dir" && $compose_cmd up -d)
-    echo -e "${C_GREEN}[✓] Сервис запущен.${C_RESET}"
+    if apply_compose "$install_dir"; then
+        echo -e "${C_GREEN}[✓] Сервис запущен.${C_RESET}"
+    fi
 }
 
 cmd_update() {
@@ -495,8 +512,12 @@ cmd_update() {
     local compose_cmd
     compose_cmd="$(detect_compose)"
     echo -e "\n${C_YELLOW}[*] Загрузка свежего Docker-образа...${C_RESET}"
-    (cd "$install_dir" && $compose_cmd pull && $compose_cmd up -d)
-    echo -e "${C_GREEN}[✓] Сервис успешно обновлён до последней версии.${C_RESET}\n"
+    if (cd "$install_dir" && $compose_cmd pull && $compose_cmd up -d); then
+        echo -e "${C_GREEN}[✓] Сервис успешно обновлён до последней версии.${C_RESET}\n"
+    else
+        echo -e "${C_RED}[!] Обновление не применено: Docker Compose завершился с ошибкой выше.${C_RESET}\n"
+        return 1
+    fi
 }
 
 cmd_update_script() {
@@ -624,10 +645,9 @@ cmd_edit() {
     read -r ans
     ans="${ans:-y}"
     if [[ "$ans" =~ ^[Yy]$ ]]; then
-        local compose_cmd
-        compose_cmd="$(detect_compose)"
-        (cd "$install_dir" && $compose_cmd up -d)
-        echo -e "${C_GREEN}[✓] Контейнер успешно обновлён и перезапущен.${C_RESET}"
+        if apply_compose "$install_dir"; then
+            echo -e "${C_GREEN}[✓] Контейнер успешно обновлён и перезапущен.${C_RESET}"
+        fi
     fi
 }
 
@@ -973,7 +993,7 @@ except Exception:
                     set_env_val "REMNAWAVE_SQUAD_${new_idx}_NAME" "$sel_name" "$env_file"
                     renumber_squads "$env_file"
                     echo -e "${C_GREEN}[✓] Сквад успешно привязан!${C_RESET}"
-                    (cd "$install_dir" && $(detect_compose) up -d >/dev/null 2>&1 || true)
+                    apply_compose "$install_dir" || continue
                     sleep 1
                 fi
                 ;;
@@ -1003,7 +1023,7 @@ except Exception:
 
                     set_env_val "REMNAWAVE_SQUAD_${real_idx}_RULE" "$new_rule" "$env_file"
                     echo -e "${C_GREEN}[✓] Правило для '$cur_n' изменено на: $new_rule${C_RESET}"
-                    (cd "$install_dir" && $(detect_compose) up -d >/dev/null 2>&1 || true)
+                    apply_compose "$install_dir" || continue
                     sleep 1
                 fi
                 ;;
@@ -1030,7 +1050,7 @@ except Exception:
                 set_env_val "REMNAWAVE_SQUAD_${n_idx}_NAME" "$new_name" "$env_file"
                 renumber_squads "$env_file"
                 echo -e "${C_GREEN}[✓] Сквад добавлен.${C_RESET}"
-                (cd "$install_dir" && $(detect_compose) up -d >/dev/null 2>&1 || true)
+                apply_compose "$install_dir" || continue
                 sleep 1
                 ;;
             4)
@@ -1052,7 +1072,7 @@ except Exception:
                     delete_env_val "SQUAD_${del_idx}_RULE" "$env_file"
                     delete_env_val "SQUAD_${del_idx}_NAME" "$env_file"
                     renumber_squads "$env_file"
-                    (cd "$install_dir" && $(detect_compose) up -d >/dev/null 2>&1 || true)
+                    apply_compose "$install_dir" || continue
                     echo -e "${C_GREEN}[✓] Привязка сквада удалена.${C_RESET}"
                     sleep 1
                 fi
@@ -1070,7 +1090,7 @@ except Exception:
                 new_token="${new_token:-$remna_token}"
                 set_env_val "REMNAWAVE_BASE_URL" "$new_url" "$env_file"
                 set_env_val "REMNAWAVE_TOKEN" "$new_token" "$env_file"
-                (cd "$install_dir" && $(detect_compose) up -d >/dev/null 2>&1 || true)
+                apply_compose "$install_dir" || continue
                 echo -e "${C_GREEN}[✓] Параметры API обновлены.${C_RESET}"
                 sleep 1
                 ;;
@@ -1079,7 +1099,7 @@ except Exception:
                 if [[ "$conf_dis" =~ ^[Yy]$ ]]; then
                     delete_env_val "REMNAWAVE_BASE_URL" "$env_file"
                     delete_env_val "REMNAWAVE_TOKEN" "$env_file"
-                    (cd "$install_dir" && $(detect_compose) up -d >/dev/null 2>&1 || true)
+                    apply_compose "$install_dir" || continue
                     echo -e "${C_YELLOW}[✓] Интеграция с Remnawave отключена.${C_RESET}"
                     sleep 1
                 else
@@ -1178,7 +1198,7 @@ menu_schedule() {
         if [ -n "$new_sched" ]; then
             set_env_val "SCHEDULE" "$new_sched" "$env_file"
             echo -e "\n${C_GREEN}[✓] Расписание сохранено: $(human_schedule "$new_sched") ($new_sched)${C_RESET}"
-            (cd "$install_dir" && $(detect_compose) up -d >/dev/null 2>&1 || true)
+            apply_compose "$install_dir" || continue
             sleep 1.5
             return 0
         fi
@@ -1251,7 +1271,7 @@ menu_telegram() {
                     set_env_val "TELEGRAM_CHAT_ID" "$input_chat" "$env_file"
                     [ -n "$input_thread" ] && set_env_val "TELEGRAM_THREAD_ID" "$input_thread" "$env_file"
                     echo -e "${C_GREEN}[✓] Telegram настроен!${C_RESET}"
-                    (cd "$install_dir" && $(detect_compose) up -d >/dev/null 2>&1 || true)
+                    apply_compose "$install_dir" || continue
                     sleep 1
                 fi
                 ;;
@@ -1358,7 +1378,7 @@ menu_clients_bases() {
                     4) set_env_val "ENABLED_CLIENTS" "HAPP_DEEPLINK" "$env_file" ;;
                     *) continue ;;
                 esac
-                (cd "$install_dir" && $(detect_compose) up -d >/dev/null 2>&1 || true)
+                apply_compose "$install_dir" || continue
                 echo -e "${C_GREEN}[✓] Сохранено и применено.${C_RESET}"
                 sleep 1
                 ;;
@@ -1366,7 +1386,7 @@ menu_clients_bases() {
                 local tog_g="true"
                 [ "$cur_geoip" = "true" ] && tog_g="false"
                 set_env_val "SERVE_GEOIP" "$tog_g" "$env_file"
-                (cd "$install_dir" && $(detect_compose) up -d >/dev/null 2>&1 || true)
+                apply_compose "$install_dir" || continue
                 echo -e "${C_GREEN}[✓] SERVE_GEOIP=$tog_g (применено)${C_RESET}"
                 sleep 1
                 ;;
@@ -1374,7 +1394,7 @@ menu_clients_bases() {
                 local tog_s="true"
                 [ "$cur_geosite" = "true" ] && tog_s="false"
                 set_env_val "SERVE_GEOSITE" "$tog_s" "$env_file"
-                (cd "$install_dir" && $(detect_compose) up -d >/dev/null 2>&1 || true)
+                apply_compose "$install_dir" || continue
                 echo -e "${C_GREEN}[✓] SERVE_GEOSITE=$tog_s (применено)${C_RESET}"
                 sleep 1
                 ;;
@@ -1387,11 +1407,11 @@ menu_clients_bases() {
                 fi
                 if [ "$in_ext" = "none" ] || [ "$in_ext" = "clear" ]; then
                     delete_env_val "PUBLIC_GEO_BASE_URL" "$env_file"
-                    (cd "$install_dir" && $(detect_compose) up -d >/dev/null 2>&1 || true)
+                    apply_compose "$install_dir" || continue
                     echo -e "${C_GREEN}[✓] Сброшено на локальные базы (применено).${C_RESET}"
                 else
                     set_env_val "PUBLIC_GEO_BASE_URL" "$in_ext" "$env_file"
-                    (cd "$install_dir" && $(detect_compose) up -d >/dev/null 2>&1 || true)
+                    apply_compose "$install_dir" || continue
                     echo -e "${C_GREEN}[✓] Сохранено: $in_ext (применено)${C_RESET}"
                 fi
                 sleep 1
@@ -1454,7 +1474,7 @@ menu_clients_bases() {
                         ;;
                     *) continue ;;
                 esac
-                (cd "$install_dir" && $(detect_compose) up -d >/dev/null 2>&1 || true)
+                apply_compose "$install_dir" || continue
                 echo -e "${C_GREEN}[✓] Источник успешно изменен и применен.${C_RESET}"
                 sleep 1
                 ;;
@@ -1578,7 +1598,7 @@ EOF
         fi
     fi
 
-    chmod 644 "$install_dir/.env"
+    chmod 600 "$install_dir/.env"
 
     # Создание compose.yaml
     echo -e "${C_YELLOW}[*] Создание compose.yaml...${C_RESET}"
@@ -1594,7 +1614,10 @@ EOF
     local compose_cmd
     compose_cmd="$(detect_compose)"
     echo -e "${C_YELLOW}[*] Запуск сервиса через $compose_cmd...${C_RESET}"
-    (cd "$install_dir" && $compose_cmd pull && $compose_cmd up -d)
+    if ! (cd "$install_dir" && $compose_cmd pull && $compose_cmd up -d); then
+        echo -e "${C_RED}[!] Установка не завершена: Docker Compose завершился с ошибкой выше.${C_RESET}"
+        return 1
+    fi
 
     echo -e "\n${C_GREEN}${C_BOLD}══════════════════════════════════════════════════════${C_RESET}"
     echo -e "${C_GREEN}${C_BOLD}  Geo Routing Server успешно установлен и запущен!   ${C_RESET}"
