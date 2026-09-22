@@ -61,8 +61,10 @@ class IncyProcessor(BaseProcessor):
             
             ext_geo_url = Config.get_external_geo_url(client)
             if ext_geo_url:
-                geoip_public_url = f"{ext_geo_url}/geoip.dat" if Config.SERVE_GEOIP else ""
-                geosite_public_url = f"{ext_geo_url}/geosite.dat" if Config.SERVE_GEOSITE else ""
+                # Внешний сервер уже раздаёт базы. Его URL должны попадать в
+                # JSON конфигурацию независимо от флагов локальной раздачи SERVE_GEO*.
+                geoip_public_url = f"{ext_geo_url}/geoip.dat"
+                geosite_public_url = f"{ext_geo_url}/geosite.dat"
             elif needs_geo:
                 base_public_url = Config.get_base_url(self.token)
                 geoip_public_url = f"{base_public_url}/{client}/geoip.dat" if Config.SERVE_GEOIP else ""

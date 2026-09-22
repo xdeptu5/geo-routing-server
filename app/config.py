@@ -84,7 +84,9 @@ class Config:
 
     # Внешний URL к гео-базам (если базы отдаются с другого сервера)
     _raw_public_geo = os.getenv("PUBLIC_GEO_BASE_URL", "").strip().rstrip("/")
-    PUBLIC_GEO_BASE_URL = _raw_public_geo if _raw_public_geo.startswith(("http://", "https://")) else ""
+    if _raw_public_geo and not _raw_public_geo.startswith(("http://", "https://")):
+        _raw_public_geo = f"https://{_raw_public_geo}"
+    PUBLIC_GEO_BASE_URL = _raw_public_geo
     
     @classmethod
     def get_external_geo_url(cls, client: str) -> str:
@@ -103,9 +105,11 @@ class Config:
     
     @staticmethod
     def _validate_http_url(url: str) -> str:
-        """Валидирует URL, разрешая только http:// и https:// схемы."""
+        """Валидирует URL, нормализуя схему https:// при необходимости."""
         clean = url.strip()
-        if clean and clean.startswith(("http://", "https://")):
+        if clean:
+            if not clean.startswith(("http://", "https://")):
+                clean = f"https://{clean}"
             return clean
         return ""
 

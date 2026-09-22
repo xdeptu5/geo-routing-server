@@ -6,7 +6,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="1.3.1"
+SCRIPT_VERSION="1.3.2"
 CONFIG_RECORD="/etc/geo-routing-server.conf"
 DEFAULT_INSTALL_DIR="/opt/geo-routing-server"
 DOCKER_IMAGE="ghcr.io/xdeptu5/geo-routing-server:latest"
@@ -412,8 +412,13 @@ cmd_status() {
             [ -z "$r" ] && continue
             echo -e "      ${C_GRAY}• ${r}:${C_RESET} ${C_WHITE}incy://autorouting/onadd/https://${domain}/${token}/INCY/${r}.JSON${C_RESET}"
         done
-        [ "$serve_geoip" = "true" ] && echo -e "  • GeoIP база:   ${incy_geo_base}/geoip.dat"
-        [ "$serve_geosite" = "true" ] && echo -e "  • GeoSite база: ${incy_geo_base}/geosite.dat"
+        if [ -n "$ext_geo" ]; then
+            echo -e "  • GeoIP база:   ${incy_geo_base}/geoip.dat (внешняя)"
+            echo -e "  • GeoSite база: ${incy_geo_base}/geosite.dat (внешняя)"
+        else
+            [ "$serve_geoip" = "true" ] && echo -e "  • GeoIP база:   ${incy_geo_base}/geoip.dat"
+            [ "$serve_geosite" = "true" ] && echo -e "  • GeoSite база: ${incy_geo_base}/geosite.dat"
+        fi
         echo ""
     fi
 
@@ -421,7 +426,10 @@ cmd_status() {
         local happ_geo_base="https://${domain}/${token}/HAPP"
         [ -n "$ext_geo" ] && happ_geo_base="${ext_geo%/}/HAPP"
         echo -e "  ${C_CYAN}${C_BOLD}[ Happ ]${C_RESET}"
-        if [ "$happ_has_geo" = "true" ]; then
+        if [ -n "$ext_geo" ]; then
+            echo -e "  • GeoIP база:     ${happ_geo_base}/geoip.dat (внешняя)"
+            echo -e "  • GeoSite база:   ${happ_geo_base}/geosite.dat (внешняя)"
+        elif [ "$happ_has_geo" = "true" ]; then
             [ "$serve_geoip" = "true" ] && echo -e "  • GeoIP база:     ${happ_geo_base}/geoip.dat"
             [ "$serve_geosite" = "true" ] && echo -e "  • GeoSite база:   ${happ_geo_base}/geosite.dat"
         fi
@@ -1410,6 +1418,7 @@ menu_clients_bases() {
                     apply_compose "$install_dir" || continue
                     echo -e "${C_GREEN}[✓] Сброшено на локальные базы (применено).${C_RESET}"
                 else
+                    [[ ! "$in_ext" =~ ^https?:// ]] && in_ext="https://${in_ext}"
                     set_env_val "PUBLIC_GEO_BASE_URL" "$in_ext" "$env_file"
                     apply_compose "$install_dir" || continue
                     echo -e "${C_GREEN}[✓] Сохранено: $in_ext (применено)${C_RESET}"

@@ -148,15 +148,20 @@ def print_summary_banner(token: str):
                     for r in happ_rules:
                         happ_lines.append(f"      • {r}:   {base_url}/HAPP/{r}.JSON")
 
-        if happ_geo and (Config.SERVE_GEOIP or Config.SERVE_GEOSITE):
-            ext_geo = Config.get_external_geo_url("HAPP")
-            target_base = ext_geo if ext_geo else f"{base_url}/HAPP"
-            hdr = "  - Внешние ссылки на базы:" if ext_geo else "  - Публичные HTTPS ссылки на базы (для клиентов с токеном):"
-            geo_lines = [hdr]
+        ext_geo_happ = Config.get_external_geo_url("HAPP")
+        if ext_geo_happ:
+            geo_lines = [
+                "  - Внешние ссылки на базы (для клиентов):",
+                f"      GeoIP:     {ext_geo_happ}/geoip.dat",
+                f"      GeoSite:   {ext_geo_happ}/geosite.dat"
+            ]
+            happ_lines.append("\n".join(geo_lines))
+        elif happ_geo and (Config.SERVE_GEOIP or Config.SERVE_GEOSITE):
+            geo_lines = ["  - Публичные HTTPS ссылки на базы (для клиентов с токеном):"]
             if Config.SERVE_GEOIP:
-                geo_lines.append(f"      GeoIP:     {target_base}/geoip.dat")
+                geo_lines.append(f"      GeoIP:     {base_url}/HAPP/geoip.dat")
             if Config.SERVE_GEOSITE:
-                geo_lines.append(f"      GeoSite:   {target_base}/geosite.dat")
+                geo_lines.append(f"      GeoSite:   {base_url}/HAPP/geosite.dat")
             happ_lines.append("\n".join(geo_lines))
 
         sections.append("\n".join(happ_lines))
@@ -164,16 +169,21 @@ def print_summary_banner(token: str):
     # INCY блок
     if "INCY" in clients_set or "INCY_GEO" in clients_set:
         incy_lines = ["[INCY]"]
-        ext_geo = Config.get_external_geo_url("INCY")
-        target_base = ext_geo if ext_geo else f"{base_url}/INCY"
+        ext_geo_incy = Config.get_external_geo_url("INCY")
         
-        if Config.SERVE_GEOIP or Config.SERVE_GEOSITE:
-            hdr = "  - Внешние ссылки на базы:" if ext_geo else "  - Публичные HTTPS ссылки на базы (для клиентов с токеном):"
-            geo_lines = [hdr]
+        if ext_geo_incy:
+            geo_lines = [
+                "  - Внешние ссылки на базы (для клиентов):",
+                f"      GeoIP:     {ext_geo_incy}/geoip.dat",
+                f"      GeoSite:   {ext_geo_incy}/geosite.dat"
+            ]
+            incy_lines.append("\n".join(geo_lines))
+        elif Config.SERVE_GEOIP or Config.SERVE_GEOSITE:
+            geo_lines = ["  - Публичные HTTPS ссылки на базы (для клиентов с токеном):"]
             if Config.SERVE_GEOIP:
-                geo_lines.append(f"      GeoIP:     {target_base}/geoip.dat")
+                geo_lines.append(f"      GeoIP:     {base_url}/INCY/geoip.dat")
             if Config.SERVE_GEOSITE:
-                geo_lines.append(f"      GeoSite:   {target_base}/geosite.dat")
+                geo_lines.append(f"      GeoSite:   {base_url}/INCY/geosite.dat")
             incy_lines.append("\n".join(geo_lines))
 
         if "INCY" in clients_set and Config.should_serve_json("INCY"):
