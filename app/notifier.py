@@ -1,6 +1,7 @@
 import html
 import json
 import logging
+import re
 import urllib.request
 from datetime import datetime, timezone
 from typing import Any, Dict
@@ -22,8 +23,18 @@ class TelegramNotifier:
             return False
             
         url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-        # Обрезаем сообщение до 4000 символов для соблюдения лимитов Telegram API
-        safe_text = text if len(text) <= 4000 else text[:3900] + "\n\n<i>[...текст обрезан из-за лимита Telegram...]</i>"
+        # Обрезаем сообщение до 4000 символов для соблюдения лимитов Telegram API (4096)
+        if len(text) <= 4000:
+            safe_text = text
+        else:
+            safe_text = text[:3900]
+            # Обрезка могла разорвать HTML-тег посередине — убираем незавершенный хвост "<тег..."
+            safe_text = re.sub(r"<[^<>]*$", "", safe_text)
+            # ...и закрываем открытые теги, иначе Telegram отклонит сообщение с parse_mode=HTML
+            for tag in ("code", "i", "b"):
+                while safe_text.count(f"<{tag}>") > safe_text.count(f"</{tag}>"):
+                    safe_text += f"</{tag}>"
+            safe_text += "\n\n<i>[...текст обрезан из-за лимита Telegram...]</i>"
         
         payload: Dict[str, Any] = {
             "chat_id": chat_id,

@@ -1,9 +1,24 @@
 .git
 .github
+.gitignore
+.pytest_cache
+.ruff_cache
 .cache
 .sync.lock
 www
 tmp
+# Собранный контекст и тесты в образ не попадают:
+# Dockerfile копирует только nginx-internal.conf, app/ и docker-entrypoint.sh.
+tests
+assets
+install.sh
+compose.yaml
+# __pycache__/*.pyc на уровне подкаталогов НЕ отсекаются паттернами без ** —
+# иначе в образ попадает чужой байткод (проверено сборкой).
+__pycache__
+**/__pycache__
+*.py[cod]
+**/*.py[cod]
 custom_geo/*.dat
 *.log
 .env
@@ -11,5 +26,3 @@ token.txt
 *.md
 LICENSE
 *.example
-__pycache__
-*.py[cod]

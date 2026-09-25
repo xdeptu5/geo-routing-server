@@ -2,10 +2,13 @@ import http.client
 import ipaddress
 import json
 import logging
+import random
 import socket
 import time
 import urllib.error
 import urllib.request
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
@@ -15,6 +18,15 @@ logger = logging.getLogger("geo-routing-server")
 class DownloadError(Exception):
     """Ошибка загрузки данных."""
     pass
+
+
+# 4xx-статусы, при которых повторы еще имеют смысл; остальные 4xx прекращают попытки сразу
+_RETRYABLE_HTTP_STATUS = {408, 425, 429}
+# Экспоненциальная задержка между попытками (сек): 1.5, 3, 6, ... с потолком
+_RETRY_BASE_DELAY = 1.5
+_RETRY_MAX_DELAY = 30.0
+# Максимальная пауза по Retry-After (сек), чтобы сервер не остановил прогон на часы
+_RETRY_AFTER_MAX = 60.0
 
 
 class _PublicOnlyRedirectHandler(urllib.request.HTTPRedirectHandler):
@@ -96,7 +108,10 @@ class Downloader:
             except Exception:
                 if kind == "rule":
                     text = content.decode("utf-8", errors="replace")
-                    if "://routing/onadd/" in text:
+                    # Источники отдают правило либо как JSON, либо как ссылку onadd.
+                    # Incy использует префикс autorouting (incy://autorouting/onadd/...),
+                    # поэтому проверяем обе формы — иначе такие правила отбраковываются.
+                    if "://routing/onadd/" in text or "://autorouting/onadd/" in text:
                         return True
                 return False
                 
@@ -156,6 +171,31 @@ class Downloader:
             return ipv4_candidates[0]
         return str(valid_ips[0])
 
+    @staticmethod
+    def _retry_after_seconds(error: urllib.error.HTTPError) -> Optional[float]:
+        """Пауза из заголовка Retry-After (секунды или HTTP-дата), либо None, если заголовка нет."""
+        hdrs = getattr(error, "headers", None) or getattr(error, "hdrs", None)
+        if hdrs is None:
+            return None
+        try:
+            raw = hdrs.get("Retry-After")
+        except Exception:
+            return None
+        if raw is None:
+            return None
+        raw = str(raw).strip()
+        if not raw:
+            return None
+        try:
+            seconds = float(raw)
+        except ValueError:
+            try:
+                target = parsedate_to_datetime(raw)
+                seconds = (target - datetime.now(timezone.utc)).total_seconds()
+            except Exception:
+                return None
+        return max(0.0, min(seconds, _RETRY_AFTER_MAX))
+
     def fetch(
         self,
         url: str,
@@ -202,7 +242,23 @@ class Downloader:
             headers["If-None-Match"] = etag
             
         last_error = None
+        retry_after: Optional[float] = None
+        attempts_made = 0
+
         for attempt in range(1, self.max_retries + 1):
+            attempts_made = attempt
+            # Пауза перед повторной попыткой: для 429 уважаем Retry-After,
+            # для остальных временных ошибок — экспоненциальная задержка с джиттером
+            if attempt > 1:
+                if retry_after is not None:
+                    delay = retry_after
+                    logger.info(f"Rate limited (429) on {url}, waiting Retry-After={delay:.1f}s")
+                else:
+                    delay = min(_RETRY_BASE_DELAY * (2 ** (attempt - 2)), _RETRY_MAX_DELAY)
+                    delay *= random.uniform(0.5, 1.5)  # джиттер, чтобы клиенты не повторяли синхронно
+                retry_after = None
+                time.sleep(delay)
+
             try:
                 if not trusted_url:
                     self._validate_untrusted_url(url)
@@ -257,12 +313,23 @@ class Downloader:
                     headers.pop("If-None-Match", None)
                     logger.warning(f"HTTP 304 from {url}, but cache was invalid. Cleared cache, retrying full fetch...")
                     last_error = f"Cache invalidated on 304 for {url}"
-                else:
+                elif 400 <= e.code < 500 and e.code not in _RETRYABLE_HTTP_STATUS:
+                    # 4xx вроде 404/403/400: правило не появится само,
+                    # повторы лишь тратят max_retries * sleep секунд — выходим сразу
                     last_error = f"HTTP {e.code}: {e.reason}"
+                    logger.warning(
+                        f"HTTP {e.code} ({e.reason}) from {url}: "
+                        f"non-retryable client error, stopping retries."
+                    )
+                    break
+                else:
+                    # 5xx и 408/425/429 — временные ошибки, повторяем
+                    last_error = f"HTTP {e.code}: {e.reason}"
+                    if e.code == 429:
+                        retry_after = self._retry_after_seconds(e)
             except Exception as e:
+                # Таймауты, сетевые сбои и прочие временные ошибки — повторяем
                 last_error = str(e)
-                
-            time.sleep(attempt * 1.5)
             
         # Stale-if-error: если сеть недоступна, но есть валидный кэш
         if cache_body_file.is_file():
@@ -277,4 +344,5 @@ class Downloader:
             except Exception:
                 pass
 
-        raise DownloadError(f"Failed to download {url} after {self.max_retries} attempts. Last error: {last_error}")
+        # attempts_made, а не max_retries: при раннем выходе (например, 404) попыток было меньше
+        raise DownloadError(f"Failed to download {url} after {attempts_made} attempt(s). Last error: {last_error}")

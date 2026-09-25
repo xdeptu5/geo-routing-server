@@ -3,7 +3,7 @@ import json
 import logging
 import os
 from typing import Set
-from app.processors.base import BaseProcessor
+from app.processors.base import BaseProcessor, deeplink_filename_for
 from app.processors.geo import GeoManager
 from app.config import Config
 from app.publisher import Publisher
@@ -27,7 +27,10 @@ class HappProcessor(BaseProcessor):
         
         # Определяем, какие подмодули активны для HAPP
         clients_set = set(Config.ENABLED_CLIENTS)
-        needs_geo = ("HAPP" in clients_set or "HAPP_GEO" in clients_set) and not bool(Config.PUBLIC_GEO_BASE_URL)
+        # Модуль geo-баз включен для клиента (независимо от места публикации баз)
+        geo_enabled = "HAPP" in clients_set or "HAPP_GEO" in clients_set
+        # Локальная раздача geo-баз нужна только если внешнее хранилище баз не задано
+        needs_geo = geo_enabled and not bool(Config.PUBLIC_GEO_BASE_URL)
         needs_deeplink = "HAPP" in clients_set or "HAPP_DEEPLINK" in clients_set or "HAPP_LOCAL" in clients_set
         
         default_json_data = None
@@ -40,19 +43,18 @@ class HappProcessor(BaseProcessor):
             logger.warning(f"Could not load default rule for {client} from {url}: {e}")
 
         # 1. Синхронизируем geo-базы (только если включен модуль geo-баз)
-        if needs_geo:
-            if Config.SERVE_GEOIP or Config.SERVE_GEOSITE:
+        if geo_enabled:
+            if Config.PUBLIC_GEO_BASE_URL:
+                # Базы публикуются во внешнем хранилище: убираем устаревшие локальные
+                # geoip.dat/geosite.dat, оставшиеся от прошлой конфигурации
+                self._remove_local_geo_databases(target_dir)
+            elif Config.SERVE_GEOIP or Config.SERVE_GEOSITE:
                 if not self.geo_manager.sync_client_geo(client, target_dir, default_json_data):
                     success = False
 
             else:
-                for f in ("geoip.dat", "geosite.dat"):
-                    old_f = target_dir / f
-                    if old_f.is_file():
-                        try:
-                            old_f.unlink()
-                        except OSError:
-                            pass
+                # Локальная раздача geo-баз выключена — файлы больше не актуальны
+                self._remove_local_geo_databases(target_dir)
 
         # 2. Генерируем JSON и DEEPLINK для Remnawave / клиентов (только если включен deeplink модуль)
         if needs_deeplink:
@@ -134,7 +136,8 @@ class HappProcessor(BaseProcessor):
                         
                     # Генерируем компактный DEEPLINK (happ://routing/onadd/<base64>) без пробелов
                     deeplink_content = self.build_deeplink(client, data)
-                    deeplink_filename = f"{file_name.rsplit('.', 1)[0]}.DEEPLINK"
+                    # Единый контракт именования: <БАЗА В ВЕРХНЕМ РЕГИСТРЕ>.DEEPLINK
+                    deeplink_filename = deeplink_filename_for(file_name)
                     
                     if Config.should_serve_deeplink(client) or RemnawaveSync.is_configured():
                         if Publisher.publish_file(target_dir, deeplink_filename, deeplink_content):
@@ -146,7 +149,8 @@ class HappProcessor(BaseProcessor):
                     logger.error(f"Failed to process {file_name} for HAPP: {e}")
                     success = False
                     
-            if success:
-                self._cleanup_obsolete_files(target_dir, published_files)
+            # Очистка выполняется только при полном успехе прогона: при частичном
+            # провале загрузки/публикации удалять устаревшие файлы небезопасно
+            self._cleanup_obsolete_files(target_dir, published_files, published_ok=success)
                 
         return success

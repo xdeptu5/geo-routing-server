@@ -4,11 +4,13 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app
 
+# Пакеты только те, что нужны в рантайме: python3 — приложение, nginx —
+# раздача, ca-certificates — HTTPS к API Remnawave. curl в образе не нужен
+# (healthcheck использует встроенный busybox wget, install.sh работает на хосте).
 RUN apk add --no-cache \
     python3 \
     nginx \
-    ca-certificates \
-    curl
+    ca-certificates
 
 WORKDIR /app
 

@@ -8,6 +8,7 @@ import urllib.parse
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 from app.config import Config
+from app.processors.base import deeplink_filename_for
 
 logger = logging.getLogger("geo-routing-server")
 
@@ -44,9 +45,15 @@ class RemnawaveSync:
 
     @classmethod
     def get_api_url(cls) -> str:
-        """Нормализует базовый URL Remnawave, гарантируя наличие суффикса /api."""
+        """Нормализует базовый URL Remnawave, гарантируя наличие суффикса /api.
+
+        Толерантно к записи в .env: 'https://host', 'https://host/',
+        'https://host/api' и 'https://host/api/' дают одинаковый результат.
+        """
         raw = os.getenv("REMNAWAVE_BASE_URL", "").strip().rstrip("/")
-        if raw and not raw.endswith("/api"):
+        if not raw:
+            return ""
+        if not re.search(r"/api$", raw, flags=re.IGNORECASE):
             raw = f"{raw}/api"
         return raw
 
@@ -84,7 +91,9 @@ class RemnawaveSync:
     @classmethod
     def _api_request(cls, method: str, url: str, payload: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
         headers = cls._get_headers()
-        data = json.dumps(payload).encode("utf-8") if payload else None
+        # Пустой объект {} — валидное тело запроса и должен уходить в него;
+        # None означает «тела нет». Проверка через `if payload` превращала {} в None
+        data = json.dumps(payload).encode("utf-8") if payload is not None else None
         
         req = urllib.request.Request(url, data=data, headers=headers, method=method)
         try:
@@ -190,12 +199,16 @@ class RemnawaveSync:
 
     @classmethod
     def _read_deeplink_content(cls, happ_dir: Path, rule_name: str) -> Optional[str]:
-        """Читает сгенерированный файл .DEEPLINK для указанного правила."""
+        """Читает сгенерированный файл .DEEPLINK для указанного правила.
+
+        Имя файла берётся из общего контракта именования (deeplink_filename_for):
+        <БАЗА В ВЕРХНЕМ РЕГИСТРЕ>.DEEPLINK — ровно так же его пишет publisher.
+        """
         base_name = Path(rule_name).name.rsplit(".", 1)[0].upper()
         if not re.match(r"^[A-Za-z0-9_.-]+$", base_name):
             logger.error(f"[Remnawave] Invalid rule name format: {rule_name}")
             return None
-        deeplink_path = (happ_dir / f"{base_name}.DEEPLINK").resolve()
+        deeplink_path = (happ_dir / deeplink_filename_for(rule_name)).resolve()
         try:
             if not deeplink_path.is_relative_to(happ_dir.resolve()):
                 logger.error(f"[Remnawave] Path traversal detected in rule: {rule_name}")
@@ -209,6 +222,29 @@ class RemnawaveSync:
                 return deeplink_path.read_text(encoding="utf-8").strip()
             except Exception as e:
                 logger.error(f"Failed to read deeplink file {deeplink_path}: {e}")
+                return None
+
+        # Регистр имени файла задаёт источник, а правило из конфигурации обычно
+        # приходит в верхнем регистре: если точное имя не найдено, ищем файл,
+        # отличающийся только регистром (например, записанный старой версией).
+        target_name = deeplink_path.name.lower()
+        try:
+            variants = [p for p in happ_dir.iterdir() if p.is_file() and p.name.lower() == target_name]
+        except OSError:
+            variants = []
+        if len(variants) == 1:
+            logger.info(
+                f"[Remnawave] Файл {deeplink_path.name} найден в другом регистре: {variants[0].name}"
+            )
+            try:
+                return variants[0].read_text(encoding="utf-8").strip()
+            except Exception as e:
+                logger.error(f"Failed to read deeplink file {variants[0]}: {e}")
+        elif len(variants) > 1:
+            logger.warning(
+                f"[Remnawave] Несколько файлов совпадают с {deeplink_path.name} по регистру: "
+                f"{sorted(v.name for v in variants)} — уточните имя правила"
+            )
         return None
 
     @classmethod
@@ -257,7 +293,7 @@ class RemnawaveSync:
                     cls.last_errors.append("Не удалось загрузить subscription-settings из Remnawave API")
                     success = False
             else:
-                error = f"Настроенный файл {rule_file.rsplit('.', 1)[0]}.DEEPLINK не найден в {happ_dir}"
+                error = f"Настроенный файл {deeplink_filename_for(rule_file)} не найден в {happ_dir}"
                 logger.error(f"[Remnawave] {error}")
                 cls.last_errors.append(error)
                 success = False
@@ -305,12 +341,12 @@ class RemnawaveSync:
                         if fb_deeplink:
                             logger.warning(
                                 f"[Remnawave] Файл правила '{rule_name}' для {s_desc} не найден. "
-                                f"Текущий пресет '{Config.ROUTING_SOURCE_PRESET}' — автоматически используем {default_rule.rsplit('.', 1)[0].upper()}.DEEPLINK"
+                                f"Текущий пресет '{Config.ROUTING_SOURCE_PRESET}' — автоматически используем {deeplink_filename_for(default_rule)}"
                             )
                             deeplink = fb_deeplink
 
                 if not deeplink:
-                    deeplink_name = f"{Path(rule_name).name.rsplit('.', 1)[0].upper()}.DEEPLINK"
+                    deeplink_name = deeplink_filename_for(rule_name)
                     error = f"Настроенный файл {deeplink_name} для {s_desc} не найден в {happ_dir}"
                     logger.error(f"[Remnawave] {error}")
                     cls.last_errors.append(error)

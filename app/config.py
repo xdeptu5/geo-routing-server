@@ -82,6 +82,18 @@ class Config:
                 active.append(f"{r}.JSON")
         return active or discovered_rules
 
+    @classmethod
+    def get_display_rules(cls, discovered_rules: list[str] | None = None, client: str = "") -> list[str]:
+        """Список правил для баннера/сводки: пресет и ROUTING_RULES из конфигурации.
+
+        В отличие от get_active_rules([]) не возвращает пустой список, когда
+        discovery не выполнялся: без явно заданных ROUTING_RULES берётся
+        стандартный набор правил (совпадает с BaseProcessor.FALLBACK_FILES).
+        """
+        fallback = ["DEFAULT.JSON", "JSONSUB.JSON", "WHITELIST.JSON"]
+        candidates = list(discovered_rules) if discovered_rules else list(cls.ROUTING_RULES or fallback)
+        return cls.get_active_rules(candidates, client=client)
+
     # Внешний URL к гео-базам (если базы отдаются с другого сервера)
     _raw_public_geo = os.getenv("PUBLIC_GEO_BASE_URL", "").strip().rstrip("/")
     if _raw_public_geo and not _raw_public_geo.startswith(("http://", "https://")):
@@ -163,6 +175,13 @@ class Config:
     _custom_geosite = _validate_http_url(os.getenv("GEOSITE_SOURCE_URL", ""))
     _custom_repo = _validate_http_url(os.getenv("ROUTING_SOURCE_REPO", ""))
 
+    # URL, заданный пользователем явно в .env: пустая строка, если переменная не установлена.
+    # Это приоритетная ветка «пользовательский URL» в GeoManager.resolve_and_fetch;
+    # без неё приоритет переходит к DEFAULT.JSON, затем к URL пресета.
+    GEOIP_SOURCE_URL_EXPLICIT: str = _custom_geoip
+    GEOSITE_SOURCE_URL_EXPLICIT: str = _custom_geosite
+
+    # Итоговые URL для обратной совместимости: пользовательский, иначе URL пресета.
     GEOIP_SOURCE_URL = _custom_geoip or _active_preset["geoip_url"]
     GEOSITE_SOURCE_URL = _custom_geosite or _active_preset["geosite_url"]
     ROUTING_SOURCE_REPO = (_custom_repo or _active_preset["routing_repo"]).rstrip("/")
@@ -232,12 +251,13 @@ class Config:
     def get_github_contents_url(cls, client: str) -> str:
         """Возвращает URL GitHub Contents API для raw.githubusercontent.com источника.
 
-        Custom sources outside GitHub нельзя безопасно сопоставить с Contents API,
-        поэтому discovery для них отключается.
+        Раскладка каталогов согласуется с get_rule_url:
+        - geogaga   — плоская ({repo}/{client}.json): listing каталога источника;
+        - vahellame — JSON-правило лежит в profiles/;
+        - прочие    — {repo}/{client}/{file}: к пути источника добавляется каталог клиента.
+        Custom sources вне GitHub нельзя безопасно сопоставить с Contents API,
+        поэтому discovery для них отключается (возвращается пустая строка).
         """
-        if cls.ROUTING_SOURCE_PRESET in ("geogaga", "vahellame"):
-            return ""
-
         parsed = urlparse(cls.ROUTING_SOURCE_REPO)
         if parsed.scheme != "https" or parsed.hostname != "raw.githubusercontent.com":
             return ""
@@ -248,7 +268,12 @@ class Config:
 
         owner, repo, ref = parts[:3]
         source_path = parts[3:]
-        content_path = "/".join([*source_path, client])
+        if cls.ROUTING_SOURCE_PRESET == "geogaga":
+            content_path = "/".join(source_path)
+        elif cls.ROUTING_SOURCE_PRESET == "vahellame":
+            content_path = "/".join([*source_path, "profiles"])
+        else:
+            content_path = "/".join([*source_path, client])
         quoted_path = quote(content_path, safe="/")
         quoted_ref = quote(ref, safe="")
         return (

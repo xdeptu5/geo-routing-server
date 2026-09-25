@@ -1,4 +1,3 @@
-import hashlib
 import logging
 from pathlib import Path
 from typing import Dict, Optional
@@ -22,9 +21,9 @@ class GeoManager:
         Резолвит источник geo-базы с учетом приоритетов и возвращает байты содержимого.
         Приоритет:
         1. Локальный файл в custom_geo/<client>/<geo_type>.dat или custom_geo/<geo_type>.dat
-        2. Кастомный URL из конфигурации (GEOIP_SOURCE_URL / GEOSITE_SOURCE_URL)
+        2. Пользовательский URL из .env (GEOIP_SOURCE_URL / GEOSITE_SOURCE_URL), заданный явно
         3. URL из DEFAULT.JSON репозитория
-        4. Fallback URL на GitHub Releases
+        4. Fallback URL на GitHub Releases (URL пресета)
         """
         # 1. Проверяем локальные файлы
         local_candidates = [
@@ -39,8 +38,8 @@ class GeoManager:
                     return content
                 logger.warning(f"  Ignoring invalid local {geo_type} file: {candidate}")
 
-        # 2. Кастомный URL из .env
-        custom_url = Config.GEOIP_SOURCE_URL if geo_type == "geoip" else Config.GEOSITE_SOURCE_URL
+        # 2. Пользовательский URL из .env (ветка срабатывает только если задан явно)
+        custom_url = Config.GEOIP_SOURCE_URL_EXPLICIT if geo_type == "geoip" else Config.GEOSITE_SOURCE_URL_EXPLICIT
         if custom_url:
             if custom_url in self._memory_cache:
                 logger.info(f"  Reusing already downloaded {geo_type} for {client}")
@@ -82,14 +81,11 @@ class GeoManager:
                 logger.warning(f"  Failed to download from primary source ({e}), trying fallback...")
 
         # 4. Fallback на GitHub Releases в зависимости от пресета
-        fallback_url = Config.GEOIP_SOURCE_URL if geo_type == "geoip" else Config.GEOSITE_SOURCE_URL
+        preset_urls = Config.SOURCE_PRESETS.get(Config.ROUTING_SOURCE_PRESET, {})
+        fallback_url = preset_urls.get("geoip_url" if geo_type == "geoip" else "geosite_url", "")
         if not fallback_url:
-            if Config.ROUTING_SOURCE_PRESET == "hydraponique":
-                fallback_url = f"https://github.com/hydraponique/roscomvpn-{geo_type}/releases/latest/download/{geo_type}.dat"
-            elif Config.ROUTING_SOURCE_PRESET == "vahellame":
-                fallback_url = f"https://github.com/vahellame/russia-whitelist-{geo_type}/releases/latest/download/{geo_type}.dat"
-            else:
-                fallback_url = f"https://github.com/bratishkadrugoimamysynishka/geogaga-client-flavor/releases/latest/download/{geo_type}.dat"
+            # Пресет без собственных URL (custom): встроенный GitHub Releases источник
+            fallback_url = f"https://github.com/bratishkadrugoimamysynishka/geogaga-client-flavor/releases/latest/download/{geo_type}.dat"
         if fallback_url in self._memory_cache:
             logger.info(f"  Reusing fallback {geo_type} for {client}")
             return self._memory_cache[fallback_url]

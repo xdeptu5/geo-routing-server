@@ -2,7 +2,7 @@ import hashlib
 import json
 import logging
 from typing import Set
-from app.processors.base import BaseProcessor
+from app.processors.base import BaseProcessor, deeplink_filename_for
 from app.processors.geo import GeoManager
 from app.config import Config
 from app.publisher import Publisher
@@ -24,8 +24,10 @@ class IncyProcessor(BaseProcessor):
         success = True
         
         clients_set = set(Config.ENABLED_CLIENTS)
+        # Модуль geo-баз включен для клиента (независимо от места публикации баз)
+        geo_enabled = "INCY" in clients_set or "INCY_GEO" in clients_set
         # Базы скачиваются локально только если включен geo-модуль и нет внешнего URL баз
-        needs_geo = ("INCY" in clients_set or "INCY_GEO" in clients_set) and not bool(Config.PUBLIC_GEO_BASE_URL)
+        needs_geo = geo_enabled and not bool(Config.PUBLIC_GEO_BASE_URL)
         needs_routing = "INCY" in clients_set
         
         default_json_data = None
@@ -39,19 +41,18 @@ class IncyProcessor(BaseProcessor):
                 logger.warning(f"Could not load default rule for {client} from {url}: {e}")
             
         # 1. Синхронизируем geoip.dat и geosite.dat (если базы раздаются локально)
-        if needs_geo:
-            if Config.SERVE_GEOIP or Config.SERVE_GEOSITE:
+        if geo_enabled:
+            if Config.PUBLIC_GEO_BASE_URL:
+                # Базы публикуются во внешнем хранилище: убираем устаревшие локальные
+                # geoip.dat/geosite.dat, оставшиеся от прошлой конфигурации
+                self._remove_local_geo_databases(target_dir)
+            elif Config.SERVE_GEOIP or Config.SERVE_GEOSITE:
                 if not self.geo_manager.sync_client_geo(client, target_dir, default_json_data):
                     success = False
 
             else:
-                for f in ("geoip.dat", "geosite.dat"):
-                    old_f = target_dir / f
-                    if old_f.is_file():
-                        try:
-                            old_f.unlink()
-                        except OSError:
-                            pass
+                # Локальная раздача geo-баз выключена — файлы больше не актуальны
+                self._remove_local_geo_databases(target_dir)
             
         # 2. Синхронизируем и модифицируем JSON конфигурации (только если нужен роутинг)
         if needs_routing:
@@ -115,7 +116,8 @@ class IncyProcessor(BaseProcessor):
                     # Генерируем компактный DEEPLINK (схема incy://routing/onadd/<base64>) если включено
                     if Config.should_serve_deeplink(client):
                         deeplink_content = self.build_deeplink(client, data)
-                        deeplink_filename = f"{file_name.rsplit('.', 1)[0]}.DEEPLINK"
+                        # Единый контракт именования: <БАЗА В ВЕРХНЕМ РЕГИСТРЕ>.DEEPLINK
+                        deeplink_filename = deeplink_filename_for(file_name)
                         if Publisher.publish_file(target_dir, deeplink_filename, deeplink_content):
                             published_files.add(deeplink_filename)
                         else:
@@ -125,8 +127,9 @@ class IncyProcessor(BaseProcessor):
                     logger.error(f"Failed to process {file_name}: {e}")
                     success = False
                 
-        # 4. Удаляем старые файлы, если они больше не существуют
-        if success and needs_routing:
-            self._cleanup_obsolete_files(target_dir, published_files)
+        # 4. Удаляем старые файлы, если они больше не существуют.
+        # Только при полном успехе прогона: иначе можно потерять ещё актуальные правила
+        if needs_routing:
+            self._cleanup_obsolete_files(target_dir, published_files, published_ok=success)
             
         return success

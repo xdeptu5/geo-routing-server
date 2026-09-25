@@ -10,6 +10,16 @@ from app.downloader import Downloader
 
 logger = logging.getLogger("geo-routing-server")
 
+def deeplink_filename_for(file_name: str) -> str:
+    """Единый контракт именования файлов диплинков: <БАЗА В ВЕРХНЕМ РЕГИСТРЕ>.DEEPLINK.
+
+    Именно так имя формирует publisher (happ.py/incy.py) и именно так его ищет
+    remnawave.py. Каталог раздачи чувствителен к регистру, поэтому расходиться
+    нельзя: remnawave иначе не находит файл и не публикует диплинк в сквад.
+    """
+    base_name = Path(file_name).name.rsplit(".", 1)[0].upper()
+    return f"{base_name}.DEEPLINK"
+
 class BaseProcessor(ABC):
     """Базовый класс процессора для клиентов маршрутизации."""
     
@@ -78,8 +88,8 @@ class BaseProcessor(ABC):
         api_url = Config.get_github_contents_url(self.CLIENT_NAME)
         if not api_url:
             logger.warning(
-                "Skipping GitHub API discovery for unsupported routing source; "
-                "obsolete-file cleanup is disabled"
+                f"GitHub API discovery недоступен для {self.CLIENT_NAME} (источник не из GitHub Contents API); "
+                "очистка устаревших файлов будет идти строго по опубликованному набору"
             )
             self.is_fallback_discovery = True
             return list(self.FALLBACK_FILES)
@@ -104,21 +114,72 @@ class BaseProcessor(ABC):
         self.is_fallback_discovery = True
         return list(self.FALLBACK_FILES)
 
-    def _cleanup_obsolete_files(self, target_dir: Path, valid_filenames: Set[str]) -> None:
-        """Удаляет неактуальные JSON и DEEPLINK файлы, которых больше нет в источниках."""
+    def _remove_local_geo_databases(self, target_dir: Path) -> None:
+        """Удаляет устаревшие локальные geoip.dat/geosite.dat из каталога клиента.
+
+        Нужно, когда geo-базы больше не раздаются локально: раздача выключена
+        (SERVE_GEOIP/SERVE_GEOSITE) либо базы публикуются во внешнем хранилище
+        (PUBLIC_GEO_BASE_URL) — иначе остатки от прошлой конфигурации висят вечно.
+        """
         if not target_dir.is_dir():
             return
 
-        if self.is_fallback_discovery:
-            logger.info(f"Skipping obsolete files cleanup for {self.CLIENT_NAME} due to fallback file discovery")
+        for filename in ("geoip.dat", "geosite.dat"):
+            old_file = target_dir / filename
+            if old_file.is_file():
+                try:
+                    old_file.unlink()
+                    logger.info(f"  Removed stale {self.CLIENT_NAME} geo file: {filename}")
+                except OSError as e:
+                    logger.warning(f"  Could not remove stale geo file {old_file}: {e}")
+
+    def _cleanup_obsolete_files(
+        self, target_dir: Path, valid_filenames: Set[str], published_ok: bool = True
+    ) -> None:
+        """Удаляет неактуальные JSON и DEEPLINK файлы, которых больше нет в источниках.
+
+        Безопасность очистки:
+        - published_ok — флаг полного успеха прогона: process() передаёт сюда
+          результат публикации, и при частичном провале загрузки/публикации
+          ничего не удаляется (иначе можно потерять ещё актуальные правила);
+          по умолчанию True — прямые вызовы чистят, как и раньше;
+        - имена сравниваются регистронезависимо с ОБЕИХ сторон: публикуемые имена
+          (.JSON/.DEEPLINK) не всегда совпадают по регистру со списком из источников,
+          из-за чего строгое сравнение могло удалить актуальный файл;
+        - в fallback-режиме discovery (GitHub API недоступен или источник вне
+          GitHub) очистка тоже работает, но только по уже опубликованному набору.
+        """
+        if not target_dir.is_dir():
             return
-            
+
+        if not published_ok:
+            logger.info(
+                f"Skipping obsolete files cleanup for {self.CLIENT_NAME}: "
+                f"the current set was not published successfully"
+            )
+            return
+
+        if not valid_filenames:
+            logger.warning(
+                f"Skipping obsolete files cleanup for {self.CLIENT_NAME}: "
+                f"nothing was published this run"
+            )
+            return
+
+        if self.is_fallback_discovery:
+            logger.info(
+                f"Fallback file discovery for {self.CLIENT_NAME}: running conservative "
+                f"cleanup by the successfully published set"
+            )
+
+        valid_names_lower = {name.lower() for name in valid_filenames}
+
         for path in target_dir.iterdir():
             if not path.is_file():
                 continue
             name_lower = path.name.lower()
             if name_lower.endswith(".json") or name_lower.endswith(".deeplink"):
-                if path.name not in valid_filenames:
+                if name_lower not in valid_names_lower:
                     try:
                         path.unlink(missing_ok=True)
                         logger.info(f"  Removed obsolete {self.CLIENT_NAME} file: {path.name}")

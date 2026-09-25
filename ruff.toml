@@ -1,0 +1,19 @@
+# Ruff configuration for geo-routing-server
+#
+# Deterministic, bug-focused rule set: E4/E7/E9 + pyflakes (F) catches real
+# defects (unused imports/variables, syntax errors, undefined names) without
+# forcing a mass style refactor of the existing code.
+#
+# Keep the ruff version in sync with:
+#   - .github/workflows/docker.yml  (pip install ruff==<version>)
+#   - the local/CI toolchain: ruff 0.16.9
+#
+# NOTE: E501 (line length) is intentionally NOT selected — existing lines go
+# up to 219 chars; line-length below is set for tools that honor it (e.g.
+# `ruff format`), not as a lint gate.
+
+target-version = "py312"   # Dockerfile: alpine:3.21 -> python3 = 3.12.x
+line-length = 220
+
+[lint]
+select = ["E4", "E7", "E9", "F"]

@@ -4,9 +4,12 @@ import os
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Union
+from typing import Dict, Tuple, Union
 
 logger = logging.getLogger("geo-routing-server")
+
+# Кэш SHA-256 по (путь, размер, mtime_ns): не перечитываем geo-базы (десятки МБ) на каждом прогоне
+_sha256_cache: Dict[str, Tuple[int, int, str]] = {}
 
 @dataclass
 class PublishedFileInfo:
@@ -38,11 +41,26 @@ class Publisher:
 
     @staticmethod
     def _sha256_file(path: Path) -> str:
+        """SHA-256 файла. Кэшируется по (размер, mtime_ns): файл перечитывается только если он менялся."""
+        cache_key = str(path)
+        stat = None
+        try:
+            stat = path.stat()
+            cached = _sha256_cache.get(cache_key)
+            if cached is not None and cached[0] == stat.st_size and cached[1] == stat.st_mtime_ns:
+                return cached[2]
+        except OSError:
+            # Не смогли получить stat — хешируем как раньше, без кэша
+            stat = None
+
         digest = hashlib.sha256()
         with path.open("rb") as source:
             for chunk in iter(lambda: source.read(1024 * 1024), b""):
                 digest.update(chunk)
-        return digest.hexdigest()
+        hexdigest = digest.hexdigest()
+        if stat is not None:
+            _sha256_cache[cache_key] = (stat.st_size, stat.st_mtime_ns, hexdigest)
+        return hexdigest
 
     @classmethod
     def publish_file(cls, dest_dir: Path, filename: str, content: Union[str, bytes]) -> bool:
@@ -90,7 +108,12 @@ class Publisher:
                 is_updated = True
 
         if is_updated:
-            temp_fd, temp_path = tempfile.mkstemp(prefix=f".{filename}.", dir=str(dest_dir))
+            # mkstemp может упасть (например, в имени файла есть подкаталог) — возвращаем False, а не исключение
+            try:
+                temp_fd, temp_path = tempfile.mkstemp(prefix=f".{filename}.", dir=str(dest_dir))
+            except Exception as e:
+                logger.error(f"Failed to create temp file for {filename}: {e}")
+                return False
             try:
                 with os.fdopen(temp_fd, "wb") as f:
                     f.write(raw_data)
@@ -98,6 +121,12 @@ class Publisher:
                     os.fsync(f.fileno())
                 os.chmod(temp_path, 0o644)
                 os.replace(temp_path, target_path)
+                # Файл только что записан — кладем его хеш в кэш, чтобы не перечитывать заново
+                try:
+                    st = target_path.stat()
+                    _sha256_cache[str(target_path)] = (st.st_size, st.st_mtime_ns, sha256_hash)
+                except OSError:
+                    pass
                 logger.info(f"  Updated: {filename}")
                 cls.any_file_changed = True
             except Exception as e:

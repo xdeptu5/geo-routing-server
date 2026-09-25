@@ -6,7 +6,12 @@ SYNC_ON_START="${SYNC_ON_START:-true}"
 
 resolve_routing_token() {
     routing_value="${ROUTING_TOKEN:-}"
-    clients="$(printf '%s' "${ENABLED_CLIENTS:-HAPP,INCY}" | tr -d '[:space:]' | tr '[:lower:]' '[:upper:]')"
+    # Разделители нормализуемся: "HAPP_LOCAL," и ",HAPP_LOCAL" должны читаться
+    # как "HAPP_LOCAL", иначе local-only режим из-за лишней запятой потребует
+    # токен и упадёт с неверным сообщением.
+    clients="$(printf '%s' "${ENABLED_CLIENTS:-HAPP,INCY}" \
+        | tr -d '[:space:]' | tr '[:lower:]' '[:upper:]' \
+        | sed -e 's/^,*//' -e 's/,*$//' -e 's/,,\+/,/g')"
 
     if [ -z "$routing_value" ] || [ "$routing_value" = "change_me_to_random_secret_token" ]; then
         case ",$clients," in
@@ -51,7 +56,8 @@ cleanup() {
     wait "${NGINX_PID:-}" 2>/dev/null || true
     exit "$status"
 }
-trap 'cleanup 0' SIGTERM SIGINT
+# Имена сигналов в POSIX sh пишутся без префикса SIG (иначе SC3048).
+trap 'cleanup 0' TERM INT
 
 # Сохраняем переменные окружения для cron (BusyBox crond запускается с очищенным окружением)
 # Права 0600 исключают чтение секретных токенов другими непривилегированными процессами

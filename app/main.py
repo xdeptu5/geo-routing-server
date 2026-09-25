@@ -99,8 +99,10 @@ def print_summary_banner(token: str):
     """Выводит чистый, аккуратный блок со ссылками строго под выбранные модули и файлы."""
     base_url = Config.get_base_url(token)
     clients_set = set(Config.ENABLED_CLIENTS)
-    happ_rules = [r.removesuffix(".JSON") for r in Config.get_active_rules([], client="HAPP")]
-    incy_rules = [r.removesuffix(".JSON") for r in Config.get_active_rules([], client="INCY")]
+    # Правила для сводки берём из конфигурации (пресет/ROUTING_RULES), а не из
+    # пустого discovered-списка: иначе баннер пустует при части пресетов
+    happ_rules = [r.removesuffix(".JSON") for r in Config.get_display_rules(client="HAPP")]
+    incy_rules = [r.removesuffix(".JSON") for r in Config.get_display_rules(client="INCY")]
     
     sections = []
     
@@ -249,8 +251,12 @@ def main():
         active_processors.append(IncyProcessor(downloader, Config.STORAGE_DIR, token, Config.DOMAIN))
             
     if not active_processors:
-        logger.warning("No valid processors active. Please check ENABLED_CLIENTS in .env")
-        return
+        # Ранний выход при провале старта: фиксируем статус ошибки и выходим с
+        # ненулевым кодом, иначе упавший контейнер выглядит «работающим»
+        # (в .sync-status.json остался бы running, а код возврата был бы 0)
+        logger.error("No valid processors active. Please check ENABLED_CLIENTS in .env")
+        write_sync_status(Config.STORAGE_DIR, token, "failed")
+        sys.exit(1)
         
     failures = 0
     for processor in active_processors:

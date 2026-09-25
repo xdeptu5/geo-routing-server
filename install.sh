@@ -6,7 +6,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="1.3.2"
+SCRIPT_VERSION="1.3.3"
 CONFIG_RECORD="/etc/geo-routing-server.conf"
 DEFAULT_INSTALL_DIR="/opt/geo-routing-server"
 DOCKER_IMAGE="ghcr.io/xdeptu5/geo-routing-server:latest"
@@ -14,13 +14,11 @@ DOCKER_IMAGE="ghcr.io/xdeptu5/geo-routing-server:latest"
 # Палитра цветов и стилей оформления
 C_RESET="\033[0m"
 C_BOLD="\033[1m"
-C_DIM="\033[2m"
 C_WHITE="\033[1;37m"
 C_GREEN="\033[1;32m"
 C_RED="\033[1;31m"
 C_YELLOW="\033[1;33m"
 C_CYAN="\033[1;36m"
-C_BLUE="\033[1;34m"
 C_GRAY="\033[38;5;244m"
 C_LIGHT_GRAY="\033[38;5;250m"
 C_BORDER="\033[38;5;8m"
@@ -92,19 +90,69 @@ check_dependencies() {
         echo -e "${C_YELLOW}Установите Docker и Docker Compose перед продолжением.${C_RESET}"
         exit 1
     fi
+
+    # Наличие бинаря docker не означает, что демон запущен — проверяем явно,
+    # чтобы ошибка не всплыла позже с падением на середине установки.
+    if ! docker info >/dev/null 2>&1; then
+        echo -e "${C_RED}[!] Docker установлен, но демон недоступен (docker info завершился с ошибкой).${C_RESET}"
+        echo -e "${C_YELLOW}Запустите демон (systemctl start docker) либо добавьте пользователя в группу docker: sudo usermod -aG docker \$USER${C_RESET}"
+        exit 1
+    fi
+}
+
+# Проверяет, принадлежит ли каталог проекту Geo Routing Server:
+# рядом должен лежать compose.yaml/docker-compose.yml с нашим сервисом
+# и .env с нашими ключами (GEO_ROUTING_*/ROUTING_SOURCE_*/ROUTING_TOKEN).
+# В каталоге должен лежать compose.yaml/docker-compose.yml с нашим сервисом.
+# Этого достаточно, чтобы не принять за установку чужой проект с compose.yaml.
+has_our_compose() {
+    local dir="$1"
+    [ -n "$dir" ] || return 1
+    [ -d "$dir" ] || return 1
+
+    local compose_file=""
+    if [ -f "$dir/compose.yaml" ]; then
+        compose_file="$dir/compose.yaml"
+    elif [ -f "$dir/docker-compose.yml" ]; then
+        compose_file="$dir/docker-compose.yml"
+    else
+        return 1
+    fi
+    grep -q "geo-routing-server" "$compose_file" 2>/dev/null
+}
+
+# Полный маркер УСТАНОВКИ: наш compose И .env с нашими ключами.
+# Нужен там, где каталог удаляется (uninstall): клон репозитория, где .env
+# ещё не создан, не должен становиться целью rm -rf.
+is_project_dir() {
+    local dir="$1"
+    has_our_compose "$dir" || return 1
+
+    local env_file="$dir/.env"
+    [ -f "$env_file" ] || return 1
+    grep -qE '^(GEO_ROUTING_|ROUTING_SOURCE_|ROUTING_TOKEN=|ENABLED_CLIENTS=)' "$env_file" 2>/dev/null || return 1
+
+    return 0
 }
 
 get_install_dir() {
     if [ -f "$CONFIG_RECORD" ]; then
         local saved_dir
-        saved_dir="$(head -n 1 "$CONFIG_RECORD" 2>/dev/null | tr -d '[:space:]')"
+        # Убираем только \r: путь может содержать пробелы, их трогать нельзя
+        saved_dir="$(head -n 1 "$CONFIG_RECORD" 2>/dev/null | tr -d '\r')"
         if [ -n "$saved_dir" ] && [ -d "$saved_dir" ]; then
             echo "$saved_dir"
             return 0
         fi
     fi
-    if [ -f "./compose.yaml" ] || [ -f "./docker-compose.yml" ]; then
-        pwd
+    local cwd
+    cwd="$(pwd)"
+    # Для выбора каталога достаточно нашего compose: на первом запуске в
+    # свежем клоне .env ещё нет, и каталог установки не должен съезжать
+    # в /opt из-за этого. Жёсткий маркер (is_project_dir) нужен только
+    # при удалении.
+    if has_our_compose "$cwd"; then
+        echo "$cwd"
         return 0
     fi
     if [ -d "/opt/stacks/geo-routing-server" ]; then
@@ -123,7 +171,15 @@ save_install_dir() {
 create_cli_shortcut() {
     local install_dir="$1"
     local bin_path="/usr/local/bin/geoserver"
-    
+
+    # /usr/local/bin доступен только root — проверяем явно, чтобы не упасть
+    # на записи файла посреди установки/обновления.
+    if [ "$(id -u)" -ne 0 ]; then
+        echo -e "${C_RED}[!] Нет прав для записи в ${bin_path} — запустите от root.${C_RESET}"
+        echo -e "    Пожалуйста, запустите: ${C_BOLD}sudo geoserver${C_RESET} или ${C_BOLD}sudo bash $0${C_RESET}"
+        return 1
+    fi
+
     cat > "$bin_path" <<EOF
 #!/usr/bin/env bash
 exec bash "$install_dir/install.sh" "\$@"
@@ -137,7 +193,8 @@ get_env_val() {
     local def="${3:-}"
     if [ -f "$file" ]; then
         local val
-        val=$(grep "^${key}=" "$file" 2>/dev/null | cut -d'=' -f2- | tr -d '\r' || true)
+        # -m1: если в файле остались дубли ключа, берём ровно первое значение
+        val=$(grep -m1 "^${key}=" "$file" 2>/dev/null | cut -d'=' -f2- | tr -d '\r' || true)
         echo "${val:-$def}"
     else
         echo "$def"
@@ -148,21 +205,56 @@ set_env_val() {
     local key="$1"
     local val="$2"
     local file="$3"
-    local escaped_val
-    escaped_val=$(printf '%s\n' "$val" | sed -e 's/[\\/&|]/\\&/g')
-    if grep -q "^${key}=" "$file" 2>/dev/null; then
-        sed -i "s|^${key}=.*|${key}=${escaped_val}|" "$file"
-    else
-        echo "${key}=${val}" >> "$file"
+
+    # Значение приводим к ОДНОЙ строке: многострочное значение ломает
+    # docker compose ("unexpected character") и любые построчные фильтры.
+    val="${val%%$'\n'*}"
+    val="${val//$'\r'/}"
+
+    if [ ! -f "$file" ]; then
+        printf '%s=%s\n' "$key" "$val" > "$file"
+        return 0
     fi
+
+    # Запись атомарная и без sed-делмитеров: значение уходит в awk через ENVIRON,
+    # поэтому спецсимволы (&, /, |, \, #, кавычки) не интерпретируются.
+    local tmp
+    tmp="$(mktemp "${file}.set.XXXXXX")" || return 1
+    if GRS_ENV_KEY="$key" GRS_ENV_VAL="$val" awk '
+        BEGIN { k = ENVIRON["GRS_ENV_KEY"]; v = ENVIRON["GRS_ENV_VAL"]; done = 0 }
+        {
+            if (!done && index($0, k "=") == 1) { print k "=" v; done = 1; next }
+            print
+        }
+        END { if (!done) print k "=" v }
+    ' "$file" > "$tmp"; then
+        :
+    else
+        rm -f "$tmp"
+        return 1
+    fi
+    chmod --reference="$file" "$tmp" 2>/dev/null || true
+    mv -f "$tmp" "$file"
 }
 
 delete_env_val() {
     local key="$1"
     local file="$2"
-    if [ -f "$file" ]; then
-        sed -i "/^${key}=/d" "$file"
+    [ -f "$file" ] || return 0
+
+    local tmp
+    tmp="$(mktemp "${file}.del.XXXXXX")" || return 1
+    if GRS_ENV_KEY="$key" awk '
+        BEGIN { k = ENVIRON["GRS_ENV_KEY"] }
+        index($0, k "=") != 1 { print }
+    ' "$file" > "$tmp"; then
+        :
+    else
+        rm -f "$tmp"
+        return 1
     fi
+    chmod --reference="$file" "$tmp" 2>/dev/null || true
+    mv -f "$tmp" "$file"
 }
 
 get_squad_indices() {
@@ -173,42 +265,93 @@ get_squad_indices() {
     grep -oE '^(REMNAWAVE_)?SQUAD_[0-9]+_UUID=' "$file" 2>/dev/null | grep -oE '[0-9]+' | sort -nu || true
 }
 
+# Следующий свободный индекс сквада = (максимальный существующий индекс) + 1.
+# count+1 давал коллизию, если средний сквад удаляли (индексы не сплошные).
+next_squad_index() {
+    local file="$1"
+    local max_idx=0
+    local idx
+    while IFS= read -r idx; do
+        if [ -n "$idx" ] && [ "$idx" -gt "$max_idx" ] 2>/dev/null; then
+            max_idx="$idx"
+        fi
+    done < <(get_squad_indices "$file")
+    echo $((max_idx + 1))
+}
+
 renumber_squads() {
     local file="$1"
+    [ -f "$file" ] || return 0
+
+    # Дефолт правила по умолчанию зависит от пресета источника:
+    # geogaga -> HAPP.JSON, vahellame -> WHITELIST.JSON, иначе -> JSONSUB.JSON
+    local preset default_rule
+    preset="$(get_env_val "ROUTING_SOURCE_PRESET" "$file" "geogaga")"
+    case "$preset" in
+        geogaga)   default_rule="HAPP.JSON" ;;
+        vahellame) default_rule="WHITELIST.JSON" ;;
+        *)         default_rule="JSONSUB.JSON" ;;
+    esac
+
     local indices=()
+    local idx
     while IFS= read -r idx; do
         [ -n "$idx" ] && indices+=("$idx")
     done < <(get_squad_indices "$file")
-    
-    [ ${#indices[@]} -eq 0 ] && return
 
+    if [ ${#indices[@]} -eq 0 ]; then
+        return 0
+    fi
+
+    # Считываем все значения ДО перезаписи файла: дальше — одна атомарная
+    # операция (temp-файл + mv), а не середина из промежуточных set_env_val.
     local tmp_squads=()
+    local u r n
     for idx in "${indices[@]}"; do
-        local u r n
         u="$(get_env_val "REMNAWAVE_SQUAD_${idx}_UUID" "$file" "")"
         [ -z "$u" ] && u="$(get_env_val "SQUAD_${idx}_UUID" "$file" "")"
-        r="$(get_env_val "REMNAWAVE_SQUAD_${idx}_RULE" "$file" "JSONSUB.JSON")"
+        r="$(get_env_val "REMNAWAVE_SQUAD_${idx}_RULE" "$file" "")"
+        [ -z "$r" ] && r="$(get_env_val "SQUAD_${idx}_RULE" "$file" "")"
+        [ -z "$r" ] && r="$default_rule"
         n="$(get_env_val "REMNAWAVE_SQUAD_${idx}_NAME" "$file" "")"
-        delete_env_val "REMNAWAVE_SQUAD_${idx}_UUID" "$file"
-        delete_env_val "REMNAWAVE_SQUAD_${idx}_RULE" "$file"
-        delete_env_val "REMNAWAVE_SQUAD_${idx}_NAME" "$file"
-        delete_env_val "SQUAD_${idx}_UUID" "$file"
-        delete_env_val "SQUAD_${idx}_RULE" "$file"
-        delete_env_val "SQUAD_${idx}_NAME" "$file"
+        [ -z "$n" ] && n="$(get_env_val "SQUAD_${idx}_NAME" "$file" "")"
         if [ -n "$u" ]; then
             tmp_squads+=("$u"$'\t'"$r"$'\t'"$n")
         fi
     done
 
-    local new_i=1
-    for s in "${tmp_squads[@]}"; do
-        local u r n
-        IFS=$'\t' read -r u r n <<< "$s"
-        set_env_val "REMNAWAVE_SQUAD_${new_i}_UUID" "$u" "$file"
-        set_env_val "REMNAWAVE_SQUAD_${new_i}_RULE" "$r" "$file"
-        [ -n "$n" ] && set_env_val "REMNAWAVE_SQUAD_${new_i}_NAME" "$n" "$file"
-        new_i=$((new_i + 1))
-    done
+    local tmp new_i=1 s
+    tmp="$(mktemp "${file}.renumber.XXXXXX")" || return 1
+    # Вырезаем все ключи вида REMNAWAVE_SQUAD_N_* и SQUAD_N_* (один проход)
+    if GRS_SQUAD_RE='^(REMNAWAVE_)?SQUAD_[0-9]+_(UUID|RULE|NAME)=' awk '
+        BEGIN { re = ENVIRON["GRS_SQUAD_RE"] }
+        $0 !~ re { print }
+    ' "$file" > "$tmp"; then
+        :
+    else
+        rm -f "$tmp"
+        return 1
+    fi
+    # Дописываем пере-нумерованные сквады в конец
+    if {
+        for s in "${tmp_squads[@]}"; do
+            IFS=$'\t' read -r u r n <<< "$s"
+            printf 'REMNAWAVE_SQUAD_%d_UUID=%s\n' "$new_i" "$u"
+            printf 'REMNAWAVE_SQUAD_%d_RULE=%s\n' "$new_i" "$r"
+            if [ -n "$n" ]; then
+                printf 'REMNAWAVE_SQUAD_%d_NAME=%s\n' "$new_i" "$n"
+            fi
+            new_i=$((new_i + 1))
+        done
+        :
+    } >> "$tmp"; then
+        :
+    else
+        rm -f "$tmp"
+        return 1
+    fi
+    chmod --reference="$file" "$tmp" 2>/dev/null || true
+    mv -f "$tmp" "$file"
 }
 
 is_port_in_use() {
@@ -219,6 +362,42 @@ is_port_in_use() {
         netstat -tuln 2>/dev/null | grep -q ":${port} " && return 0
     fi
     return 1
+}
+
+# Нормализует URL API панели Remnawave: убирает хвостовые слэши и
+# гарантирует суффикс /api (https://host -> https://host/api).
+normalize_remna_url() {
+    local u="$1"
+    u="${u#"${u%%[![:space:]]*}"}"
+    u="${u%"${u##*[![:space:]]}"}"
+    if [ -z "$u" ]; then
+        printf '%s' ""
+        return 0
+    fi
+    while [ "${u%/}" != "$u" ]; do
+        u="${u%/}"
+    done
+    case "$u" in
+        */api) ;;
+        *) u="${u}/api" ;;
+    esac
+    printf '%s' "$u"
+}
+
+# Валидация ввода в визарде (контракт токена повторяет docker-entrypoint.sh)
+is_valid_token() {
+    [[ "${1:-}" =~ ^[A-Za-z0-9_-]{4,}$ ]]
+}
+
+is_valid_port() {
+    local p="${1:-}"
+    [[ "$p" =~ ^[0-9]{1,5}$ ]] || return 1
+    [ "$((10#$p))" -ge 1 ] && [ "$((10#$p))" -le 65535 ]
+}
+
+is_valid_domain() {
+    local d="${1:-}"
+    [ -n "$d" ] && [[ "$d" =~ ^[A-Za-z0-9][A-Za-z0-9._:-]*$ ]]
 }
 
 generate_compose_yaml() {
@@ -311,7 +490,7 @@ get_container_status() {
     local install_dir="$1"
     local compose_cmd
     compose_cmd="$(detect_compose)"
-    if [ -n "$compose_cmd" ] && [ -f "$install_dir/compose.yaml" -o -f "$install_dir/docker-compose.yml" ]; then
+    if [ -n "$compose_cmd" ] && { [ -f "$install_dir/compose.yaml" ] || [ -f "$install_dir/docker-compose.yml" ]; }; then
         local state
         state=$( (cd "$install_dir" && $compose_cmd ps --format "{{.Status}}" 2>/dev/null | head -1) || true)
         if [ -n "$state" ]; then
@@ -350,6 +529,62 @@ human_schedule() {
     esac
 }
 
+# Имена файлов правил (без .JSON), которые реально публикует сервер для клиента.
+# Совпадает с Config.get_active_rules(): geogaga -> HAPP.JSON/INCY.JSON,
+# vahellame -> WHITELIST.JSON, иначе — список из ROUTING_RULES.
+active_rule_names() {
+    local preset="$1"
+    local client="$2"
+    local rules_str="$3"
+    case "$preset" in
+        geogaga)
+            printf '%s\n' "$client"
+            ;;
+        vahellame)
+            printf '%s\n' "WHITELIST"
+            ;;
+        *)
+            local arr=()
+            local r
+            IFS=',' read -r -a arr <<< "$rules_str"
+            for r in "${arr[@]}"; do
+                r="$(printf '%s' "$r" | tr -d '[:space:]' | tr '[:lower:]' '[:upper:]')"
+                r="${r%.JSON}"
+                [ -n "$r" ] && printf '%s\n' "$r"
+            done
+            ;;
+    esac
+    return 0
+}
+
+# Сервится ли формат (json|deeplink) для клиента при текущем SERVE_FORMATS.
+# Зеркалит Config.should_serve_json/should_serve_deeplink.
+format_serves() {
+    local fmt="$1"
+    local client="$2"
+    local kind="$3"
+    case "$fmt" in
+        JSON)
+            [ "$kind" = "json" ]
+            ;;
+        DEEPLINK)
+            [ "$kind" = "deeplink" ]
+            ;;
+        CLIENT_OPTIMIZED|OPTIMIZED)
+            # Happ -> только DEEPLINK, Incy -> только JSON
+            if [ "$kind" = "deeplink" ]; then
+                [ "$client" != "INCY" ]
+            else
+                [ "$client" != "HAPP" ]
+            fi
+            ;;
+        *)
+            # ALL и прочие значения: оба формата
+            return 0
+            ;;
+    esac
+}
+
 cmd_status() {
     local install_dir
     install_dir="$(get_install_dir)"
@@ -365,7 +600,15 @@ cmd_status() {
         return 0
     fi
 
-    local domain token clients port schedule rules_str ext_geo serve_geoip serve_geosite
+    if [ ! -r "$env_file" ]; then
+        # .env создаётся с правами 600 и владельцем root: без root значения
+        # прочитались бы как пустые — подсказываем вместо тихого пустого вывода.
+        echo -e "${C_YELLOW}Файл $env_file не читается без прав root (права 600).${C_RESET}"
+        echo -e "${C_YELLOW}Запустите: ${C_BOLD}sudo geoserver status${C_RESET}"
+        return 0
+    fi
+
+    local domain token clients port schedule rules_str ext_geo serve_geoip serve_geosite preset_val serve_formats
     domain="$(get_env_val "DOMAIN" "$env_file" "geo.example.com")"
     token="$(get_env_val "ROUTING_TOKEN" "$env_file" "")"
     clients="$(get_env_val "ENABLED_CLIENTS" "$env_file" "HAPP,INCY")"
@@ -375,7 +618,21 @@ cmd_status() {
     ext_geo="$(get_env_val "PUBLIC_GEO_BASE_URL" "$env_file" "")"
     serve_geoip="$(get_env_val "SERVE_GEOIP" "$env_file" "true")"
     serve_geosite="$(get_env_val "SERVE_GEOSITE" "$env_file" "true")"
+    serve_formats="$(get_env_val "SERVE_FORMATS" "$env_file" "CLIENT_OPTIMIZED" | tr '[:lower:]' '[:upper:]')"
     [ "$rules_str" = "ALL" ] && rules_str="DEFAULT,JSONSUB,WHITELIST"
+
+    # Пресет определяет имена публикуемых файлов правил (см. active_rule_names)
+    preset_val="$(get_env_val "ROUTING_SOURCE_PRESET" "$env_file" "")"
+    if [ -z "$preset_val" ]; then
+        local repo_val
+        repo_val="$(get_env_val "ROUTING_SOURCE_REPO" "$env_file" "")"
+        case "$repo_val" in
+            *hydraponique*) preset_val="hydraponique" ;;
+            *vahellame*)    preset_val="vahellame" ;;
+            "")             preset_val="geogaga" ;;
+            *)              preset_val="custom" ;;
+        esac
+    fi
 
     echo -e "${C_WHITE}📋 Параметры сервера:${C_RESET}"
     printf "   ${C_LIGHT_GRAY}%-20s${C_RESET} ${C_WHITE}%s${C_RESET}\n" "Домен:" "https://${domain}"
@@ -387,9 +644,6 @@ cmd_status() {
 
     echo -e "${C_GREEN}${C_BOLD}🔗 Публичные ссылки для клиентов:${C_RESET}"
     hr 54
-
-    local r_arr=()
-    IFS=',' read -r -a r_arr <<< "$rules_str"
 
     local happ_has_geo=false
     local c_item
@@ -405,13 +659,22 @@ cmd_status() {
     if [[ "$clients" =~ "INCY" ]]; then
         local incy_geo_base="https://${domain}/${token}/INCY"
         [ -n "$ext_geo" ] && incy_geo_base="${ext_geo%/}/INCY"
+        local r
         echo -e "  ${C_CYAN}${C_BOLD}[ Incy ]${C_RESET}"
-        echo -e "  • Заголовки подписки (autorouting):"
-        for r in "${r_arr[@]}"; do
-            r="$(echo "$r" | tr -d ' ' | tr '[:lower:]' '[:upper:]')"
-            [ -z "$r" ] && continue
-            echo -e "      ${C_GRAY}• ${r}:${C_RESET} ${C_WHITE}incy://autorouting/onadd/https://${domain}/${token}/INCY/${r}.JSON${C_RESET}"
-        done
+        if format_serves "$serve_formats" "INCY" "json"; then
+            echo -e "  • Заголовки подписки (autorouting):"
+            while IFS= read -r r; do
+                [ -n "$r" ] || continue
+                echo -e "      ${C_GRAY}• ${r}:${C_RESET} ${C_WHITE}incy://autorouting/onadd/https://${domain}/${token}/INCY/${r}.JSON${C_RESET}"
+            done < <(active_rule_names "$preset_val" "INCY" "$rules_str")
+        fi
+        if format_serves "$serve_formats" "INCY" "deeplink"; then
+            echo -e "  • Deep-link файлы:"
+            while IFS= read -r r; do
+                [ -n "$r" ] || continue
+                echo -e "      ${C_GRAY}• ${r}:${C_RESET} ${C_WHITE}https://${domain}/${token}/INCY/${r}.DEEPLINK${C_RESET}"
+            done < <(active_rule_names "$preset_val" "INCY" "$rules_str")
+        fi
         if [ -n "$ext_geo" ]; then
             echo -e "  • GeoIP база:   ${incy_geo_base}/geoip.dat (внешняя)"
             echo -e "  • GeoSite база: ${incy_geo_base}/geosite.dat (внешняя)"
@@ -425,6 +688,7 @@ cmd_status() {
     if [[ "$clients" =~ "HAPP" ]]; then
         local happ_geo_base="https://${domain}/${token}/HAPP"
         [ -n "$ext_geo" ] && happ_geo_base="${ext_geo%/}/HAPP"
+        local r
         echo -e "  ${C_CYAN}${C_BOLD}[ Happ ]${C_RESET}"
         if [ -n "$ext_geo" ]; then
             echo -e "  • GeoIP база:     ${happ_geo_base}/geoip.dat (внешняя)"
@@ -440,6 +704,17 @@ cmd_status() {
         else
             echo -e "  • Правила:        ${C_GRAY}Настраиваются в сквадах панели (подключение API: пункт 4)${C_RESET}"
         fi
+        # Ссылки на правила Happ с учётом SERVE_FORMATS
+        echo -e "  • Ссылки на правила:"
+        while IFS= read -r r; do
+            [ -n "$r" ] || continue
+            if format_serves "$serve_formats" "HAPP" "deeplink"; then
+                echo -e "      ${C_GRAY}• ${r} (DEEPLINK):${C_RESET} ${C_WHITE}https://${domain}/${token}/HAPP/${r}.DEEPLINK${C_RESET}"
+            fi
+            if format_serves "$serve_formats" "HAPP" "json"; then
+                echo -e "      ${C_GRAY}• ${r} (JSON):${C_RESET} ${C_WHITE}https://${domain}/${token}/HAPP/${r}.JSON${C_RESET}"
+            fi
+        done < <(active_rule_names "$preset_val" "HAPP" "$rules_str")
         echo ""
     fi
 
@@ -532,6 +807,13 @@ cmd_update_script() {
     local install_dir
     install_dir="$(get_install_dir)"
 
+    # Обновление пишет в $install_dir/install.sh и /usr/local/bin/geoserver
+    if [ "$(id -u)" -ne 0 ]; then
+        echo -e "${C_RED}[!] Обновление скрипта требует права root (запись в ${install_dir}/install.sh и /usr/local/bin/geoserver).${C_RESET}"
+        echo -e "    Запустите: ${C_BOLD}sudo geoserver update-script${C_RESET}"
+        return 1
+    fi
+
     echo -e "\n${C_YELLOW}[*] Проверка обновлений скрипта на GitHub...${C_RESET}"
     local tmp_script
     tmp_script=$(mktemp "${install_dir}/.install.sh.XXXXXX" 2>/dev/null || mktemp "/tmp/.install.sh.XXXXXX")
@@ -604,19 +886,19 @@ menu_updates() {
         case "$choice" in
             1)
                 echo -e "\n${C_CYAN}${C_BOLD}=== [1/2] Обновление Docker-образа ===${C_RESET}"
-                cmd_update
+                cmd_update || true
                 echo -e "\n${C_CYAN}${C_BOLD}=== [2/2] Обновление скрипта управления ===${C_RESET}"
-                cmd_update_script
+                cmd_update_script || true
                 echo ""
                 read -r -p "Нажмите Enter для возврата в меню..."
                 ;;
             2)
-                cmd_update
+                cmd_update || true
                 echo ""
                 read -r -p "Нажмите Enter для возврата в меню..."
                 ;;
             3)
-                cmd_update_script
+                cmd_update_script || true
                 echo ""
                 read -r -p "Нажмите Enter для возврата в меню..."
                 ;;
@@ -716,14 +998,37 @@ cmd_uninstall() {
     local compose_cmd
     compose_cmd="$(detect_compose)"
 
+    # Путь берём из get_install_dir (не из $PWD) и прогоняем через ту же
+    # валидацию маркера проекта, что и при определении каталога установки.
+    if [ -z "$install_dir" ] || [ "$install_dir" = "/" ] || [ "$install_dir" = "." ] || [ "$install_dir" = ".." ]; then
+        echo -e "${C_RED}[!] Не удалось определить каталог установки — удаление отменено.${C_RESET}"
+        return 1
+    fi
+
+    local target
+    target="$(realpath -m -- "$install_dir" 2>/dev/null || true)"
+    [ -n "$target" ] || target="$install_dir"
+    if [ -z "$target" ] || [ "$target" = "/" ] || [ "$target" = "." ] || [ "$target" = ".." ]; then
+        echo -e "${C_RED}[!] Недопустимый путь для удаления: '$target' — удаление отменено.${C_RESET}"
+        return 1
+    fi
+
+    if ! is_project_dir "$install_dir"; then
+        echo -e "${C_RED}[!] Каталог $install_dir не похож на установку Geo Routing Server${C_RESET}"
+        echo -e "${C_RED}    (нет compose.yaml с нашим сервисом или .env с нашими ключами) — удаление отменено.${C_RESET}"
+        return 1
+    fi
+
     print_banner
     echo -e "${C_RED}${C_BOLD}[!] ВНИМАНИЕ: Удаление Geo Routing Server${C_RESET}"
-    echo -e "${C_GRAY}Будут остановлены контейнеры и удалены все конфигурационные файлы.${C_RESET}\n"
-    read -r -p "Вы абсолютно уверены, что хотите удалить сервис? [y/N, Enter = отмена]: " confirm
+    echo -e "${C_GRAY}Будут остановлены контейнеры и удалены все конфигурационные файлы.${C_RESET}"
+    echo -e "${C_WHITE}Каталог, который будет удалён: ${C_BOLD}${target}${C_RESET}\n"
+    local confirm=""
+    read -r -p "Вы абсолютно уверены, что хотите удалить сервис? [y/N, Enter = отмена]: " confirm || confirm=""
     if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
         echo -e "${C_GRAY}Отмена удаления.${C_RESET}"
         sleep 1
-        return 0
+        return 1
     fi
 
     echo -e "\n${C_YELLOW}[*] Остановка сервиса и очистка томов Docker...${C_RESET}"
@@ -731,11 +1036,12 @@ cmd_uninstall() {
         (cd "$install_dir" && $compose_cmd down -v 2>/dev/null || true)
     fi
 
-    rm -rf "$install_dir"
+    rm -rf -- "$install_dir"
     rm -f "$CONFIG_RECORD"
     rm -f "/usr/local/bin/geoserver"
 
     echo -e "${C_GREEN}[✓] Geo Routing Server полностью удалён с сервера.${C_RESET}\n"
+    return 0
 }
 
 cmd_help() {
@@ -766,11 +1072,12 @@ select_rule_for_squad() {
     local preset="$1"
     local cur_val="${2:-}"
     local chosen=""
+    local custom_r=""
 
     if [ "$preset" = "geogaga" ]; then
-        echo "  1) HAPP.JSON (GeoGaga Split-tunneling) [По умолчанию]"
-        echo "  2) Другое правило (ввести вручную)"
-        echo "  0) ⬅️ Отмена"
+        echo "  1) HAPP.JSON (GeoGaga Split-tunneling) [По умолчанию]" >&2
+        echo "  2) Другое правило (ввести вручную)" >&2
+        echo "  0) ⬅️ Отмена" >&2
         local prompt_msg="Номер [1, Enter = HAPP.JSON, 0 = отмена]: "
         [ -n "$cur_val" ] && prompt_msg="Номер [1, Enter = оставить $cur_val, 0 = отмена]: "
         read -r -p "$prompt_msg" ans
@@ -778,6 +1085,8 @@ select_rule_for_squad() {
             return 1
         elif [ "$ans" = "2" ]; then
             read -r -p "Введите имя правила [например, HAPP.JSON]: " custom_r
+            custom_r="${custom_r#"${custom_r%%[![:space:]]*}"}"
+            custom_r="${custom_r%"${custom_r##*[![:space:]]}"}"
             chosen="${custom_r:-HAPP.JSON}"
         elif [ -z "$ans" ] && [ -n "$cur_val" ]; then
             chosen="$cur_val"
@@ -785,9 +1094,9 @@ select_rule_for_squad() {
             chosen="HAPP.JSON"
         fi
     elif [ "$preset" = "vahellame" ]; then
-        echo "  1) WHITELIST.JSON (Строгий белый список vahellame)"
-        echo "  2) Другое правило (ввести вручную)"
-        echo "  0) ⬅️ Отмена"
+        echo "  1) WHITELIST.JSON (Строгий белый список vahellame)" >&2
+        echo "  2) Другое правило (ввести вручную)" >&2
+        echo "  0) ⬅️ Отмена" >&2
         local prompt_msg="Номер [1, Enter = WHITELIST.JSON, 0 = отмена]: "
         [ -n "$cur_val" ] && prompt_msg="Номер [1, Enter = оставить $cur_val, 0 = отмена]: "
         read -r -p "$prompt_msg" ans
@@ -795,6 +1104,8 @@ select_rule_for_squad() {
             return 1
         elif [ "$ans" = "2" ]; then
             read -r -p "Введите имя правила [например, WHITELIST.JSON]: " custom_r
+            custom_r="${custom_r#"${custom_r%%[![:space:]]*}"}"
+            custom_r="${custom_r%"${custom_r##*[![:space:]]}"}"
             chosen="${custom_r:-WHITELIST.JSON}"
         elif [ -z "$ans" ] && [ -n "$cur_val" ]; then
             chosen="$cur_val"
@@ -802,11 +1113,11 @@ select_rule_for_squad() {
             chosen="WHITELIST.JSON"
         fi
     else
-        echo "  1) JSONSUB.JSON (маршрут подписок)"
-        echo "  2) WHITELIST.JSON (белый список)"
-        echo "  3) DEFAULT.JSON"
-        echo "  4) Другое правило (ввести вручную)"
-        echo "  0) ⬅️ Отмена"
+        echo "  1) JSONSUB.JSON (маршрут подписок)" >&2
+        echo "  2) WHITELIST.JSON (белый список)" >&2
+        echo "  3) DEFAULT.JSON" >&2
+        echo "  4) Другое правило (ввести вручную)" >&2
+        echo "  0) ⬅️ Отмена" >&2
         local prompt_msg="Номер правила [1-3, Enter = 1, 0 = отмена]: "
         [ -n "$cur_val" ] && prompt_msg="Номер [1-3, Enter = оставить $cur_val, 0 = отмена]: "
         read -r -p "$prompt_msg" ans
@@ -818,6 +1129,8 @@ select_rule_for_squad() {
             chosen="DEFAULT.JSON"
         elif [ "$ans" = "4" ]; then
             read -r -p "Введите имя правила: " custom_r
+            custom_r="${custom_r#"${custom_r%%[![:space:]]*}"}"
+            custom_r="${custom_r%"${custom_r##*[![:space:]]}"}"
             chosen="${custom_r:-JSONSUB.JSON}"
         elif [ -z "$ans" ] && [ -n "$cur_val" ]; then
             chosen="$cur_val"
@@ -825,8 +1138,39 @@ select_rule_for_squad() {
             chosen="JSONSUB.JSON"
         fi
     fi
-    echo "$chosen"
+    printf '%s' "$chosen"
     return 0
+}
+
+# Разбор ответа API внешних сквадов. python3 на хосте НЕ требуется:
+# сначала разбираем внутри нашего контейнера (docker — обязательная
+# зависимость), затем пробуем python3 на хосте, если он случайно есть.
+parse_external_squads() {
+    local resp="$1"
+    local parsed=""
+    local py_code='
+import sys, json
+try:
+    data = json.load(sys.stdin)
+    items = data.get("response", data) if isinstance(data, dict) else data
+    if isinstance(items, dict):
+        items = items.get("externalSquads", items.get("items", []))
+    if isinstance(items, list):
+        for s in items:
+            uuid = s.get("uuid", "")
+            name = s.get("name", "External Squad")
+            if uuid:
+                print(f"{uuid}\t{name}")
+except Exception:
+    pass
+'
+    if [ "$(docker inspect -f '{{.State.Running}}' geo-routing-server 2>/dev/null || true)" = "true" ]; then
+        parsed="$(printf '%s' "$resp" | docker exec -i geo-routing-server python3 -c "$py_code" 2>/dev/null || true)"
+    fi
+    if [ -z "$parsed" ] && command -v python3 >/dev/null 2>&1; then
+        parsed="$(printf '%s' "$resp" | python3 -c "$py_code" 2>/dev/null || true)"
+    fi
+    printf '%s' "$parsed"
 }
 
 menu_remnawave() {
@@ -856,7 +1200,7 @@ menu_remnawave() {
                     if [ "$input_url" = "0" ]; then
                         continue
                     fi
-                    remna_url="${input_url:-http://remnawave:3000/api}"
+                    remna_url="$(normalize_remna_url "${input_url:-http://remnawave:3000/api}")"
                     read -r -p "JWT токен администратора [Enter = отмена]: " remna_token
                     if [ -z "$remna_token" ] || [ "$remna_token" = "0" ]; then
                         echo -e "${C_GRAY}Отмена.${C_RESET}"
@@ -923,10 +1267,11 @@ menu_remnawave() {
                     curl_args+=(-H "CF-Access-Client-Id: $cf_id" -H "CF-Access-Client-Secret: $cf_sec")
                 fi
 
-                local api_resp
-                api_resp=$(curl "${curl_args[@]}" "${remna_url%/}/external-squads" 2>/dev/null || true)
+                local api_resp api_base
+                api_base="$(normalize_remna_url "$remna_url")"
+                api_resp=$(curl "${curl_args[@]}" "${api_base}/external-squads" 2>/dev/null || true)
                 if [ -z "$api_resp" ] && [ "$(docker inspect -f '{{.State.Running}}' geo-routing-server 2>/dev/null || true)" = "true" ]; then
-                    api_resp=$(docker exec -e REMNAWAVE_BASE_URL="$remna_url" -e REMNAWAVE_TOKEN="$remna_token" geo-routing-server python3 -c '
+                    api_resp=$(docker exec -e REMNAWAVE_BASE_URL="$api_base" -e REMNAWAVE_TOKEN="$remna_token" geo-routing-server python3 -c '
 from app.remnawave import RemnawaveSync
 import json
 data = RemnawaveSync._api_request("GET", f"{RemnawaveSync.get_api_url()}/external-squads")
@@ -940,29 +1285,14 @@ if data:
                     continue
                 fi
 
-                # Парсинг сквадов
+                # Парсинг сквадов (python3 на хосте не нужен — см. parse_external_squads)
                 local squad_lines=()
                 while IFS= read -r line; do
                     [ -n "$line" ] && squad_lines+=("$line")
-                done < <(python3 -c '
-import sys, json
-try:
-    data = json.load(sys.stdin)
-    items = data.get("response", data) if isinstance(data, dict) else data
-    if isinstance(items, dict):
-        items = items.get("externalSquads", items.get("items", []))
-    if isinstance(items, list):
-        for s in items:
-            uuid = s.get("uuid", "")
-            name = s.get("name", "External Squad")
-            if uuid:
-                print(f"{uuid}\t{name}")
-except Exception:
-    pass
-' <<< "$api_resp" 2>/dev/null || true)
+                done < <(parse_external_squads "$api_resp")
 
                 if [ ${#squad_lines[@]} -eq 0 ]; then
-                    echo -e "${C_YELLOW}[i] Внешние сквады (External Squads) не найдены в панели.${C_RESET}"
+                    echo -e "${C_YELLOW}[i] Внешние сквады (External Squads) не найдены в панели (проверьте URL/токен и что контейнер geo-routing-server запущен).${C_RESET}"
                     read -r -p "Нажмите Enter для возврата в меню..."
                     continue
                 fi
@@ -995,7 +1325,8 @@ except Exception:
                     sel_rule="$(select_rule_for_squad "$cur_preset")" || continue
                     [ -z "$sel_rule" ] && continue
 
-                    local new_idx=$((count + 1))
+                    local new_idx
+                    new_idx="$(next_squad_index "$env_file")"
                     set_env_val "REMNAWAVE_SQUAD_${new_idx}_UUID" "$sel_uuid" "$env_file"
                     set_env_val "REMNAWAVE_SQUAD_${new_idx}_RULE" "$sel_rule" "$env_file"
                     set_env_val "REMNAWAVE_SQUAD_${new_idx}_NAME" "$sel_name" "$env_file"
@@ -1052,7 +1383,8 @@ except Exception:
                 r_val="$(select_rule_for_squad "$cur_preset")" || continue
                 [ -z "$r_val" ] && continue
 
-                local n_idx=$((count + 1))
+                local n_idx
+                n_idx="$(next_squad_index "$env_file")"
                 set_env_val "REMNAWAVE_SQUAD_${n_idx}_UUID" "$new_uuid" "$env_file"
                 set_env_val "REMNAWAVE_SQUAD_${n_idx}_RULE" "$r_val" "$env_file"
                 set_env_val "REMNAWAVE_SQUAD_${n_idx}_NAME" "$new_name" "$env_file"
@@ -1090,7 +1422,7 @@ except Exception:
                 if [ "$new_url" = "0" ]; then
                     continue
                 fi
-                new_url="${new_url:-$remna_url}"
+                new_url="$(normalize_remna_url "${new_url:-$remna_url}")"
                 read -r -p "Новый JWT токен [Enter = оставить текущий, 0 = отмена]: " new_token
                 if [ "$new_token" = "0" ]; then
                     continue
@@ -1294,6 +1626,7 @@ menu_telegram() {
                 [ -n "$new_c" ] && set_env_val "TELEGRAM_CHAT_ID" "$new_c" "$env_file"
                 [ -n "$new_th" ] && set_env_val "TELEGRAM_THREAD_ID" "$new_th" "$env_file"
                 echo -e "${C_GREEN}[✓] Настройки обновлены.${C_RESET}"
+                apply_compose "$install_dir" || continue
                 sleep 1
                 ;;
             3)
@@ -1301,6 +1634,7 @@ menu_telegram() {
                 [ "$tg_notify" = "true" ] && toggled="false"
                 set_env_val "TELEGRAM_NOTIFY_SUCCESS" "$toggled" "$env_file"
                 echo -e "${C_GREEN}[✓] Уведомления об успехе: $toggled${C_RESET}"
+                apply_compose "$install_dir" || continue
                 sleep 1
                 ;;
             4)
@@ -1310,6 +1644,7 @@ menu_telegram() {
                     delete_env_val "TELEGRAM_CHAT_ID" "$env_file"
                     delete_env_val "TELEGRAM_THREAD_ID" "$env_file"
                     echo -e "${C_YELLOW}[✓] Telegram-уведомления отключены.${C_RESET}"
+                    apply_compose "$install_dir" || continue
                     sleep 1
                 else
                     echo -e "${C_GRAY}Отмена.${C_RESET}"
@@ -1493,8 +1828,36 @@ menu_clients_bases() {
 }
 
 # ==============================================================================
-# ПЕРВИЧНАЯ УСТАНОВКА (Быстрый опрос в 4 шага)
+# ПЕРВИЧНАЯ УСТАНОВКА (Быстрый опрос в 6 шагов)
 # ==============================================================================
+
+# docker compose up -d возвращает 0 и тогда, когда контейнер сразу падает
+# (например, при невалидном токене). Ждём и проверяем РЕАЛЬНОЕ состояние:
+# running без цикла рестартов. 0 — запущен, 1 — не поднялся/падает.
+wait_for_container_ready() {
+    local tries=0
+    local status="" restarts=""
+    while [ "$tries" -lt 25 ]; do
+        status="$(docker inspect -f '{{.State.Status}}' geo-routing-server 2>/dev/null || true)"
+        restarts="$(docker inspect -f '{{.RestartCount}}' geo-routing-server 2>/dev/null || echo 0)"
+        if [ "$status" = "running" ]; then
+            # между рестартами контейнер может выглядеть "running" — даём 2 секунды
+            sleep 2
+            status="$(docker inspect -f '{{.State.Status}}' geo-routing-server 2>/dev/null || true)"
+            restarts="$(docker inspect -f '{{.RestartCount}}' geo-routing-server 2>/dev/null || echo 0)"
+            if [ "$status" = "running" ] && [ "${restarts:-0}" -lt 2 ] 2>/dev/null; then
+                return 0
+            fi
+        fi
+        if [ "${restarts:-0}" -ge 3 ] 2>/dev/null; then
+            # контейнер падает и перезапускается — ждать смысла нет
+            return 1
+        fi
+        tries=$((tries + 1))
+        sleep 1
+    done
+    return 1
+}
 
 wizard_install() {
     print_banner
@@ -1505,36 +1868,109 @@ wizard_install() {
 
     local default_dir
     default_dir="$(get_install_dir)"
-    echo -e "${C_CYAN}[1/5] Каталог установки${C_RESET}"
-    read -r -p "      Путь [Enter = ${default_dir}]: " input_dir
+    echo -e "${C_CYAN}[1/6] Каталог установки${C_RESET}"
+    local input_dir=""
+    read -r -p "      Путь [Enter = ${default_dir}]: " input_dir || input_dir=""
     local install_dir="${input_dir:-$default_dir}"
     mkdir -p "$install_dir"
     mkdir -p "$install_dir/custom_geo"
     save_install_dir "$install_dir"
 
-    echo -e "\n${C_CYAN}[2/5] Публичный домен сервера${C_RESET}"
-    echo -e "      ${C_GRAY}Домен с настроенным HTTPS или внешний IP-адрес${C_RESET}"
-    read -r -p "      Домен [например, geo.example.com]: " input_domain
-    local domain="${input_domain:-geo.example.com}"
-    domain="${domain#http://}"
-    domain="${domain#https://}"
-    domain="${domain%%/*}"
+    # Значения прошлой установки: при повторном запуске визарда они становятся
+    # дефолтами, а прежний .env уходит в бэкап .env.bak.<ts> (не перезаписывается
+    # без следа — как и обещано в README).
+    local env_file="$install_dir/.env"
+    local backup_file=""
+    local prev_domain="" prev_token="" prev_clients="" prev_preset="" prev_rules=""
+    local prev_formats="" prev_geoip="" prev_geosite="" prev_bind="" prev_port=""
+    local prev_schedule="" prev_sync="" prev_ext_geo=""
+    local prev_remna_url="" prev_remna_token="" prev_remna_net=""
+    if [ -f "$env_file" ]; then
+        backup_file="${env_file}.bak.$(date +%Y%m%d-%H%M%S)"
+        cp -p "$env_file" "$backup_file"
+        echo -e "      ${C_GRAY}[i] Найден существующий .env — сохранена резервная копия: $(basename "$backup_file")${C_RESET}"
+        prev_domain="$(get_env_val "DOMAIN" "$env_file" "")"
+        prev_token="$(get_env_val "ROUTING_TOKEN" "$env_file" "")"
+        prev_clients="$(get_env_val "ENABLED_CLIENTS" "$env_file" "")"
+        prev_preset="$(get_env_val "ROUTING_SOURCE_PRESET" "$env_file" "")"
+        prev_rules="$(get_env_val "ROUTING_RULES" "$env_file" "")"
+        prev_formats="$(get_env_val "SERVE_FORMATS" "$env_file" "")"
+        prev_geoip="$(get_env_val "SERVE_GEOIP" "$env_file" "")"
+        prev_geosite="$(get_env_val "SERVE_GEOSITE" "$env_file" "")"
+        prev_bind="$(get_env_val "HTTP_BIND" "$env_file" "")"
+        prev_port="$(get_env_val "HTTP_PORT" "$env_file" "")"
+        prev_schedule="$(get_env_val "SCHEDULE" "$env_file" "")"
+        prev_sync="$(get_env_val "SYNC_ON_START" "$env_file" "")"
+        prev_ext_geo="$(get_env_val "PUBLIC_GEO_BASE_URL" "$env_file" "")"
+        prev_remna_url="$(get_env_val "REMNAWAVE_BASE_URL" "$env_file" "")"
+        prev_remna_token="$(get_env_val "REMNAWAVE_TOKEN" "$env_file" "")"
+        prev_remna_net="$(get_env_val "DOCKER_NETWORK" "$env_file" "")"
+    fi
 
+    local def_domain="${prev_domain:-geo.example.com}"
+    def_domain="${def_domain#http://}"
+    def_domain="${def_domain#https://}"
+    def_domain="${def_domain%%/*}"
+    is_valid_domain "$def_domain" || def_domain="geo.example.com"
+
+    local domain="" input_domain=""
+    echo -e "\n${C_CYAN}[2/6] Публичный домен сервера${C_RESET}"
+    echo -e "      ${C_GRAY}Домен с настроенным HTTPS или внешний IP-адрес${C_RESET}"
+    while true; do
+        read -r -p "      Домен [Enter = ${def_domain}]: " input_domain || input_domain=""
+        domain="${input_domain:-$def_domain}"
+        domain="${domain#http://}"
+        domain="${domain#https://}"
+        domain="${domain%%/*}"
+        if is_valid_domain "$domain"; then
+            break
+        fi
+        echo -e "      ${C_RED}[!] Некорректный домен '${domain}'. Пример: geo.example.com${C_RESET}"
+    done
+
+    # Токен валидируется сразу по контракту из docker-entrypoint.sh:
+    # [A-Za-z0-9_-]{4,}, иначе контейнер завершится с ошибкой после запуска.
     local gen_token
     gen_token="$(openssl rand -hex 16 2>/dev/null || date +%s | md5sum | head -c 24)"
-    echo -e "\n${C_CYAN}[3/5] Секретный URL-токен доступа${C_RESET}"
-    read -r -p "      Токен [Enter = сгенерировать $gen_token]: " input_token
-    local token="${input_token:-$gen_token}"
+    local def_token="$gen_token"
+    local token_prompt="      Токен [Enter = сгенерировать ${gen_token}]: "
+    if is_valid_token "$prev_token"; then
+        def_token="$prev_token"
+        token_prompt="      Токен [Enter = оставить текущий токен]: "
+    fi
+    local token="" input_token=""
+    echo -e "\n${C_CYAN}[3/6] Секретный URL-токен доступа${C_RESET}"
+    while true; do
+        read -r -p "$token_prompt" input_token || input_token=""
+        token="${input_token:-$def_token}"
+        if is_valid_token "$token"; then
+            break
+        fi
+        echo -e "      ${C_RED}[!] Токен: минимум 4 символа из A-Z, a-z, 0-9, '_' или '-' (иначе контейнер откажется стартовать).${C_RESET}"
+    done
 
-    echo -e "\n${C_CYAN}[4/5] Поддерживаемые клиенты${C_RESET}"
+    echo -e "\n${C_CYAN}[4/6] Поддерживаемые клиенты${C_RESET}"
     echo "      1) Happ и Incy (Рекомендуется)"
     echo "      2) Только Happ"
     echo "      3) Только Incy"
-    read -r -p "      Выберите вариант [1-3, Enter = 1]: " client_ans
+    echo "      4) HAPP_DEEPLINK (только апдейтер сквадов Remnawave, базы внешние)"
+    local def_client_opt="1"
+    case "$prev_clients" in
+        HAPP)          def_client_opt="2" ;;
+        INCY)          def_client_opt="3" ;;
+        HAPP_DEEPLINK) def_client_opt="4" ;;
+    esac
+    local client_ans=""
+    read -r -p "      Выберите вариант [1-4, Enter = ${def_client_opt}]: " client_ans || client_ans=""
+    case "$client_ans" in
+        1|2|3|4) ;;
+        *) client_ans="$def_client_opt" ;;
+    esac
     local clients="HAPP,INCY"
-    case "${client_ans:-1}" in
+    case "$client_ans" in
         2) clients="HAPP" ;;
         3) clients="INCY" ;;
+        4) clients="HAPP_DEEPLINK" ;;
         *) clients="HAPP,INCY" ;;
     esac
 
@@ -1542,41 +1978,113 @@ wizard_install() {
     echo "      1) GeoGaga (Client Flavor) [Рекомендуется — легкие базы, умный Split-tunneling]"
     echo "      2) hydraponique (Legacy — классический roscomvpn-routing)"
     echo "      3) vahellame (Strict Whitelist — строгий белый список)"
-    read -r -p "      Выберите вариант [1-3, Enter = 1]: " src_ans
+    local def_src_opt="1"
+    case "$prev_preset" in
+        hydraponique) def_src_opt="2" ;;
+        vahellame)    def_src_opt="3" ;;
+        custom)       def_src_opt="4" ;;
+    esac
+    local src_list="1-3"
+    if [ "$def_src_opt" = "4" ]; then
+        echo "      4) Оставить текущий кастомный источник (ROUTING_SOURCE_REPO)"
+        src_list="1-4"
+    fi
+    local src_ans=""
+    read -r -p "      Выберите вариант [${src_list}, Enter = ${def_src_opt}]: " src_ans || src_ans=""
+    case "$src_ans" in
+        1|2|3|4) ;;
+        *) src_ans="$def_src_opt" ;;
+    esac
     local source_preset="geogaga"
     local def_rules="HAPP"
-    case "${src_ans:-1}" in
+    case "$src_ans" in
         2) source_preset="hydraponique"; def_rules="JSONSUB,WHITELIST" ;;
         3) source_preset="vahellame"; def_rules="WHITELIST" ;;
-        *) source_preset="geogaga"; def_rules="HAPP" ;;
+        4)
+            if [ "$prev_preset" = "custom" ]; then
+                source_preset="custom"
+                def_rules="${prev_rules:-JSONSUB,WHITELIST}"
+            fi
+            ;;
+        1) source_preset="geogaga"; def_rules="HAPP" ;;
     esac
+    # Пресет не менялся — сохраняем прежний список правил, если он был задан
+    if [ "$source_preset" = "$prev_preset" ] && [ -n "$prev_rules" ]; then
+        def_rules="$prev_rules"
+    fi
 
     echo -e "\n${C_CYAN}[6/6] Локальный HTTP-порт${C_RESET}"
-    read -r -p "      Порт для реверс-прокси [Enter = 8080]: " input_port
-    local port="${input_port:-8080}"
+    local def_port="8080"
+    if is_valid_port "$prev_port"; then
+        def_port="$prev_port"
+    fi
+    local port="" input_port=""
+    while true; do
+        read -r -p "      Порт для реверс-прокси [Enter = ${def_port}]: " input_port || input_port=""
+        port="${input_port:-$def_port}"
+        if is_valid_port "$port"; then
+            port="$((10#$port))"
+            break
+        fi
+        echo -e "      ${C_RED}[!] Порт должен быть числом от 1 до 65535.${C_RESET}"
+    done
     if is_port_in_use "$port"; then
         echo -e "      ${C_YELLOW}[!] Внимание: порт $port уже занят на сервере.${C_RESET}"
     fi
 
-    # Опциональный опрос Remnawave
+    # Опциональный опрос Remnawave (прежняя интеграция сохраняется по Enter)
     local remna_url="" remna_token="" remna_net=""
+    local r_ans="" input_r_url=""
+    local has_prev_remna=false
+    if [ -n "$prev_remna_url" ] && [ -n "$prev_remna_token" ]; then
+        has_prev_remna=true
+    fi
     echo ""
-    read -r -p "Настроить интеграцию с Remnawave прямо сейчас? [y/N]: " r_ans
+    if [ "$has_prev_remna" = "true" ]; then
+        read -r -p "Перенастроить интеграцию с Remnawave? [y/N, Enter = оставить текущую]: " r_ans || r_ans=""
+    else
+        read -r -p "Настроить интеграцию с Remnawave прямо сейчас? [y/N]: " r_ans || r_ans=""
+    fi
     if [[ "${r_ans:-n}" =~ ^[Yy]$ ]]; then
-        read -r -p "  ▸ URL API панели [Enter = http://remnawave:3000/api]: " input_r_url
-        remna_url="${input_r_url:-http://remnawave:3000/api}"
-        read -r -p "  ▸ JWT токен администратора Remnawave: " remna_token
-        read -r -p "  ▸ Имя внешней Docker-сети [Enter = пропустить]: " remna_net
+        read -r -p "  ▸ URL API панели [Enter = ${prev_remna_url:-http://remnawave:3000/api}]: " input_r_url || input_r_url=""
+        remna_url="$(normalize_remna_url "${input_r_url:-${prev_remna_url:-http://remnawave:3000/api}}")"
+        if [ "$has_prev_remna" = "true" ]; then
+            read -r -p "  ▸ JWT токен администратора Remnawave [Enter = оставить текущий]: " remna_token || remna_token=""
+        else
+            read -r -p "  ▸ JWT токен администратора Remnawave: " remna_token || remna_token=""
+        fi
+        remna_token="${remna_token:-$prev_remna_token}"
+        read -r -p "  ▸ Имя внешней Docker-сети [Enter = оставить${prev_remna_net:+ $prev_remna_net}, если задана]: " remna_net || remna_net=""
+        remna_net="${remna_net:-$prev_remna_net}"
+        if [ -z "$remna_token" ]; then
+            echo -e "      ${C_YELLOW}[!] Токен Remnawave не указан — интеграция не будет сохранена.${C_RESET}"
+            remna_url=""
+        fi
         if [ -n "$remna_net" ]; then
             if ! docker network inspect "$remna_net" >/dev/null 2>&1; then
                 echo -e "      ${C_YELLOW}[!] Внимание: сеть '$remna_net' не найдена в Docker. Убедитесь, что создали её перед запуском: docker network create $remna_net${C_RESET}"
             fi
         fi
+    elif [ "$has_prev_remna" = "true" ]; then
+        # Пользователь отказался перенастраивать — оставляем прежнюю интеграцию
+        remna_url="$(normalize_remna_url "$prev_remna_url")"
+        remna_token="$prev_remna_token"
+        remna_net="$prev_remna_net"
     fi
 
-    # Генерация .env
-    echo -e "\n${C_YELLOW}[*] Сохранение конфигурации в $install_dir/.env...${C_RESET}"
-    cat > "$install_dir/.env" <<EOF
+    # Генерация .env (прежний файл уже сохранён в backup_file)
+    echo -e "\n${C_YELLOW}[*] Сохранение конфигурации в $env_file...${C_RESET}"
+    local serve_formats="${prev_formats:-CLIENT_OPTIMIZED}"
+    local serve_geoip="${prev_geoip:-true}"
+    local serve_geosite="${prev_geosite:-true}"
+    local http_bind="${prev_bind:-127.0.0.1}"
+    local schedule="${prev_schedule:-0 10 * * *}"
+    local sync_on_start="${prev_sync:-true}"
+    local public_geo_line=""
+    if [ -n "$prev_ext_geo" ]; then
+        public_geo_line="PUBLIC_GEO_BASE_URL=${prev_ext_geo}"
+    fi
+    cat > "$env_file" <<EOF
 # ==============================================================================
 # GEO ROUTING SERVER CONFIGURATION
 # ==============================================================================
@@ -1585,29 +2093,56 @@ ROUTING_TOKEN=${token}
 ENABLED_CLIENTS=${clients}
 ROUTING_SOURCE_PRESET=${source_preset}
 ROUTING_RULES=${def_rules}
-SERVE_FORMATS=CLIENT_OPTIMIZED
-SERVE_GEOIP=true
-SERVE_GEOSITE=true
+SERVE_FORMATS=${serve_formats}
+SERVE_GEOIP=${serve_geoip}
+SERVE_GEOSITE=${serve_geosite}
 
-HTTP_BIND=127.0.0.1
+${public_geo_line}
+HTTP_BIND=${http_bind}
 HTTP_PORT=${port}
-SCHEDULE=0 10 * * *
-SYNC_ON_START=true
+SCHEDULE=${schedule}
+SYNC_ON_START=${sync_on_start}
 EOF
 
     if [ -n "$remna_url" ] && [ -n "$remna_token" ]; then
-        cat >> "$install_dir/.env" <<EOF
+        cat >> "$env_file" <<EOF
 
 # Remnawave API Integration
 REMNAWAVE_BASE_URL=${remna_url}
 REMNAWAVE_TOKEN=${remna_token}
 EOF
         if [ -n "$remna_net" ]; then
-            echo "DOCKER_NETWORK=${remna_net}" >> "$install_dir/.env"
+            echo "DOCKER_NETWORK=${remna_net}" >> "$env_file"
         fi
     fi
 
-    chmod 600 "$install_dir/.env"
+    # Переносим из прежнего .env ключи, которые визард не спрашивает
+    # (TELEGRAM_* и прочие) — повторная установка их не теряет.
+    if [ -n "$backup_file" ] && [ -f "$backup_file" ]; then
+        local line key
+        while IFS= read -r line || [ -n "$line" ]; do
+            case "$line" in
+                [A-Za-z_]*=*)
+                    key="${line%%=*}"
+                    case "$key" in
+                        DOMAIN|ROUTING_TOKEN|ENABLED_CLIENTS|ROUTING_SOURCE_PRESET|ROUTING_RULES|SERVE_FORMATS|SERVE_GEOIP|SERVE_GEOSITE|PUBLIC_GEO_BASE_URL|HTTP_BIND|HTTP_PORT|SCHEDULE|SYNC_ON_START|REMNAWAVE_BASE_URL|REMNAWAVE_TOKEN|DOCKER_NETWORK)
+                            continue ;;
+                        ROUTING_SOURCE_REPO|GEOIP_SOURCE_URL|GEOSITE_SOURCE_URL)
+                            # ключи кастомного источника переносим только при пресете custom
+                            if [ "$source_preset" != "custom" ]; then
+                                continue
+                            fi
+                            ;;
+                    esac
+                    if ! grep -q "^${key}=" "$env_file"; then
+                        printf '%s\n' "$line" >> "$env_file"
+                    fi
+                    ;;
+            esac
+        done < "$backup_file"
+    fi
+
+    chmod 600 "$env_file"
 
     # Создание compose.yaml
     echo -e "${C_YELLOW}[*] Создание compose.yaml...${C_RESET}"
@@ -1617,7 +2152,9 @@ EOF
     # Сохранение скрипта и CLI ссылки
     cp "$0" "$install_dir/install.sh" 2>/dev/null || true
     chmod +x "$install_dir/install.sh" 2>/dev/null || true
-    create_cli_shortcut "$install_dir"
+    if ! create_cli_shortcut "$install_dir"; then
+        echo -e "      ${C_YELLOW}[!] CLI-команда geoserver не создана (нет прав на /usr/local/bin).${C_RESET}"
+    fi
 
     # Запуск
     local compose_cmd
@@ -1625,6 +2162,19 @@ EOF
     echo -e "${C_YELLOW}[*] Запуск сервиса через $compose_cmd...${C_RESET}"
     if ! (cd "$install_dir" && $compose_cmd pull && $compose_cmd up -d); then
         echo -e "${C_RED}[!] Установка не завершена: Docker Compose завершился с ошибкой выше.${C_RESET}"
+        return 1
+    fi
+
+    # up -d возвращает 0 даже когда контейнер сразу завершается (exit 1) —
+    # проверяем реальное состояние и честно отчитываемся.
+    echo -e "${C_YELLOW}[*] Проверка состояния контейнера...${C_RESET}"
+    if ! wait_for_container_ready; then
+        echo -e "${C_RED}[!] Контейнер geo-routing-server не запустился или падает с перезапуском.${C_RESET}"
+        echo -e "${C_YELLOW}Состояние:${C_RESET}"
+        (cd "$install_dir" && $compose_cmd ps) || true
+        echo -e "${C_YELLOW}Последние логи контейнера:${C_RESET}"
+        docker logs --tail 30 geo-routing-server 2>&1 || true
+        echo -e "${C_YELLOW}Проверьте .env (токен: [A-Za-z0-9_-], минимум 4 символов) и запустите установку заново.${C_RESET}"
         return 1
     fi
 
@@ -1671,17 +2221,23 @@ main_menu() {
 
         case "$choice" in
             1) cmd_status; echo ""; read -r -p "Нажмите Enter для возврата в меню..." ;;
-            2) cmd_sync; echo ""; read -r -p "Нажмите Enter для возврата в меню..." ;;
-            3) cmd_logs ;;
+            2) cmd_sync || true; echo ""; read -r -p "Нажмите Enter для возврата в меню..." ;;
+            3) cmd_logs || true ;;
             4) menu_remnawave ;;
             5) menu_schedule ;;
             6) menu_telegram ;;
             7) menu_clients_bases ;;
             8) cmd_proxy; echo ""; read -r -p "Нажмите Enter для возврата в меню..." ;;
             9) menu_updates ;;
-            10) cmd_restart; echo ""; read -r -p "Нажмите Enter для возврата в меню..." ;;
-            11) cmd_edit ;;
-            12) cmd_uninstall; exit 0 ;;
+            10) cmd_restart || true; echo ""; read -r -p "Нажмите Enter для возврата в меню..." ;;
+            11) cmd_edit || true ;;
+            12)
+                # cmd_uninstall возвращает 0 только после реально выполненного
+                # удаления; при отмене/отказе (1) возвращаемся в меню, а не выходим
+                if cmd_uninstall; then
+                    exit 0
+                fi
+                ;;
             0|q|exit) clear 2>/dev/null || true; exit 0 ;;
             *) sleep 0.5 ;;
         esac
@@ -1707,13 +2263,13 @@ main() {
         update-all)                  cmd_update && cmd_update_script ;;
         proxy)                       cmd_proxy ;;
         edit|config)                 cmd_edit ;;
-        uninstall)                   cmd_uninstall ;;
+        uninstall)                   cmd_uninstall || true ;;
         install|setup)               wizard_install ;;
         help|-h|--help)              cmd_help ;;
         "")
             local dir
             dir="$(get_install_dir)"
-            if [ -f "$dir/.env" ] && [ -f "$dir/compose.yaml" -o -f "$dir/docker-compose.yml" ]; then
+            if [ -f "$dir/.env" ] && { [ -f "$dir/compose.yaml" ] || [ -f "$dir/docker-compose.yml" ]; }; then
                 main_menu
             else
                 wizard_install

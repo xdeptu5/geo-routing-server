@@ -20,6 +20,32 @@ services:
     ports:
       - "${HTTP_BIND:-127.0.0.1}:${HTTP_PORT:-8080}:80"
 
+    # Ограничения контейнера (проверены запуском собранного образа):
+    #  - no-new-privileges: процессы не могут повысить привилегии;
+    #  - cap_drop ALL + точечный cap_add: из стандартного набора Docker
+    #    оставлено только реально нужное контейнеру:
+    #      NET_BIND_SERVICE — nginx слушает 80/tcp (на ядрах с
+    #        net.ipv4.ip_unprivileged_port_start=1024 без этого bind падает);
+    #      SETUID/SETGID/CHOWN — мастер nginx создаёт воркеров под
+    #        пользователем nginx и chown-ит свои временные каталоги;
+    #      DAC_OVERRIDE — запись в /var/lib/nginx (принадлежит nginx);
+    #      KILL — мастер останавливает воркеры при graceful shutdown.
+    #    Отброшенные NET_RAW, NET_ADMIN, MKNOD, SETFCAP, SETPCAP, FOWNER,
+    #    FSETID, SYS_CHROOT, AUDIT_WRITE контейнеру не требуются.
+    #  read_only не применяется: docker-entrypoint.sh пишет
+    #  /etc/nginx/token-access.conf, /etc/environment.sh, /etc/crontabs/root.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+      - SETUID
+      - SETGID
+      - CHOWN
+      - DAC_OVERRIDE
+      - KILL
+
     # Хранилище сгенерированных баз и локальный кэш:
     volumes:
       - routing_data:/app/www
