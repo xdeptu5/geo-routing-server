@@ -133,7 +133,7 @@
  │   Клиенты и Панели:                                                    │
  │   • Incy: заголовок подписки autorouting (pull JSON по HTTPS)          │
  │   • Happ: импорт Base64-диплинка или автопатч сквада Remnawave         │
- │   • Sing-box / Xray / V2ray: скачивание geoip.dat и geosite.dat        │
+ │   • Базы: скачивание geoip.dat и geosite.dat по HTTPS                  │
  └────────────────────────────────────────────────────────────────────────┘
 ```
 

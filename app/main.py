@@ -254,24 +254,6 @@ def get_summary_banner_text(token: str, storage_dir: Optional[Path] = None) -> s
 
         sections.append("\n".join(incy_lines))
 
-    # SING-BOX / XRAY / V2RAY блок
-    ext_geo = Config.get_external_geo_url("HAPP") or Config.get_external_geo_url("INCY")
-    singbox_items = []
-    if ext_geo:
-        singbox_items.append(f"  - Внешние ссылки на geo-базы (для route.geoip / route.geosite):\n      GeoIP:     {ext_geo}/geoip.dat\n      GeoSite:   {ext_geo}/geosite.dat")
-    elif Config.SERVE_GEOIP or Config.SERVE_GEOSITE:
-        geo_client = "HAPP" if happ_geo else "INCY"
-        links = []
-        if Config.SERVE_GEOIP:
-            links.append(f"      GeoIP:     {base_url}/{geo_client}/geoip.dat")
-        if Config.SERVE_GEOSITE:
-            links.append(f"      GeoSite:   {base_url}/{geo_client}/geosite.dat")
-        if links:
-            singbox_items.append("  - Прямые ссылки на geo-базы (для Sing-box, Xray, V2ray):\n" + "\n".join(links))
-
-    if singbox_items and (happ_geo or "INCY" in clients_set or "INCY_GEO" in clients_set):
-        sections.append("[SING-BOX / XRAY / V2RAY (Geo-Assets)]\n" + "\n".join(singbox_items))
-
     body = "\n\n".join(sections) if sections else "No active clients configured in ENABLED_CLIENTS."
 
     return f"""

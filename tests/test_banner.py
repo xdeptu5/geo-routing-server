@@ -174,5 +174,5 @@ def test_sync_summary_txt_generation(banner_env, tmp_path):
     content = summary_file.read_text(encoding="utf-8")
     assert f"https://geo.example.com/{token}/HAPP/HAPP.DEEPLINK" in content
     assert f"https://geo.example.com/{token}/HAPP/geoip.dat" in content
-    assert "[SING-BOX / XRAY / V2RAY (Geo-Assets)]" in content
+    assert "[SING-BOX" not in content
 
