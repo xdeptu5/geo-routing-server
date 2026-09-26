@@ -91,6 +91,20 @@ def test_empty_routing_rules_pass_through_discovered(monkeypatch):
     assert Config.get_active_rules(["A.JSON", "b.json"], client="HAPP") == ["A.JSON", "b.json"]
 
 
+def test_empty_routing_rules_with_empty_discovery_returns_preset_defaults(monkeypatch):
+    """Дефект #15: при ROUTING_RULES=ALL и пустом списке файлов возвращается дефолтный список пресета."""
+    monkeypatch.setattr(Config, "ROUTING_SOURCE_PRESET", "hydraponique")
+    monkeypatch.setattr(Config, "ROUTING_RULES", [])
+    assert Config.get_active_rules([], client="HAPP") == ["DEFAULT.JSON", "JSONSUB.JSON", "WHITELIST.JSON"]
+
+    monkeypatch.setattr(Config, "ROUTING_SOURCE_PRESET", "geogaga")
+    assert Config.get_active_rules([], client="HAPP") == ["HAPP.JSON"]
+    assert Config.get_active_rules([], client="INCY") == ["INCY.JSON"]
+
+    monkeypatch.setattr(Config, "ROUTING_SOURCE_PRESET", "vahellame")
+    assert Config.get_active_rules([], client="HAPP") == ["WHITELIST.JSON"]
+
+
 # ------------------------------------------------------------------------------
 # SERVE_FORMATS: что публикуется для каждого клиента
 # ------------------------------------------------------------------------------
@@ -398,3 +412,21 @@ def test_default_preset_is_geogaga(config_with_env):
     assert cfg.ROUTING_SOURCE_PRESET == "geogaga"
     assert cfg.ROUTING_SOURCE_REPO == Config.SOURCE_PRESETS["geogaga"]["routing_repo"]
     assert cfg.GEOIP_SOURCE_URL == Config.SOURCE_PRESETS["geogaga"]["geoip_url"]
+
+
+def test_explicit_geo_url_separated_from_preset(config_with_env):
+    """Пункт 2: четкое разделение GEOIP_SOURCE_URL_EXPLICIT от дефолтного значения пресета."""
+    cfg = config_with_env(ROUTING_SOURCE_PRESET="geogaga")
+    assert cfg.GEOIP_SOURCE_URL_EXPLICIT == ""
+    assert cfg.GEOSITE_SOURCE_URL_EXPLICIT == ""
+    assert cfg.GEOIP_SOURCE_URL == Config.SOURCE_PRESETS["geogaga"]["geoip_url"]
+    assert cfg.get_preset_geoip_url() == Config.SOURCE_PRESETS["geogaga"]["geoip_url"]
+
+    cfg_explicit = config_with_env(
+        ROUTING_SOURCE_PRESET="geogaga",
+        GEOIP_SOURCE_URL="https://custom.example.com/geoip.dat",
+    )
+    assert cfg_explicit.GEOIP_SOURCE_URL_EXPLICIT == "https://custom.example.com/geoip.dat"
+    assert cfg_explicit.GEOIP_SOURCE_URL == "https://custom.example.com/geoip.dat"
+    assert cfg_explicit.get_preset_geoip_url() == Config.SOURCE_PRESETS["geogaga"]["geoip_url"]
+

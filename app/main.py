@@ -5,6 +5,7 @@ import json
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
 # Fix Windows console encoding if needed
 if hasattr(sys.stdout, "reconfigure"):
@@ -70,19 +71,42 @@ def ensure_internal_symlinks(storage_dir: Path, token: str):
                 except Exception:
                     pass
 
-def write_sync_status(storage_dir: Path, token: str, state: str, failures: int = 0, remnawave_ok: bool = True):
-    """Сохраняет последний результат синхронизации атомарно, без публикации его по HTTP."""
+def write_sync_status(
+    storage_dir: Path,
+    token: str,
+    state: str,
+    failures: int = 0,
+    remnawave_ok: bool = True,
+    errors: Optional[list[str]] = None,
+    rules: Optional[list[str]] = None,
+    generated_files: Optional[list[str]] = None,
+):
+    """Сохраняет метаданные синхронизации (.sync-status.json) атомарно."""
     status_file = storage_dir / token / ".sync-status.json"
+    now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    
+    if errors is None:
+        errors = list(RemnawaveSync.last_errors) if hasattr(RemnawaveSync, "last_errors") else []
+    if rules is None:
+        rules = [r for r in Config.get_display_rules()]
+    if generated_files is None:
+        generated_files = sorted(list(Publisher.published_registry.keys()))
+
     payload = {
+        "timestamp": now_iso,
+        "status": state,
         "state": state,
-        "recorded_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "recorded_at": now_iso,
+        "generated_files": generated_files,
+        "errors": errors,
+        "rules": rules,
         "failed_processors": failures,
         "remnawave_ok": remnawave_ok,
     }
     temp_fd, temp_path = tempfile.mkstemp(prefix=".sync-status.", dir=str(status_file.parent))
     try:
         with os.fdopen(temp_fd, "w", encoding="utf-8") as status_handle:
-            json.dump(payload, status_handle, ensure_ascii=False, separators=(",", ":"))
+            json.dump(payload, status_handle, ensure_ascii=False, indent=2)
             status_handle.flush()
             os.fsync(status_handle.fileno())
         os.replace(temp_path, status_file)
@@ -95,21 +119,47 @@ def write_sync_status(storage_dir: Path, token: str, state: str, failures: int =
         except OSError:
             pass
 
-def print_summary_banner(token: str):
-    """Выводит чистый, аккуратный блок со ссылками строго под выбранные модули и файлы."""
+def get_summary_banner_text(token: str, storage_dir: Optional[Path] = None) -> str:
+    """Формирует готовый текстовый отчет со всеми ссылками для клиентов (Happ, Incy, Sing-box).
+
+    Проверяет реально опубликованные файлы на диске, если они есть.
+    """
     base_url = Config.get_base_url(token)
     clients_set = set(Config.ENABLED_CLIENTS)
-    # Правила для сводки берём из конфигурации (пресет/ROUTING_RULES), а не из
-    # пустого discovered-списка: иначе баннер пустует при части пресетов
-    happ_rules = [r.removesuffix(".JSON") for r in Config.get_display_rules(client="HAPP")]
-    incy_rules = [r.removesuffix(".JSON") for r in Config.get_display_rules(client="INCY")]
-    
+    target_base = storage_dir or Config.STORAGE_DIR
+    happ_dir = target_base / token / "HAPP"
+    incy_dir = target_base / token / "INCY"
+
+    # Файлы правил HAPP: проверяем реально опубликованные, иначе fallback на Config
+    if happ_dir.is_dir():
+        happ_rules = sorted({
+            p.name.rsplit(".", 1)[0].upper()
+            for p in happ_dir.iterdir()
+            if p.is_file() and (p.name.upper().endswith(".JSON") or p.name.upper().endswith(".DEEPLINK"))
+        })
+    else:
+        happ_rules = []
+    if not happ_rules:
+        happ_rules = [r.removesuffix(".JSON") for r in Config.get_display_rules(client="HAPP")]
+
+    # Файлы правил INCY: проверяем реально опубликованные, иначе fallback на Config
+    if incy_dir.is_dir():
+        incy_rules = sorted({
+            p.name.rsplit(".", 1)[0].upper()
+            for p in incy_dir.iterdir()
+            if p.is_file() and (p.name.upper().endswith(".JSON") or p.name.upper().endswith(".DEEPLINK"))
+        })
+    else:
+        incy_rules = []
+    if not incy_rules:
+        incy_rules = [r.removesuffix(".JSON") for r in Config.get_display_rules(client="INCY")]
+
     sections = []
-    
+
     # HAPP блок
     happ_geo = "HAPP" in clients_set or "HAPP_GEO" in clients_set
     happ_deeplink = "HAPP" in clients_set or "HAPP_DEEPLINK" in clients_set or "HAPP_LOCAL" in clients_set
-    
+
     if happ_geo or happ_deeplink:
         happ_lines = ["[HAPP]"]
         if RemnawaveSync.is_configured():
@@ -172,7 +222,7 @@ def print_summary_banner(token: str):
     if "INCY" in clients_set or "INCY_GEO" in clients_set:
         incy_lines = ["[INCY]"]
         ext_geo_incy = Config.get_external_geo_url("INCY")
-        
+
         if ext_geo_incy:
             geo_lines = [
                 "  - Внешние ссылки на базы (для клиентов):",
@@ -204,16 +254,59 @@ def print_summary_banner(token: str):
 
         sections.append("\n".join(incy_lines))
 
+    # SING-BOX / XRAY / V2RAY блок
+    ext_geo = Config.get_external_geo_url("HAPP") or Config.get_external_geo_url("INCY")
+    singbox_items = []
+    if ext_geo:
+        singbox_items.append(f"  - Внешние ссылки на geo-базы (для route.geoip / route.geosite):\n      GeoIP:     {ext_geo}/geoip.dat\n      GeoSite:   {ext_geo}/geosite.dat")
+    elif Config.SERVE_GEOIP or Config.SERVE_GEOSITE:
+        geo_client = "HAPP" if happ_geo else "INCY"
+        links = []
+        if Config.SERVE_GEOIP:
+            links.append(f"      GeoIP:     {base_url}/{geo_client}/geoip.dat")
+        if Config.SERVE_GEOSITE:
+            links.append(f"      GeoSite:   {base_url}/{geo_client}/geosite.dat")
+        if links:
+            singbox_items.append("  - Прямые ссылки на geo-базы (для Sing-box, Xray, V2ray):\n" + "\n".join(links))
+
+    if singbox_items and (happ_geo or "INCY" in clients_set or "INCY_GEO" in clients_set):
+        sections.append("[SING-BOX / XRAY / V2RAY (Geo-Assets)]\n" + "\n".join(singbox_items))
+
     body = "\n\n".join(sections) if sections else "No active clients configured in ENABLED_CLIENTS."
 
-    banner = f"""
+    return f"""
 ===============================================================================
 * Geo Routing Server Ready! Endpoints & Integrations:
 -------------------------------------------------------------------------------
 {body}
 ===============================================================================
 """
+
+def print_summary_banner(token: str, storage_dir: Optional[Path] = None) -> str:
+    """Выводит баннер со сводкой ссылок и интеграций."""
+    banner = get_summary_banner_text(token, storage_dir)
     print(banner, flush=True)
+    return banner
+
+def write_sync_summary(storage_dir: Path, token: str, summary_text: str) -> None:
+    """Атомарно сохраняет текстовую сводку (.sync-summary.txt) со всеми ссылками."""
+    for parent in [storage_dir, storage_dir / token]:
+        try:
+            parent.mkdir(parents=True, exist_ok=True)
+            summary_file = parent / ".sync-summary.txt"
+            temp_fd, temp_path = tempfile.mkstemp(prefix=".sync-summary.", dir=str(parent))
+            with os.fdopen(temp_fd, "w", encoding="utf-8") as f:
+                f.write(summary_text)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temp_path, summary_file)
+            try:
+                os.chmod(summary_file, 0o644)
+            except Exception:
+                pass
+        except OSError as error:
+            logger = logging.getLogger("geo-routing-server")
+            logger.debug(f"Could not write sync summary to {parent}: {error}")
 
 def main():
     setup_logging()
@@ -284,15 +377,44 @@ def main():
         logger.error(err_text)
         TelegramNotifier.alert_failure(err_text)
 
+    all_errors = list(RemnawaveSync.last_errors) if hasattr(RemnawaveSync, "last_errors") else []
+    if failures > 0:
+        all_errors.append(f"Synchronization finished with {failures} failed processor(s)")
+
+    rules_list = [r for r in Config.get_display_rules()]
+    published_files = sorted(list(Publisher.published_registry.keys()))
+
     if remna_ok and failures == 0:
-        write_sync_status(Config.STORAGE_DIR, token, "success")
+        write_sync_status(
+            Config.STORAGE_DIR,
+            token,
+            "success",
+            failures=0,
+            remnawave_ok=True,
+            errors=[],
+            rules=rules_list,
+            generated_files=published_files,
+        )
         logger.info("Synchronization completed successfully.")
-        print_summary_banner(token)
+        banner = print_summary_banner(token, Config.STORAGE_DIR)
+        write_sync_summary(Config.STORAGE_DIR, token, banner)
         TelegramNotifier.notify_changes(token, Publisher.published_registry, Publisher.any_file_changed)
     else:
-        write_sync_status(Config.STORAGE_DIR, token, "failed", failures, remna_ok)
-        logger.warning("Synchronization completed with warnings/errors.")
-        print_summary_banner(token)
+        # Частичная синхронизация (если часть файлов опубликована) или полный сбой
+        status_state = "partial" if published_files else "failed"
+        write_sync_status(
+            Config.STORAGE_DIR,
+            token,
+            status_state,
+            failures=failures,
+            remnawave_ok=remna_ok,
+            errors=all_errors,
+            rules=rules_list,
+            generated_files=published_files,
+        )
+        logger.warning(f"Synchronization completed with warnings/errors (status: {status_state}).")
+        banner = print_summary_banner(token, Config.STORAGE_DIR)
+        write_sync_summary(Config.STORAGE_DIR, token, banner)
         sys.exit(1)
 
 if __name__ == "__main__":

@@ -144,3 +144,106 @@ def test_cleanup_skipped_on_fallback_discovery(processor, tmp_path):
 def test_cleanup_handles_missing_directory(processor, tmp_path):
     # не должно падать
     processor._cleanup_obsolete_files(tmp_path / "missing", {"A.JSON"})
+
+
+def test_cleanup_geogaga_and_vahellame_uses_session_published_files(processor, tmp_path, monkeypatch):
+    """Дефект #16: для пресетов geogaga и vahellame очистка опирается на реальный список сессии."""
+    from app.config import Config
+    from app.publisher import Publisher, PublishedFileInfo
+
+    monkeypatch.setattr(Config, "ROUTING_SOURCE_PRESET", "geogaga")
+
+    target = _make_dir(
+        tmp_path / "HAPP",
+        ["HAPP.JSON", "HAPP.DEEPLINK", "DEFAULT.JSON", "JSONSUB.JSON", "JSONSUB.DEEPLINK"]
+    )
+
+    # Имитируем публикацию файлов текущей сессии
+    Publisher.published_registry["HAPP/HAPP.JSON"] = PublishedFileInfo("HAPP.JSON", 10, "sha", True)
+    Publisher.published_registry["HAPP/HAPP.DEEPLINK"] = PublishedFileInfo("HAPP.DEEPLINK", 20, "sha", True)
+
+    # Даже при пустом valid_filenames очистка использует опубликованные файлы сессии
+    processor.is_fallback_discovery = True
+    processor._cleanup_obsolete_files(target, set())
+
+    assert sorted(p.name for p in target.iterdir()) == ["HAPP.DEEPLINK", "HAPP.JSON"]
+
+
+def test_remove_local_geo_databases(processor, tmp_path):
+    """Дефект #19: удаление локальных geoip.dat и geosite.dat."""
+    target = tmp_path / "HAPP"
+    target.mkdir()
+    (target / "geoip.dat").write_bytes(b"geoip")
+    (target / "geosite.dat").write_bytes(b"geosite")
+    (target / "HAPP.JSON").write_text("{}", encoding="utf-8")
+
+    processor._remove_local_geo_databases(target)
+
+    assert not (target / "geoip.dat").exists()
+    assert not (target / "geosite.dat").exists()
+    assert (target / "HAPP.JSON").is_file()
+
+
+def test_geo_manager_fallback_chain(tmp_path, monkeypatch):
+    """Дефект #14: 4-этапная логика fallback для GeoManager.resolve_and_fetch."""
+    from app.config import Config
+    from app.downloader import Downloader, DownloadError
+    from app.processors.geo import GeoManager
+
+    downloader = Downloader(tmp_path / "cache")
+    geo_dir = tmp_path / "custom_geo"
+    manager = GeoManager(downloader, geo_dir)
+
+    valid_content = b"X" * 2048
+
+    # а) Если задан кастомный GEOIP_SOURCE_URL (явный из .env) -> использовать его
+    calls = []
+
+    def fake_fetch(url, cache_key, kind="binary", trusted_url=True):
+        calls.append(url)
+        return valid_content
+
+    monkeypatch.setattr(downloader, "fetch", fake_fetch)
+    monkeypatch.setattr(Config, "GEOIP_SOURCE_URL_EXPLICIT", "https://custom.example.com/geoip.dat")
+    manager._memory_cache.clear()
+
+    res = manager.resolve_and_fetch("HAPP", "geoip")
+    assert res == valid_content
+    assert calls == ["https://custom.example.com/geoip.dat"]
+
+    # б) Иначе проверить локальный DEFAULT.JSON (если есть) -> использовать его
+    calls.clear()
+    manager._memory_cache.clear()
+    monkeypatch.setattr(Config, "GEOIP_SOURCE_URL_EXPLICIT", "")
+    default_json = {"Geoipurl": "https://repo.example.com/geoip.dat"}
+
+    res = manager.resolve_and_fetch("HAPP", "geoip", default_json_data=default_json)
+    assert res == valid_content
+    assert calls == ["https://repo.example.com/geoip.dat"]
+
+    # в) Иначе использовать URL пресета (geogaga/vahellame)
+    calls.clear()
+    manager._memory_cache.clear()
+    monkeypatch.setattr(Config, "ROUTING_SOURCE_PRESET", "geogaga")
+
+    res = manager.resolve_and_fetch("HAPP", "geoip", default_json_data={})
+    assert res == valid_content
+    assert calls == [Config.SOURCE_PRESETS["geogaga"]["geoip_url"]]
+
+    # г) Если загрузка не удалась -> fallback на официальные релизы GitHub (v2fly/meta-rules-dat / runetfreedom)
+    calls.clear()
+    manager._memory_cache.clear()
+    preset_url = Config.SOURCE_PRESETS["geogaga"]["geoip_url"]
+
+    def failing_preset_then_official_fetch(url, cache_key, kind="binary", trusted_url=True):
+        calls.append(url)
+        if url == preset_url:
+            raise DownloadError("Preset failed")
+        return valid_content
+
+    monkeypatch.setattr(downloader, "fetch", failing_preset_then_official_fetch)
+    res = manager.resolve_and_fetch("HAPP", "geoip", default_json_data={})
+    assert res == valid_content
+    assert calls[0] == preset_url
+    assert calls[1] in manager.OFFICIAL_FALLBACK_URLS["geoip"]
+

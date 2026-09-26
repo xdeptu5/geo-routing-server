@@ -114,3 +114,65 @@ def test_banner_no_active_clients(banner_env, capsys):
     print_summary_banner(TOKEN)
     out = _out(capsys)
     assert "No active clients configured in ENABLED_CLIENTS." in out
+
+
+def test_sync_status_json_metadata(tmp_path):
+    """Пункт 7: .sync-status.json содержит timestamp, статус, сгенерированные файлы, ошибки, список правил."""
+    import json
+    from app.main import write_sync_status
+
+    token = "secret123"
+    storage_dir = tmp_path / "www"
+    (storage_dir / token).mkdir(parents=True)
+
+    errors = ["Sample error"]
+    rules = ["HAPP.JSON", "INCY.JSON"]
+    gen_files = ["HAPP/HAPP.JSON", "HAPP/HAPP.DEEPLINK"]
+
+    write_sync_status(
+        storage_dir=storage_dir,
+        token=token,
+        state="success",
+        failures=0,
+        remnawave_ok=True,
+        errors=errors,
+        rules=rules,
+        generated_files=gen_files,
+    )
+
+    status_file = storage_dir / token / ".sync-status.json"
+    assert status_file.is_file()
+
+    data = json.loads(status_file.read_text(encoding="utf-8"))
+    assert data["status"] == "success"
+    assert "timestamp" in data
+    assert data["errors"] == errors
+    assert data["rules"] == rules
+    assert data["generated_files"] == gen_files
+
+
+def test_sync_summary_txt_generation(banner_env, tmp_path):
+    """Пункт 7: .sync-summary.txt содержит готовый текстовый отчет со всеми прямыми ссылками."""
+    from app.main import get_summary_banner_text, write_sync_summary
+
+    token = "secret123"
+    storage_dir = tmp_path / "www"
+    happ_dir = storage_dir / token / "HAPP"
+    happ_dir.mkdir(parents=True)
+    (happ_dir / "HAPP.DEEPLINK").write_text("happ://...", encoding="utf-8")
+    (happ_dir / "geoip.dat").write_bytes(b"geoip")
+
+    banner_env.setattr(Config, "STORAGE_DIR", storage_dir)
+    banner_env.setattr(Config, "ROUTING_SOURCE_PRESET", "geogaga")
+    banner_env.setattr(Config, "ROUTING_RULES", [])
+
+    summary_text = get_summary_banner_text(token, storage_dir)
+    write_sync_summary(storage_dir, token, summary_text)
+
+    summary_file = storage_dir / token / ".sync-summary.txt"
+    assert summary_file.is_file()
+    content = summary_file.read_text(encoding="utf-8")
+    assert f"https://geo.example.com/{token}/HAPP/HAPP.DEEPLINK" in content
+    assert f"https://geo.example.com/{token}/HAPP/geoip.dat" in content
+    assert "[SING-BOX / XRAY / V2RAY (Geo-Assets)]" in content
+

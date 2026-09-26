@@ -40,19 +40,15 @@ class IncyProcessor(BaseProcessor):
             except Exception as e:
                 logger.warning(f"Could not load default rule for {client} from {url}: {e}")
             
-        # 1. Синхронизируем geoip.dat и geosite.dat (если базы раздаются локально)
-        if geo_enabled:
-            if Config.PUBLIC_GEO_BASE_URL:
-                # Базы публикуются во внешнем хранилище: убираем устаревшие локальные
-                # geoip.dat/geosite.dat, оставшиеся от прошлой конфигурации
-                self._remove_local_geo_databases(target_dir)
-            elif Config.SERVE_GEOIP or Config.SERVE_GEOSITE:
-                if not self.geo_manager.sync_client_geo(client, target_dir, default_json_data):
-                    success = False
-
-            else:
-                # Локальная раздача geo-баз выключена — файлы больше не актуальны
-                self._remove_local_geo_databases(target_dir)
+        # 1. Синхронизируем geoip.dat и geosite.dat (или удаляем локальные, если они не требуются)
+        serve_geo = geo_enabled and not bool(Config.PUBLIC_GEO_BASE_URL) and (Config.SERVE_GEOIP or Config.SERVE_GEOSITE)
+        if not serve_geo or Config.PUBLIC_GEO_BASE_URL:
+            # Базы публикуются во внешнем хранилище либо локальная раздача выключена:
+            # убираем локальные geoip.dat/geosite.dat
+            self._remove_local_geo_databases(target_dir)
+        else:
+            if not self.geo_manager.sync_client_geo(client, target_dir, default_json_data):
+                success = False
             
         # 2. Синхронизируем и модифицируем JSON конфигурации (только если нужен роутинг)
         if needs_routing:

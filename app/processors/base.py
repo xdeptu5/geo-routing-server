@@ -146,11 +146,26 @@ class BaseProcessor(ABC):
         - имена сравниваются регистронезависимо с ОБЕИХ сторон: публикуемые имена
           (.JSON/.DEEPLINK) не всегда совпадают по регистру со списком из источников,
           из-за чего строгое сравнение могло удалить актуальный файл;
-        - в fallback-режиме discovery (GitHub API недоступен или источник вне
-          GitHub) очистка тоже работает, но только по уже опубликованному набору.
+        - для пресетов geogaga и vahellame очистка опирается на реально опубликованные
+          файлы сессии (published_files / published_registry), не пропуская очистку;
+        - в fallback-режиме discovery очистка работает по уже опубликованному набору.
         """
         if not target_dir.is_dir():
             return
+
+        from app.config import Config
+        from app.publisher import Publisher
+
+        preset = Config.ROUTING_SOURCE_PRESET
+
+        # Для пресетов geogaga и vahellame (а также как страховка для других пресетов)
+        # учитываем реальный список опубликованных файлов сессии из Publisher.published_registry
+        session_published = {
+            info.filename
+            for key, info in Publisher.published_registry.items()
+            if key.startswith(f"{target_dir.name}/") or key.startswith(f"{self.CLIENT_NAME}/")
+        }
+        effective_valid = set(valid_filenames) | session_published
 
         if not published_ok:
             logger.info(
@@ -159,20 +174,25 @@ class BaseProcessor(ABC):
             )
             return
 
-        if not valid_filenames:
+        if not effective_valid:
             logger.warning(
                 f"Skipping obsolete files cleanup for {self.CLIENT_NAME}: "
                 f"nothing was published this run"
             )
             return
 
-        if self.is_fallback_discovery:
+        if preset in ("geogaga", "vahellame"):
+            logger.info(
+                f"Running cleanup for preset {preset} ({self.CLIENT_NAME}) "
+                f"based on actual published session files: {sorted(effective_valid)}"
+            )
+        elif self.is_fallback_discovery:
             logger.info(
                 f"Fallback file discovery for {self.CLIENT_NAME}: running conservative "
                 f"cleanup by the successfully published set"
             )
 
-        valid_names_lower = {name.lower() for name in valid_filenames}
+        valid_names_lower = {name.lower() for name in effective_valid}
 
         for path in target_dir.iterdir():
             if not path.is_file():

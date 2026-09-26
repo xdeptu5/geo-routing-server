@@ -117,3 +117,69 @@ def test_untrusted_url_returns_preferred_ipv4(downloader, monkeypatch):
 
     monkeypatch.setattr(socket_module, "getaddrinfo", fake_getaddrinfo)
     assert downloader._validate_untrusted_url("https://example.com/x") == "93.184.216.34"
+
+
+# ------------------------------------------------------------------------------
+# fetch: ретраи, break на 4xx и sleep только при attempt < max_retries
+# ------------------------------------------------------------------------------
+
+@pytest.mark.parametrize("status_code", [400, 401, 403, 404, 410])
+def test_fetch_breaks_immediately_on_permanent_client_errors(downloader, monkeypatch, status_code):
+    import urllib.error
+    import urllib.request
+
+    call_count = 0
+    sleep_calls = []
+
+    def fake_urlopen(req, timeout=None):
+        nonlocal call_count
+        call_count += 1
+        raise urllib.error.HTTPError(
+            url=req.full_url if hasattr(req, "full_url") else str(req),
+            code=status_code,
+            msg=f"Client Error {status_code}",
+            hdrs={},
+            fp=None,
+        )
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr("time.sleep", lambda delay: sleep_calls.append(delay))
+
+    with pytest.raises(DownloadError) as exc_info:
+        downloader.fetch("https://example.com/file.json", "test_key", kind="json", trusted_url=True)
+
+    assert "after 1 attempt(s)" in str(exc_info.value)
+    assert call_count == 1
+    assert len(sleep_calls) == 0
+
+
+def test_fetch_sleeps_only_if_attempt_less_than_max_retries(downloader, monkeypatch):
+    import urllib.error
+    import urllib.request
+
+    call_count = 0
+    sleep_calls = []
+
+    def fake_urlopen(req, timeout=None):
+        nonlocal call_count
+        call_count += 1
+        raise urllib.error.HTTPError(
+            url="https://example.com/test",
+            code=500,
+            msg="Internal Server Error",
+            hdrs={},
+            fp=None,
+        )
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr("time.sleep", lambda delay: sleep_calls.append(delay))
+
+    downloader.max_retries = 3
+    with pytest.raises(DownloadError) as exc_info:
+        downloader.fetch("https://example.com/test", "test_key", kind="json", trusted_url=True)
+
+    assert "after 3 attempt(s)" in str(exc_info.value)
+    assert call_count == 3
+    # sleep вызывается только между попытками (1 -> 2, 2 -> 3), на 3-й попытке sleep не вызывается
+    assert len(sleep_calls) == 2
+

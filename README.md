@@ -38,6 +38,20 @@
 
 > ℹ️ *Caddy или внешний Nginx выполняют свою прямую роль — служат фронтальным HTTPS-прокси с SSL-сертификатом, в то время как контейнер берёт на себя всю логику подготовки данных и интеграций.*
 
+> 🚀 **Что нового в версии 1.4.0:**
+> * 🧠 **Архитектурный рефакторинг ядра и CLI (`app/cli.py`):** встроенный Python CLI со стандартными библиотеками (`status`, `sync`, `proxy`, `squads`, `menu`), не требующий сторонних зависимостей.
+> * 📊 **Единый источник правды (Single Source of Truth):** ядро синхронизации формирует артефакты `.sync-status.json` и `.sync-summary.txt` в директории токена; TUI-меню и CLI отображают 100% реальные ссылки без 404-ошибок.
+> * ⚡ **Структурированное управление сквадами (`squads.json`):** вынос привязок из `.env` в атомарный `squads.json` с автомиграцией старых конфигураций (`migrate_from_env`) и сохранением полной обратной совместимости.
+> * 🛠️ **Полное устранение дефектов бэкенда (#14–#19):**
+>   - 4-этапный fallback для geo-баз (явный URL -> `DEFAULT.JSON` -> URL пресета -> официальные релизы GitHub) с кэшированием в памяти;
+>   - Fallback правил по умолчанию при пустом результате discovery;
+>   - Очистка устаревших файлов для всех пресетов по актуальному реестру сессии;
+>   - Нормализация регистра диплинков (`.upper()`);
+>   - Корректная обработка `HTTP 204 No Content` от API Remnawave;
+>   - Удаление локальных баз при внешнем `PUBLIC_GEO_BASE_URL` или отключенной раздаче.
+> * 🔒 **Защита логов Nginx:** маскирование `ROUTING_TOKEN` в логах доступа и выключение `access_log` для статических геобаз.
+> * 🛡️ **Защита системных путей в `install.sh`:** предотвращение случайного удаления каталогов системы при `uninstall` и атомарная запись настроек.
+> 
 > 🚀 **Что нового в версии 1.3.3:**
 > * 🛡️ **Спуфинг заголовков в nginx закрыт:** токен-независимые пути `/HAPP/` и `/INCY/` проверяют только реальный адрес TCP-соединения — `X-Forwarded-For` больше не подменяет `$remote_addr`. Прокси-заголовки на этих путях теперь просто запрещены, а их значения пишутся в лог только для диагностики.
 > * 🔧 **Надёжная запись настроек в `install.sh`:** меню выводится в stderr и не попадает в `.env`; `set_env_val`/`delete_env_val` пишут атомарно и без `sed`-делитера — спецсимволы и переносы строк больше не рвут `docker compose config`.
@@ -93,27 +107,34 @@
 
 ## 📖 Архитектура
 
+Архитектура разделена на два изолированных уровня с гарантией надежности:
+
 ```text
- ┌───────────────────────────────────────────────────────────┐
- │   Источники: GeoGaga / roscomvpn / vahellame / custom_geo │
- └─────────────────────────────┬─────────────────────────────┘
-                               │ (ETag 304, SHA-256, atomic write)
-                               ▼
- ┌───────────────────────────────────────────────────────────┐
- │   Docker [ geo-routing-server ]                           │
- │   • Планировщик crond (обновление по расписанию)          │
- │   • Python-ядро (адаптация URL на локальные, генерация)   │
- │   • Nginx (отдача статики с поддержкой ETag)              │
- │   • Нативная отправка правил в Remnawave API              │
- └─────────────────────────────┬─────────────────────────────┘
-                               │ (127.0.0.1:8080 -> HTTPS Прокси)
-                               ▼
- ┌───────────────────────────────────────────────────────────┐
- │   Клиенты и Панели:                                       │
- │   • Incy: заголовок подписки autorouting (pull JSON)      │
- │   • Happ: импорт диплинка или автопатч сквада Remnawave   │
- │   • Базы: скачивание geoip.dat / geosite.dat по HTTPS     │
- └───────────────────────────────────────────────────────────┘
+ ┌────────────────────────────────────────────────────────────────────────┐
+ │   ХОСТ (Bash-оркестратор: install.sh / geoserver)                      │
+ │   • Управление Docker Compose (up, down, restart, logs, pull, update)  │
+ │   • Атомарное редактирование .env (с ротацией бэкапов .env.bak)        │
+ │   • Быстрый TUI-интерфейс меню с делегированием в Python CLI           │
+ └───────────────────────────────────┬────────────────────────────────────┘
+                                     │ docker compose
+                                     ▼
+ ┌────────────────────────────────────────────────────────────────────────┐
+ │   КОНТЕЙНЕР (Docker: Alpine + Python 3.12 + Nginx)                     │
+ │   • Планировщик crond (автообновление по расписанию)                   │
+ │   • Ядро синхронизации (app/main.py: 4-этапный fallback, ETag 304)    │
+ │   • Менеджер сквадов (app/squads.py: squads.json + API Remnawave)      │
+ │   • Единый источник правды: генерация .sync-status.json / .sync-summary│
+ │   • Python CLI (app/cli.py: status, sync, proxy, squads, menu)         │
+ │   • Внутренний Nginx (отдача файлов по токену, маскирование логов)     │
+ └───────────────────────────────────┬────────────────────────────────────┘
+                                     │ (127.0.0.1:8080 -> HTTPS Прокси)
+                                     ▼
+ ┌────────────────────────────────────────────────────────────────────────┐
+ │   Клиенты и Панели:                                                    │
+ │   • Incy: заголовок подписки autorouting (pull JSON по HTTPS)          │
+ │   • Happ: импорт Base64-диплинка или автопатч сквада Remnawave         │
+ │   • Sing-box / Xray / V2ray: скачивание geoip.dat и geosite.dat        │
+ └────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -373,12 +394,27 @@ Happ принимает правила через Base64-диплинк `happ://
 | **Remnawave API** | | |
 | `REMNAWAVE_BASE_URL` | *пусто* | URL API панели (например, `http://remnawave:3000/api`) |
 | `REMNAWAVE_TOKEN` | *пусто* | JWT-токен администратора панели |
-| `REMNAWAVE_SQUAD_N_UUID` | *пусто* | UUID сквада N (N = 1..10+) |
-| `REMNAWAVE_SQUAD_N_NAME` | *пусто* | Читаемое имя сквада N (подтягивается из API автоматически) |
-| `REMNAWAVE_SQUAD_N_RULE` | `HAPP.JSON` / `JSONSUB.JSON` | Имя правила для сквада N (`HAPP.JSON` для geogaga; `JSONSUB.JSON`, `WHITELIST.JSON` для hydraponique) |
 | `REMNAWAVE_GLOBAL_RULE` | *пусто* | Глобальное правило для всех подписок |
 | `CLOUDFLARE_ZERO_TRUST_CLIENT_ID` | *пусто* | Client ID сервисного токена Cloudflare Zero Trust |
 | `CLOUDFLARE_ZERO_TRUST_CLIENT_SECRET` | *пусто* | Client Secret сервисного токена Cloudflare Zero Trust |
+| `REMNAWAVE_SQUAD_N_UUID` | *пусто* | *(Legacy)* UUID сквада N (N = 1..10+). Рекомендуется использовать `squads.json` |
+| `REMNAWAVE_SQUAD_N_NAME` | *пусто* | *(Legacy)* Читаемое имя сквада N |
+| `REMNAWAVE_SQUAD_N_RULE` | `HAPP.JSON` | *(Legacy)* Имя правила для сквада N |
+
+> ⚡ **Управление сквадами (`squads.json`):**  
+> Начиная с версии 1.4.0 привязки сквадов хранятся в структурированном файле `squads.json` (вместо ручного редактирования `.env`):
+> ```json
+> [
+>   { "uuid": "c0a80101-0000-0000-0000-000000000001", "rule": "HAPP.JSON", "name": "VIP Users" }
+> ]
+> ```
+> Управление сквадами осуществляется через пункт меню `4` в `geoserver` либо через Python CLI внутри контейнера:
+> ```bash
+> # Просмотр, добавление или миграция из .env:
+> docker compose exec geo-routing-server python -m app.cli squads list
+> docker compose exec geo-routing-server python -m app.cli squads add --uuid <UUID> --rule HAPP.JSON --name "VIP"
+> docker compose exec geo-routing-server python -m app.cli squads migrate
+> ```
 
 </details>
 
@@ -397,27 +433,47 @@ Happ принимает правила через Base64-диплинк `happ://
 <summary><b>📄 Примеры конфигураций для Caddy и Nginx</b></summary>
 <br>
 
-**Caddy (субдомен):**
+**Вариант 1: Выделенный поддомен (geo.example.com):**
+
+*Caddy:*
 ```caddy
 geo.example.com {
     reverse_proxy 127.0.0.1:8080
 }
 ```
 
-**Nginx (субдомен):**
+*Nginx:*
 ```nginx
 server {
     listen 443 ssl;
     server_name geo.example.com;
     ssl_certificate /etc/letsencrypt/live/geo.example.com/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/geo.example.com/privkey.pem;
+
     location / {
         proxy_pass http://127.0.0.1:8080;
+        proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
     }
+}
+```
+
+<br>
+
+**Вариант 2: Общий домен с другим сайтом (проксирование по токену):**
+
+*Если корень `location /` уже занят вашим сайтом или панелью:*
+```nginx
+location /<ROUTING_TOKEN>/ {
+    proxy_pass http://127.0.0.1:8080;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
 }
 ```
 
@@ -453,6 +509,34 @@ server {
 > 💡 **Автоматическая проверка обновлений:**  
 > При открытии меню `geoserver` отдельно проверяет версию скрипта и Docker-образа. Если GitHub или GHCR недоступен, интерфейс показывает, что проверку выполнить не удалось, вместо сообщения об актуальности.
 
+<details>
+<summary><b>🐍 Управление напрямую через Python CLI внутри контейнера (без install.sh)</b></summary>
+<br>
+
+Если вы разворачиваете проект без скрипта `install.sh` (через **Portainer**, **Dockge**, **1Panel**, **Kubernetes**), вам доступен полный встроенный Python CLI стандартной библиотеки:
+
+```bash
+# Интерактивное TUI-меню в терминале:
+docker compose exec -it geo-routing-server python -m app.cli menu
+
+# Просмотр статуса и ссылок (текстовый вид или машиночитаемый JSON):
+docker compose exec geo-routing-server python -m app.cli status
+docker compose exec geo-routing-server python -m app.cli status --json
+
+# Принудительная синхронизация:
+docker compose exec geo-routing-server python -m app.cli sync
+
+# Генератор конфигов для Caddy и Nginx:
+docker compose exec geo-routing-server python -m app.cli proxy
+
+# Управление сквадами Remnawave (squads.json):
+docker compose exec geo-routing-server python -m app.cli squads list
+docker compose exec geo-routing-server python -m app.cli squads add --uuid <UUID> --rule HAPP.JSON --name "VIP"
+docker compose exec geo-routing-server python -m app.cli squads remove --uuid <UUID>
+docker compose exec geo-routing-server python -m app.cli squads migrate
+```
+</details>
+
 > 📁 **Кастомные базы:** Локальные файлы `geoip.dat` и `geosite.dat` можно положить в папку `./custom_geo/` — сервер подхватит их автоматически вместо загрузки из сети.
 
 ---
@@ -462,20 +546,20 @@ server {
 Все проверки запускаются из корня репозитория. Версии зафиксированы (Python 3.12, `ruff==0.16.9`, `pytest==9.1.1`) и совпадают с тем, что ставит CI:
 
 ```bash
-ruff check app                  # линтер (конфиг — ruff.toml)
-python -m pytest -q             # юнит-тесты (tests/)
+ruff check app tests            # линтер (конфиг — ruff.toml)
+python -m pytest -q             # юнит-тесты (217 тестов в tests/)
 python -m compileall app        # синтаксис всех модулей без запуска
 bash -n install.sh docker-entrypoint.sh   # синтаксис shell-скриптов
 shellcheck -S warning install.sh docker-entrypoint.sh  # статический анализ (нужен shellcheck)
 ```
 
-Тесты не ходят в сеть, не запускают Docker и не читают `.env`: они изолируют переменные окружения и работают только с логикой `app/*`.
+Тесты не ходят в сеть, не запускают Docker и не читают `.env`: они изолируют переменные окружения и проверяют всю логику компонентов `app/*`, включая CLI, менеджер сквадов, загрузчик, нормализацию диплинков и fallback геобаз.
 
 CI (`.github/workflows/docker.yml`) на каждый push в `main`, тег, pull request и запуск вручную:
 
 | Задача | Что делает |
 | --- | --- |
-| **Python: ruff lint + pytest** | `ruff check app`, `python -m pytest -q`, `python -m compileall app` |
+| **Python: ruff lint + pytest** | `ruff check app`, `python -m pytest -q` (217 тестов), `python -m compileall app` |
 | **Shellcheck (install.sh, docker-entrypoint.sh)** | `shellcheck -S warning` обоих скриптов |
 | **Build and publish Docker image** | сборка и публикация образа (GHCR/Docker Hub) — только на push/тег/ручной запуск, после успешного линтинга и shellcheck; на pull request не собирается |
 

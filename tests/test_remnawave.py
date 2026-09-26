@@ -195,3 +195,51 @@ def test_read_deeplink_content_rejects_bad_rule_name(tmp_path):
     assert RemnawaveSync._read_deeplink_content(happ_dir, "bad name.json") is None
     assert RemnawaveSync._read_deeplink_content(happ_dir, "..") is None
     assert RemnawaveSync._read_deeplink_content(happ_dir, "../../etc/passwd") is None
+
+
+def test_sync_squads_handles_204_no_content_empty_dict(tmp_path, monkeypatch):
+    """Дефект #18: HTTP 204 No Content возвращает {}, который не должен считаться ошибкой."""
+    happ_dir = tmp_path / "HAPP"
+    happ_dir.mkdir()
+    (happ_dir / "HAPP.DEEPLINK").write_text("happ://routing/onadd/test1234\n", encoding="utf-8")
+
+    monkeypatch.setenv("REMNAWAVE_BASE_URL", "https://panel.example.com")
+    monkeypatch.setenv("REMNAWAVE_TOKEN", "test-token")
+
+    squad_uuid = "11111111-2222-3333-4444-555555555555"
+    squads = [{"uuid": squad_uuid, "rule": "HAPP.JSON"}]
+
+    def fake_api_request(method, url, payload=None):
+        if method == "GET" and url.endswith("/external-squads"):
+            return {
+                "response": [
+                    {
+                        "uuid": squad_uuid,
+                        "name": "Test Squad",
+                        "responseHeadersAdd": {"routing": "happ://routing/onadd/old"},
+                        "responseHeadersRemove": [],
+                    }
+                ]
+            }
+        if method == "PATCH" and url.endswith("/external-squads"):
+            # HTTP 204 No Content парсится как пустой словарь {}
+            return {}
+        return None
+
+    monkeypatch.setattr(RemnawaveSync, "_api_request", fake_api_request)
+
+    res = RemnawaveSync.sync_squads(squads, happ_dir)
+    assert res is True
+    assert RemnawaveSync.last_errors == []
+
+
+def test_read_deeplink_content_normalizes_to_upper(tmp_path):
+    """Дефект #17: поиск диплинков нормализуется через .upper()."""
+    happ_dir = tmp_path / "HAPP"
+    happ_dir.mkdir()
+    (happ_dir / "CUSTOM_RULE.DEEPLINK").write_text("happ://routing/onadd/custom\n", encoding="utf-8")
+
+    for query in ("custom_rule.json", "CUSTOM_RULE.JSON", "custom_rule", "custom_rule.deeplink"):
+        content = RemnawaveSync._read_deeplink_content(happ_dir, query)
+        assert content == "happ://routing/onadd/custom"
+

@@ -6,7 +6,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="1.3.3"
+SCRIPT_VERSION="1.4.0"
 CONFIG_RECORD="/etc/geo-routing-server.conf"
 DEFAULT_INSTALL_DIR="/opt/geo-routing-server"
 DOCKER_IMAGE="ghcr.io/xdeptu5/geo-routing-server:latest"
@@ -56,6 +56,10 @@ detect_compose() {
     fi
 }
 
+is_container_running() {
+    [ "$(docker inspect -f '{{.State.Running}}' geo-routing-server 2>/dev/null || true)" = "true" ]
+}
+
 apply_compose() {
     local install_dir="$1"
     local compose_cmd
@@ -100,11 +104,35 @@ check_dependencies() {
     fi
 }
 
+# Проверка защищенных системных директорий: запрет установки в корень и удаления
+is_protected_dir() {
+    local p="${1:-}"
+    [ -n "$p" ] || return 0
+    local real
+    real="$(realpath -m -- "$p" 2>/dev/null || true)"
+    [ -n "$real" ] || real="$p"
+    [ "$real" != "/" ] && real="${real%/}"
+
+    case "$real" in
+        ""|"/"|"/root"|"/opt"|"/etc"|"/usr"|"/bin"|"/sbin"|"/lib"|"/lib64"|"/var"|"/tmp"|"/dev"|"/proc"|"/sys"|"/run"|"/home")
+            return 0
+            ;;
+    esac
+
+    if [ -n "${HOME:-}" ]; then
+        local real_home
+        real_home="$(realpath -m -- "$HOME" 2>/dev/null || true)"
+        [ -n "$real_home" ] && real_home="${real_home%/}"
+        if [ "$real" = "$real_home" ]; then
+            return 0
+        fi
+    fi
+
+    return 1
+}
+
 # Проверяет, принадлежит ли каталог проекту Geo Routing Server:
-# рядом должен лежать compose.yaml/docker-compose.yml с нашим сервисом
-# и .env с нашими ключами (GEO_ROUTING_*/ROUTING_SOURCE_*/ROUTING_TOKEN).
-# В каталоге должен лежать compose.yaml/docker-compose.yml с нашим сервисом.
-# Этого достаточно, чтобы не принять за установку чужой проект с compose.yaml.
+# рядом должен лежать compose.yaml/docker-compose.yml с нашим сервисом.
 has_our_compose() {
     local dir="$1"
     [ -n "$dir" ] || return 1
@@ -121,11 +149,13 @@ has_our_compose() {
     grep -q "geo-routing-server" "$compose_file" 2>/dev/null
 }
 
-# Полный маркер УСТАНОВКИ: наш compose И .env с нашими ключами.
+# Полный маркер УСТАНОВКИ: наш compose И .env с нашими ключами, не системный каталог.
 # Нужен там, где каталог удаляется (uninstall): клон репозитория, где .env
 # ещё не создан, не должен становиться целью rm -rf.
 is_project_dir() {
     local dir="$1"
+    [ -n "$dir" ] || return 1
+    ! is_protected_dir "$dir" || return 1
     has_our_compose "$dir" || return 1
 
     local env_file="$dir/.env"
@@ -140,7 +170,7 @@ get_install_dir() {
         local saved_dir
         # Убираем только \r: путь может содержать пробелы, их трогать нельзя
         saved_dir="$(head -n 1 "$CONFIG_RECORD" 2>/dev/null | tr -d '\r')"
-        if [ -n "$saved_dir" ] && [ -d "$saved_dir" ]; then
+        if [ -n "$saved_dir" ] && [ -d "$saved_dir" ] && ! is_protected_dir "$saved_dir"; then
             echo "$saved_dir"
             return 0
         fi
@@ -151,11 +181,11 @@ get_install_dir() {
     # свежем клоне .env ещё нет, и каталог установки не должен съезжать
     # в /opt из-за этого. Жёсткий маркер (is_project_dir) нужен только
     # при удалении.
-    if has_our_compose "$cwd"; then
+    if has_our_compose "$cwd" && ! is_protected_dir "$cwd"; then
         echo "$cwd"
         return 0
     fi
-    if [ -d "/opt/stacks/geo-routing-server" ]; then
+    if [ -d "/opt/stacks/geo-routing-server" ] && ! is_protected_dir "/opt/stacks/geo-routing-server"; then
         echo "/opt/stacks/geo-routing-server"
         return 0
     fi
@@ -213,8 +243,12 @@ set_env_val() {
 
     if [ ! -f "$file" ]; then
         printf '%s=%s\n' "$key" "$val" > "$file"
+        chmod 600 "$file" 2>/dev/null || true
         return 0
     fi
+
+    # Сохраняем резервную копию .env.bak перед изменением
+    cp -p "$file" "${file}.bak" 2>/dev/null || true
 
     # Запись атомарная и без sed-делмитеров: значение уходит в awk через ENVIRON,
     # поэтому спецсимволы (&, /, |, \, #, кавычки) не интерпретируются.
@@ -233,7 +267,7 @@ set_env_val() {
         rm -f "$tmp"
         return 1
     fi
-    chmod --reference="$file" "$tmp" 2>/dev/null || true
+    chmod --reference="$file" "$tmp" 2>/dev/null || chmod 600 "$tmp" 2>/dev/null || true
     mv -f "$tmp" "$file"
 }
 
@@ -241,6 +275,9 @@ delete_env_val() {
     local key="$1"
     local file="$2"
     [ -f "$file" ] || return 0
+
+    # Сохраняем резервную копию .env.bak перед изменением
+    cp -p "$file" "${file}.bak" 2>/dev/null || true
 
     local tmp
     tmp="$(mktemp "${file}.del.XXXXXX")" || return 1
@@ -253,7 +290,7 @@ delete_env_val() {
         rm -f "$tmp"
         return 1
     fi
-    chmod --reference="$file" "$tmp" 2>/dev/null || true
+    chmod --reference="$file" "$tmp" 2>/dev/null || chmod 600 "$tmp" 2>/dev/null || true
     mv -f "$tmp" "$file"
 }
 
@@ -319,6 +356,9 @@ renumber_squads() {
             tmp_squads+=("$u"$'\t'"$r"$'\t'"$n")
         fi
     done
+
+    # Сохраняем резервную копию .env.bak перед изменением
+    cp -p "$file" "${file}.bak" 2>/dev/null || true
 
     local tmp new_i=1 s
     tmp="$(mktemp "${file}.renumber.XXXXXX")" || return 1
@@ -420,6 +460,17 @@ services:
       - remnawave
     ports:
       - "\${HTTP_BIND:-127.0.0.1}:\${HTTP_PORT:-8080}:80"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+      - SETUID
+      - SETGID
+      - CHOWN
+      - DAC_OVERRIDE
+      - KILL
     volumes:
       - routing_data:/app/www
       - ./.cache:/app/.cache
@@ -459,6 +510,17 @@ services:
     #   - remnawave
     ports:
       - "\${HTTP_BIND:-127.0.0.1}:\${HTTP_PORT:-8080}:80"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+      - SETUID
+      - SETGID
+      - CHOWN
+      - DAC_OVERRIDE
+      - KILL
     volumes:
       - routing_data:/app/www
       - ./.cache:/app/.cache
@@ -608,6 +670,21 @@ cmd_status() {
         return 0
     fi
 
+    # Если контейнер запущен, пробуем получить готовую сводку из контейнера (.sync-summary.txt или app.cli status)
+    local compose_cmd
+    compose_cmd="$(detect_compose)"
+    if is_container_running && [ -n "$compose_cmd" ]; then
+        local container_summary=""
+        container_summary=$( (cd "$install_dir" && $compose_cmd exec -T geo-routing-server cat /app/www/.sync-summary.txt 2>/dev/null) || true )
+        if [ -z "$container_summary" ]; then
+            container_summary=$( (cd "$install_dir" && $compose_cmd exec -T geo-routing-server python3 -m app.cli status 2>/dev/null) || true )
+        fi
+        if [ -n "$container_summary" ]; then
+            echo -e "$container_summary"
+            return 0
+        fi
+    fi
+
     local domain token clients port schedule rules_str ext_geo serve_geoip serve_geosite preset_val serve_formats
     domain="$(get_env_val "DOMAIN" "$env_file" "geo.example.com")"
     token="$(get_env_val "ROUTING_TOKEN" "$env_file" "")"
@@ -744,12 +821,26 @@ cmd_sync() {
     install_dir="$(get_install_dir)"
     local compose_cmd
     compose_cmd="$(detect_compose)"
+
+    if ! is_container_running; then
+        echo -e "\n${C_RED}[!] Контейнер geo-routing-server не запущен.${C_RESET}"
+        echo -e "${C_YELLOW}Запустите сервис перед синхронизацией: ${C_BOLD}geoserver start${C_RESET}\n"
+        return 1
+    fi
     
     echo -e "\n${C_YELLOW}[*] Запуск принудительной синхронизации баз и правил...${C_RESET}"
-    if (cd "$install_dir" && $compose_cmd exec -T geo-routing-server /usr/local/bin/run-routing-sync); then
+    local sync_ok=false
+    if (cd "$install_dir" && $compose_cmd exec -T geo-routing-server python3 -m app.cli sync 2>/dev/null); then
+        sync_ok=true
+    elif (cd "$install_dir" && $compose_cmd exec -T geo-routing-server /usr/local/bin/run-routing-sync); then
+        sync_ok=true
+    fi
+
+    if [ "$sync_ok" = "true" ]; then
         echo -e "\n${C_GREEN}[✓] Синхронизация успешно завершена!${C_RESET}\n"
     else
         echo -e "\n${C_RED}[!] Синхронизация завершилась с ошибкой. Проверьте логи: geoserver logs${C_RESET}\n"
+        return 1
     fi
 }
 
@@ -945,36 +1036,84 @@ cmd_proxy() {
     local install_dir
     install_dir="$(get_install_dir)"
     local env_file="$install_dir/.env"
-    local domain port
+    local compose_cmd
+    compose_cmd="$(detect_compose)"
+
+    if is_container_running && [ -n "$compose_cmd" ]; then
+        local cli_proxy=""
+        cli_proxy=$( (cd "$install_dir" && $compose_cmd exec -T geo-routing-server python3 -m app.cli proxy 2>/dev/null) || true )
+        if [ -n "$cli_proxy" ]; then
+            print_banner
+            echo -e "$cli_proxy"
+            return 0
+        fi
+    fi
+
+    local domain port token preset
     domain="$(get_env_val "DOMAIN" "$env_file" "geo.example.com")"
     port="$(get_env_val "HTTP_PORT" "$env_file" "8080")"
+    token="$(get_env_val "ROUTING_TOKEN" "$env_file" "")"
+    preset="$(get_env_val "ROUTING_SOURCE_PRESET" "$env_file" "geogaga")"
 
     print_banner
     echo -e "${C_WHITE}📋 Конфигурация Reverse Proxy для домена ${C_CYAN}${domain}${C_RESET}\n"
     
-    echo -e "${C_WHITE}${C_BOLD}1. Для Caddy (добавьте в Caddyfile):${C_RESET}"
-    hr 45
-    echo -e "${C_GREEN}${domain} {
-    reverse_proxy 127.0.0.1:${port}
-}${C_RESET}"
-    echo ""
-
-    echo -e "${C_WHITE}${C_BOLD}2. Для Nginx (внутри блока server):${C_RESET}"
-    hr 45
+    echo -e "${C_WHITE}${C_BOLD}1. Для Nginx (внутри блока server { ... }):${C_RESET}"
+    hr 55
+    echo -e "${C_YELLOW}Вариант А (Выделенный поддомен — на домене только geo-routing-server):${C_RESET}"
     echo -e "${C_GREEN}location / {
     proxy_pass http://127.0.0.1:${port};
+    proxy_http_version 1.1;
     proxy_set_header Host \$host;
     proxy_set_header X-Real-IP \$remote_addr;
     proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto \$scheme;
 }${C_RESET}"
     echo ""
+    echo -e "${C_YELLOW}Вариант Б (Общий домен с другим сайтом/сервисом — корень '/' занят):${C_RESET}"
+    echo -e "${C_GRAY}Проксирует только геобазы по токену, не затрагивая корень '/':${C_RESET}"
+    if [ -n "$token" ]; then
+        echo -e "${C_GREEN}location /${token}/ {
+    proxy_pass http://127.0.0.1:${port};
+    proxy_http_version 1.1;
+    proxy_set_header Host \$host;
+    proxy_set_header X-Real-IP \$remote_addr;
+    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto \$scheme;
+}${C_RESET}"
+    else
+        echo -e "${C_GREEN}location ~ ^/[A-Za-z0-9_-]{16,64}/(HAPP|INCY)/ {
+    proxy_pass http://127.0.0.1:${port};
+    proxy_http_version 1.1;
+    proxy_set_header Host \$host;
+    proxy_set_header X-Real-IP \$remote_addr;
+    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto \$scheme;
+}${C_RESET}"
+    fi
+    echo ""
 
-    echo -e "${C_WHITE}${C_BOLD}3. Outbound-правила Xray (GeoGaga Server-Flavor: анти-DMCA, Torrent, SMTP):${C_RESET}"
+    echo -e "${C_WHITE}${C_BOLD}2. Для Caddy (добавьте в Caddyfile):${C_RESET}"
     hr 55
-    echo -e "${C_GRAY}Для защиты вашего VPN-сервера от абуз (BitTorrent, спам, локальные утечки)${C_RESET}"
-    echo -e "${C_GRAY}добавьте правила в секцию \"routing\": { \"rules\": [...] } конфигурации Xray:${C_RESET}\n"
-    echo -e "${C_CYAN}  {
+    echo -e "${C_YELLOW}Вариант А (Выделенный поддомен):${C_RESET}"
+    echo -e "${C_GREEN}${domain} {
+    reverse_proxy 127.0.0.1:${port}
+}${C_RESET}"
+    echo ""
+    if [ -n "$token" ]; then
+        echo -e "${C_YELLOW}Вариант Б (Общий домен — внутри существующего блока ${domain} { ... }):${C_RESET}"
+        echo -e "${C_GREEN}handle /${token}/* {
+    reverse_proxy 127.0.0.1:${port}
+}${C_RESET}"
+        echo ""
+    fi
+
+    if [ "$preset" = "geogaga" ]; then
+        echo -e "${C_WHITE}${C_BOLD}3. Outbound-правила Xray (GeoGaga Server-Flavor: анти-DMCA, Torrent, SMTP):${C_RESET}"
+        hr 55
+        echo -e "${C_GRAY}Опционально: для защиты вашего VPN-сервера от абуз (BitTorrent, спам, локальные утечки)${C_RESET}"
+        echo -e "${C_GRAY}добавьте правила в секцию \"routing\": { \"rules\": [...] } конфигурации Xray:${C_RESET}\n"
+        echo -e "${C_CYAN}  {
     \"type\": \"field\",
     \"protocol\": [\"bittorrent\"],
     \"outboundTag\": \"blocked\"
@@ -989,7 +1128,10 @@ cmd_proxy() {
     \"ip\": [\"geoip:private\"],
     \"outboundTag\": \"blocked\"
   }${C_RESET}"
-    echo -e "\n${C_GRAY}Готовые полные примеры доступны в репозитории: Caddyfile.example и nginx.conf.example${C_RESET}\n"
+        echo ""
+    fi
+
+    echo -e "${C_GRAY}Готовые полные примеры доступны в репозитории: Caddyfile.example и nginx.conf.example${C_RESET}\n"
 }
 
 cmd_uninstall() {
@@ -998,31 +1140,31 @@ cmd_uninstall() {
     local compose_cmd
     compose_cmd="$(detect_compose)"
 
-    # Путь берём из get_install_dir (не из $PWD) и прогоняем через ту же
-    # валидацию маркера проекта, что и при определении каталога установки.
-    if [ -z "$install_dir" ] || [ "$install_dir" = "/" ] || [ "$install_dir" = "." ] || [ "$install_dir" = ".." ]; then
-        echo -e "${C_RED}[!] Не удалось определить каталог установки — удаление отменено.${C_RESET}"
+    if [ -z "$install_dir" ] || is_protected_dir "$install_dir"; then
+        echo -e "${C_RED}[!] Недопустимый или защищённый системный каталог: '${install_dir}' — удаление отменено.${C_RESET}"
         return 1
     fi
 
     local target
     target="$(realpath -m -- "$install_dir" 2>/dev/null || true)"
     [ -n "$target" ] || target="$install_dir"
-    if [ -z "$target" ] || [ "$target" = "/" ] || [ "$target" = "." ] || [ "$target" = ".." ]; then
-        echo -e "${C_RED}[!] Недопустимый путь для удаления: '$target' — удаление отменено.${C_RESET}"
+    [ "$target" != "/" ] && target="${target%/}"
+
+    if is_protected_dir "$target"; then
+        echo -e "${C_RED}[!] Ошибка: '$target' является защищённым системным каталогом (/, /root, /opt, \$HOME) — удаление запрещено!${C_RESET}"
         return 1
     fi
 
-    if ! is_project_dir "$install_dir"; then
-        echo -e "${C_RED}[!] Каталог $install_dir не похож на установку Geo Routing Server${C_RESET}"
-        echo -e "${C_RED}    (нет compose.yaml с нашим сервисом или .env с нашими ключами) — удаление отменено.${C_RESET}"
+    if ! is_project_dir "$target"; then
+        echo -e "${C_RED}[!] Каталог $target не содержит маркеров установки Geo Routing Server${C_RESET}"
+        echo -e "${C_RED}    (нет compose.yaml с сервисом или .env с нашими ключами) — удаление отменено.${C_RESET}"
         return 1
     fi
 
     print_banner
-    echo -e "${C_RED}${C_BOLD}[!] ВНИМАНИЕ: Удаление Geo Routing Server${C_RESET}"
-    echo -e "${C_GRAY}Будут остановлены контейнеры и удалены все конфигурационные файлы.${C_RESET}"
-    echo -e "${C_WHITE}Каталог, который будет удалён: ${C_BOLD}${target}${C_RESET}\n"
+    echo -e "${C_RED}${C_BOLD}[!] ВНИМАНИЕ: Полное удаление Geo Routing Server${C_RESET}"
+    echo -e "${C_GRAY}Будут остановлены контейнеры, удалены тома Docker и все конфигурационные файлы.${C_RESET}"
+    echo -e "${C_WHITE}Подтвердите реальный путь каталога, который будет удалён: ${C_BOLD}${target}${C_RESET}\n"
     local confirm=""
     read -r -p "Вы абсолютно уверены, что хотите удалить сервис? [y/N, Enter = отмена]: " confirm || confirm=""
     if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
@@ -1032,15 +1174,15 @@ cmd_uninstall() {
     fi
 
     echo -e "\n${C_YELLOW}[*] Остановка сервиса и очистка томов Docker...${C_RESET}"
-    if [ -d "$install_dir" ] && [ -n "$compose_cmd" ]; then
-        (cd "$install_dir" && $compose_cmd down -v 2>/dev/null || true)
+    if [ -d "$target" ] && [ -n "$compose_cmd" ]; then
+        (cd "$target" && $compose_cmd down -v 2>/dev/null || true)
     fi
 
-    rm -rf -- "$install_dir"
+    rm -rf -- "$target"
     rm -f "$CONFIG_RECORD"
     rm -f "/usr/local/bin/geoserver"
 
-    echo -e "${C_GREEN}[✓] Geo Routing Server полностью удалён с сервера.${C_RESET}\n"
+    echo -e "${C_GREEN}[✓] Geo Routing Server полностью удалён с сервера (${target}).${C_RESET}\n"
     return 0
 }
 
@@ -2084,7 +2226,9 @@ wizard_install() {
     if [ -n "$prev_ext_geo" ]; then
         public_geo_line="PUBLIC_GEO_BASE_URL=${prev_ext_geo}"
     fi
-    cat > "$env_file" <<EOF
+    local tmp_env
+    tmp_env="$(mktemp "${env_file}.tmp.XXXXXX" 2>/dev/null || mktemp "/tmp/.env.tmp.XXXXXX")"
+    cat > "$tmp_env" <<EOF
 # ==============================================================================
 # GEO ROUTING SERVER CONFIGURATION
 # ==============================================================================
@@ -2105,14 +2249,14 @@ SYNC_ON_START=${sync_on_start}
 EOF
 
     if [ -n "$remna_url" ] && [ -n "$remna_token" ]; then
-        cat >> "$env_file" <<EOF
+        cat >> "$tmp_env" <<EOF
 
 # Remnawave API Integration
 REMNAWAVE_BASE_URL=${remna_url}
 REMNAWAVE_TOKEN=${remna_token}
 EOF
         if [ -n "$remna_net" ]; then
-            echo "DOCKER_NETWORK=${remna_net}" >> "$env_file"
+            echo "DOCKER_NETWORK=${remna_net}" >> "$tmp_env"
         fi
     fi
 
@@ -2134,15 +2278,17 @@ EOF
                             fi
                             ;;
                     esac
-                    if ! grep -q "^${key}=" "$env_file"; then
-                        printf '%s\n' "$line" >> "$env_file"
+                    if ! grep -q "^${key}=" "$tmp_env"; then
+                        printf '%s\n' "$line" >> "$tmp_env"
                     fi
                     ;;
             esac
         done < "$backup_file"
     fi
 
-    chmod 600 "$env_file"
+    [ -f "$env_file" ] && cp -p "$env_file" "${env_file}.bak" 2>/dev/null || true
+    chmod 600 "$tmp_env" 2>/dev/null || true
+    mv -f "$tmp_env" "$env_file"
 
     # Создание compose.yaml
     echo -e "${C_YELLOW}[*] Создание compose.yaml...${C_RESET}"

@@ -17,6 +17,8 @@ WORKDIR /app
 # Настройка встроенного Nginx и перенаправление логов в stdout/stderr
 COPY nginx-internal.conf /etc/nginx/http.d/default.conf
 RUN mkdir -p /app/www /app/.cache /app/custom_geo /run/nginx /var/log/nginx && \
+    chown -R root:nginx /app/www /run/nginx /var/log/nginx && \
+    chmod 755 /app/www /run/nginx /var/log/nginx && \
     ln -sf /dev/stdout /var/log/nginx/access.log && \
     ln -sf /dev/stderr /var/log/nginx/error.log
 

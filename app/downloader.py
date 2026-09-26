@@ -247,18 +247,6 @@ class Downloader:
 
         for attempt in range(1, self.max_retries + 1):
             attempts_made = attempt
-            # Пауза перед повторной попыткой: для 429 уважаем Retry-After,
-            # для остальных временных ошибок — экспоненциальная задержка с джиттером
-            if attempt > 1:
-                if retry_after is not None:
-                    delay = retry_after
-                    logger.info(f"Rate limited (429) on {url}, waiting Retry-After={delay:.1f}s")
-                else:
-                    delay = min(_RETRY_BASE_DELAY * (2 ** (attempt - 2)), _RETRY_MAX_DELAY)
-                    delay *= random.uniform(0.5, 1.5)  # джиттер, чтобы клиенты не повторяли синхронно
-                retry_after = None
-                time.sleep(delay)
-
             try:
                 if not trusted_url:
                     self._validate_untrusted_url(url)
@@ -313,13 +301,13 @@ class Downloader:
                     headers.pop("If-None-Match", None)
                     logger.warning(f"HTTP 304 from {url}, but cache was invalid. Cleared cache, retrying full fetch...")
                     last_error = f"Cache invalidated on 304 for {url}"
-                elif 400 <= e.code < 500 and e.code not in _RETRYABLE_HTTP_STATUS:
-                    # 4xx вроде 404/403/400: правило не появится само,
-                    # повторы лишь тратят max_retries * sleep секунд — выходим сразу
+                elif e.code in (400, 401, 403, 404, 410) or (400 <= e.code < 500 and e.code not in _RETRYABLE_HTTP_STATUS):
+                    # Постоянные ошибки клиента (HTTP 400, 401, 403, 404, 410):
+                    # правило не появится само, немедленно прерываем ретраи
                     last_error = f"HTTP {e.code}: {e.reason}"
                     logger.warning(
                         f"HTTP {e.code} ({e.reason}) from {url}: "
-                        f"non-retryable client error, stopping retries."
+                        f"permanent client error, stopping retries."
                     )
                     break
                 else:
@@ -330,6 +318,17 @@ class Downloader:
             except Exception as e:
                 # Таймауты, сетевые сбои и прочие временные ошибки — повторяем
                 last_error = str(e)
+
+            # sleep() вызывается только если attempt < max_retries (на последней попытке спать не нужно)
+            if attempt < self.max_retries:
+                if retry_after is not None:
+                    delay = retry_after
+                    logger.info(f"Rate limited (429) on {url}, waiting Retry-After={delay:.1f}s")
+                else:
+                    delay = min(_RETRY_BASE_DELAY * (2 ** (attempt - 1)), _RETRY_MAX_DELAY)
+                    delay *= random.uniform(0.5, 1.5)  # джиттер, чтобы клиенты не повторяли синхронно
+                retry_after = None
+                time.sleep(delay)
             
         # Stale-if-error: если сеть недоступна, но есть валидный кэш
         if cache_body_file.is_file():

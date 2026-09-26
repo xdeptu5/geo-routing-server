@@ -1,6 +1,7 @@
 """Тесты app/publisher.py: атомарная публикация и обнаружение изменений."""
 
 import stat
+import sys
 
 import pytest
 
@@ -29,7 +30,8 @@ def test_publish_creates_file_with_content_and_mode(dest):
     assert Publisher.publish_file(dest, "HAPP.JSON", '{"a": 1}') is True
     target = dest / "HAPP.JSON"
     assert target.read_text(encoding="utf-8") == '{"a": 1}'
-    assert stat.S_IMODE(target.stat().st_mode) == 0o644
+    if sys.platform != "win32":
+        assert stat.S_IMODE(target.stat().st_mode) == 0o644
     # во время публикации не остаётся временных файлов
     assert _only_files(dest) == ["HAPP.JSON"]
 
@@ -110,4 +112,5 @@ def test_publish_creates_missing_directory(tmp_path):
     dest = tmp_path / "nested" / "www"
     assert Publisher.publish_file(dest, "HAPP.JSON", "{}") is True
     assert (dest / "HAPP.JSON").is_file()
-    assert stat.S_IMODE(dest.stat().st_mode) == 0o755
+    if sys.platform != "win32":
+        assert stat.S_IMODE(dest.stat().st_mode) == 0o755

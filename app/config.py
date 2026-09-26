@@ -72,6 +72,8 @@ class Config:
             return ["WHITELIST.JSON"]
 
         if not cls.ROUTING_RULES:
+            if not discovered_rules:
+                return ["DEFAULT.JSON", "JSONSUB.JSON", "WHITELIST.JSON"]
             return discovered_rules
         discovered_dict = {r.upper().removesuffix(".JSON"): r for r in discovered_rules}
         active = []
@@ -80,7 +82,7 @@ class Config:
                 active.append(discovered_dict[r])
             else:
                 active.append(f"{r}.JSON")
-        return active or discovered_rules
+        return active or discovered_rules or ["DEFAULT.JSON", "JSONSUB.JSON", "WHITELIST.JSON"]
 
     @classmethod
     def get_display_rules(cls, discovered_rules: list[str] | None = None, client: str = "") -> list[str]:
@@ -185,6 +187,18 @@ class Config:
     GEOIP_SOURCE_URL = _custom_geoip or _active_preset["geoip_url"]
     GEOSITE_SOURCE_URL = _custom_geosite or _active_preset["geosite_url"]
     ROUTING_SOURCE_REPO = (_custom_repo or _active_preset["routing_repo"]).rstrip("/")
+
+    @classmethod
+    def get_preset_geoip_url(cls) -> str:
+        """Возвращает дефолтный URL geoip для активного пресета (без кастомного переопределения)."""
+        preset = cls.SOURCE_PRESETS.get(cls.ROUTING_SOURCE_PRESET, cls.SOURCE_PRESETS["geogaga"])
+        return preset["geoip_url"]
+
+    @classmethod
+    def get_preset_geosite_url(cls) -> str:
+        """Возвращает дефолтный URL geosite для активного пресета (без кастомного переопределения)."""
+        preset = cls.SOURCE_PRESETS.get(cls.ROUTING_SOURCE_PRESET, cls.SOURCE_PRESETS["geogaga"])
+        return preset["geosite_url"]
 
     @classmethod
     def get_source_preset(cls) -> str:

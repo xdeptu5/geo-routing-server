@@ -45,10 +45,22 @@ server {
 
 # ------------------------------------------------------------------------------
 # ВАРИАНТ 3: Проксирование отдельного пути на общем веб-сайте
-# (Замените <ROUTING_TOKEN> на токен из вашего файла .env)
+# (Если корень 'location /' уже занят другим сайтом или сервисом)
 # ------------------------------------------------------------------------------
+# Способ 1: Прямой маршрут по вашему ROUTING_TOKEN из .env
 # location /<ROUTING_TOKEN>/ {
 #     proxy_pass http://127.0.0.1:8080;
+#     proxy_http_version 1.1;
+#     proxy_set_header Host $host;
+#     proxy_set_header X-Real-IP $remote_addr;
+#     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+#     proxy_set_header X-Forwarded-Proto $scheme;
+# }
+#
+# Способ 2: Регулярное выражение (не требует изменений при ротации токена)
+# location ~ ^/[A-Za-z0-9_-]{16,64}/(HAPP|INCY)/ {
+#     proxy_pass http://127.0.0.1:8080;
+#     proxy_http_version 1.1;
 #     proxy_set_header Host $host;
 #     proxy_set_header X-Real-IP $remote_addr;
 #     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
