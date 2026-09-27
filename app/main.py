@@ -71,6 +71,32 @@ def ensure_internal_symlinks(storage_dir: Path, token: str):
                 except Exception:
                     pass
 
+    for preset in Config.ACTIVE_PRESETS[1:]:
+        p_pfx = preset.upper()
+        p_dir = storage_dir / p_pfx
+        try:
+            p_dir.mkdir(parents=True, exist_ok=True)
+            for client in ("HAPP", "INCY"):
+                target = storage_dir / token / p_pfx / client
+                link = p_dir / client
+                if target.is_dir():
+                    rel_target = Path("..") / token / p_pfx / client
+                    tmp_link = p_dir / f".{client}.tmp_link"
+                    try:
+                        if tmp_link.is_symlink() or tmp_link.exists():
+                            tmp_link.unlink()
+                        tmp_link.symlink_to(rel_target, target_is_directory=True)
+                        os.replace(tmp_link, link)
+                    except Exception:
+                        try:
+                            if link.is_symlink() or link.is_file():
+                                link.unlink()
+                            link.symlink_to(rel_target, target_is_directory=True)
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+
 def write_sync_status(
     storage_dir: Path,
     token: str,
@@ -119,16 +145,19 @@ def write_sync_status(
         except OSError:
             pass
 
-def get_summary_banner_text(token: str, storage_dir: Optional[Path] = None) -> str:
-    """Формирует готовый текстовый отчет со всеми ссылками для клиентов (Happ, Incy, Sing-box).
+def _build_preset_sections(token: str, storage_dir: Optional[Path], preset: Optional[str] = None) -> list[str]:
+    is_primary = (preset is None) or (preset.lower() == Config.PRIMARY_PRESET.lower())
+    p_name = Config.PRIMARY_PRESET if is_primary else preset.lower()
+    p_info = Config.get_preset_info(p_name)
+    p_title = p_info.get("name", p_name)
 
-    Проверяет реально опубликованные файлы на диске, если они есть.
-    """
-    base_url = Config.get_base_url(token)
+    base_url = Config.get_base_url(token, preset=None if is_primary else p_name)
     clients_set = set(Config.ENABLED_CLIENTS)
     target_base = storage_dir or Config.STORAGE_DIR
-    happ_dir = target_base / token / "HAPP"
-    incy_dir = target_base / token / "INCY"
+    p_dir_prefix = "" if is_primary else p_name.upper()
+    
+    happ_dir = target_base / token / p_dir_prefix / "HAPP" if p_dir_prefix else target_base / token / "HAPP"
+    incy_dir = target_base / token / p_dir_prefix / "INCY" if p_dir_prefix else target_base / token / "INCY"
 
     # Файлы правил HAPP: проверяем реально опубликованные, иначе fallback на Config
     if happ_dir.is_dir():
@@ -140,7 +169,7 @@ def get_summary_banner_text(token: str, storage_dir: Optional[Path] = None) -> s
     else:
         happ_rules = []
     if not happ_rules:
-        happ_rules = [r.removesuffix(".JSON") for r in Config.get_display_rules(client="HAPP")]
+        happ_rules = [r.removesuffix(".JSON") for r in Config.get_display_rules(client="HAPP", preset=p_name)]
 
     # Файлы правил INCY: проверяем реально опубликованные, иначе fallback на Config
     if incy_dir.is_dir():
@@ -152,7 +181,7 @@ def get_summary_banner_text(token: str, storage_dir: Optional[Path] = None) -> s
     else:
         incy_rules = []
     if not incy_rules:
-        incy_rules = [r.removesuffix(".JSON") for r in Config.get_display_rules(client="INCY")]
+        incy_rules = [r.removesuffix(".JSON") for r in Config.get_display_rules(client="INCY", preset=p_name)]
 
     sections = []
 
@@ -161,8 +190,9 @@ def get_summary_banner_text(token: str, storage_dir: Optional[Path] = None) -> s
     happ_deeplink = "HAPP" in clients_set or "HAPP_DEEPLINK" in clients_set or "HAPP_LOCAL" in clients_set
 
     if happ_geo or happ_deeplink:
-        happ_lines = ["[HAPP]"]
-        if RemnawaveSync.is_configured():
+        header_title = "[HAPP]" if is_primary else f"[HAPP ({p_title})]"
+        happ_lines = [header_title]
+        if is_primary and RemnawaveSync.is_configured():
             happ_lines.append("  - Прямая интеграция с Remnawave API: АКТИВНА (автопатч сквадов без сторонних сервисов)")
             squads = []
             try:
@@ -185,11 +215,21 @@ def get_summary_banner_text(token: str, storage_dir: Optional[Path] = None) -> s
                     for r in happ_rules:
                         happ_lines.append(f"      • {r}:   {base_url}/HAPP/{r}.DEEPLINK")
         elif happ_deeplink:
-            remna_base = os.getenv("REMNAWAVE_BASE_URL", "").strip()
-            remna_token = os.getenv("REMNAWAVE_TOKEN", "").strip()
-            if remna_base and not remna_token:
-                happ_lines.append("  [!] Remnawave API: указан URL, но отсутствует REMNAWAVE_TOKEN")
-                happ_lines.append("      Автопатч не активен. Введите токен через команду: geoserver -> пункт 4")
+            if is_primary:
+                remna_base = os.getenv("REMNAWAVE_BASE_URL", "").strip()
+                remna_token = os.getenv("REMNAWAVE_TOKEN", "").strip()
+                if remna_base and not remna_token:
+                    happ_lines.append("  [!] Remnawave API: указан URL, но отсутствует REMNAWAVE_TOKEN")
+                    happ_lines.append("      Автопатч не активен. Введите токен через команду: geoserver -> пункт 4")
+                else:
+                    if Config.should_serve_deeplink("HAPP"):
+                        happ_lines.append("  - Правила Happ (диплинки happ://routing/onadd/...):")
+                        for r in happ_rules:
+                            happ_lines.append(f"      • {r}:   {base_url}/HAPP/{r}.DEEPLINK")
+                    if Config.should_serve_json("HAPP"):
+                        happ_lines.append("  - Файлы правил JSON:")
+                        for r in happ_rules:
+                            happ_lines.append(f"      • {r}:   {base_url}/HAPP/{r}.JSON")
             else:
                 if Config.should_serve_deeplink("HAPP"):
                     happ_lines.append("  - Правила Happ (диплинки happ://routing/onadd/...):")
@@ -200,7 +240,7 @@ def get_summary_banner_text(token: str, storage_dir: Optional[Path] = None) -> s
                     for r in happ_rules:
                         happ_lines.append(f"      • {r}:   {base_url}/HAPP/{r}.JSON")
 
-        ext_geo_happ = Config.get_external_geo_url("HAPP")
+        ext_geo_happ = Config.get_external_geo_url("HAPP", preset=p_name if not is_primary else None)
         if ext_geo_happ:
             geo_lines = [
                 "  - Внешние ссылки на базы (для клиентов):",
@@ -220,8 +260,9 @@ def get_summary_banner_text(token: str, storage_dir: Optional[Path] = None) -> s
 
     # INCY блок
     if "INCY" in clients_set or "INCY_GEO" in clients_set:
-        incy_lines = ["[INCY]"]
-        ext_geo_incy = Config.get_external_geo_url("INCY")
+        header_title = "[INCY]" if is_primary else f"[INCY ({p_title})]"
+        incy_lines = [header_title]
+        ext_geo_incy = Config.get_external_geo_url("INCY", preset=p_name if not is_primary else None)
 
         if ext_geo_incy:
             geo_lines = [
@@ -253,6 +294,20 @@ def get_summary_banner_text(token: str, storage_dir: Optional[Path] = None) -> s
 {dl_examples}""")
 
         sections.append("\n".join(incy_lines))
+
+    return sections
+
+def get_summary_banner_text(token: str, storage_dir: Optional[Path] = None) -> str:
+    """Формирует готовый текстовый отчет со всеми ссылками для клиентов (Happ, Incy).
+
+    Проверяет реально опубликованные файлы на диске, если они есть.
+    """
+    sections = []
+    # Первичный пресет
+    sections.extend(_build_preset_sections(token, storage_dir, preset=None))
+    # Вторичные пресеты
+    for sec_preset in Config.ACTIVE_PRESETS[1:]:
+        sections.extend(_build_preset_sections(token, storage_dir, preset=sec_preset))
 
     body = "\n\n".join(sections) if sections else "No active clients configured in ENABLED_CLIENTS."
 
@@ -296,8 +351,8 @@ def main():
     
     logger.info("Starting geo-routing-server synchronization...")
     logger.info(f"Active enabled modules: {', '.join(Config.ENABLED_CLIENTS)}")
-    preset_name = Config.SOURCE_PRESETS.get(Config.ROUTING_SOURCE_PRESET, {}).get("name", "Custom")
-    logger.info(f"Routing source preset: {Config.ROUTING_SOURCE_PRESET} ({preset_name})")
+    presets_display = ", ".join(Config.ACTIVE_PRESETS)
+    logger.info(f"Routing source presets: {presets_display} (primary: {Config.PRIMARY_PRESET})")
     Publisher.reset_session()
     
     # 1. Читаем токен и настройки
@@ -315,15 +370,17 @@ def main():
     # 4. Инициализируем загрузчик
     downloader = Downloader(Config.CACHE_DIR)
     
-    # 5. Инициализируем активные процессоры
+    # 5. Инициализируем активные процессоры для всех активных пресетов
     clients_set = set(Config.ENABLED_CLIENTS)
     active_processors = []
     
-    if any(k in clients_set for k in ("HAPP", "HAPP_DEEPLINK", "HAPP_LOCAL", "HAPP_GEO")):
-        active_processors.append(HappProcessor(downloader, Config.STORAGE_DIR, token, Config.DOMAIN))
-        
-    if any(k in clients_set for k in ("INCY", "INCY_GEO")):
-        active_processors.append(IncyProcessor(downloader, Config.STORAGE_DIR, token, Config.DOMAIN))
+    for preset in Config.ACTIVE_PRESETS:
+        p_name = None if preset.lower() == Config.PRIMARY_PRESET.lower() else preset
+        if any(k in clients_set for k in ("HAPP", "HAPP_DEEPLINK", "HAPP_LOCAL", "HAPP_GEO")):
+            active_processors.append(HappProcessor(downloader, Config.STORAGE_DIR, token, Config.DOMAIN, preset_name=p_name))
+            
+        if any(k in clients_set for k in ("INCY", "INCY_GEO")):
+            active_processors.append(IncyProcessor(downloader, Config.STORAGE_DIR, token, Config.DOMAIN, preset_name=p_name))
             
     if not active_processors:
         # Ранний выход при провале старта: фиксируем статус ошибки и выходим с
@@ -339,7 +396,7 @@ def main():
             if not processor.process():
                 failures += 1
         except Exception as e:
-            logger.error(f"Processor {processor.__class__.__name__} encountered unhandled exception: {e}")
+            logger.error(f"Processor {processor.__class__.__name__} ({processor.preset_name}) encountered unhandled exception: {e}")
             failures += 1
             
     # Создаем симлинки для локальных сервисов в Docker
@@ -363,7 +420,12 @@ def main():
     if failures > 0:
         all_errors.append(f"Synchronization finished with {failures} failed processor(s)")
 
-    rules_list = [r for r in Config.get_display_rules()]
+    rules_list = []
+    for preset in Config.ACTIVE_PRESETS:
+        p_pfx = f"{preset.upper()}/" if preset.lower() != Config.PRIMARY_PRESET.lower() else ""
+        for r in Config.get_display_rules(preset=preset):
+            rules_list.append(f"{p_pfx}{r}")
+
     published_files = sorted(list(Publisher.published_registry.keys()))
 
     if remna_ok and failures == 0:

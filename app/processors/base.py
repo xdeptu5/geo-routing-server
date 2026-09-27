@@ -5,7 +5,7 @@ import re
 import urllib.request
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import List, Set
+from typing import List, Optional, Set
 from app.downloader import Downloader
 
 logger = logging.getLogger("geo-routing-server")
@@ -27,13 +27,29 @@ class BaseProcessor(ABC):
     CLIENT_NAME: str = ""
     FALLBACK_FILES: List[str] = ["DEFAULT.JSON", "JSONSUB.JSON", "WHITELIST.JSON"]
     
-    def __init__(self, downloader: Downloader, storage_dir: Path, token: str, domain: str):
+    def __init__(
+        self,
+        downloader: Downloader,
+        storage_dir: Path,
+        token: str,
+        domain: str,
+        preset_name: Optional[str] = None,
+    ):
         self.downloader = downloader
         self.storage_dir = storage_dir
         self.token = token
         self.domain = domain
         self.client_dir = storage_dir / token
         self.is_fallback_discovery: bool = False
+
+        from app.config import Config
+        self.preset_name = (preset_name or Config.PRIMARY_PRESET).lower()
+        if preset_name and preset_name.lower() != Config.PRIMARY_PRESET.lower():
+            self.preset_prefix = preset_name.upper()
+            self.target_base_dir = self.client_dir / self.preset_prefix
+        else:
+            self.preset_prefix = ""
+            self.target_base_dir = self.client_dir
 
     @staticmethod
     def is_safe_config_filename(name: str) -> bool:
@@ -85,14 +101,15 @@ class BaseProcessor(ABC):
     def _discover_config_files(self) -> List[str]:
         """Получает список JSON файлов из GitHub API репозитория для данного клиента."""
         from app.config import Config
-        api_url = Config.get_github_contents_url(self.CLIENT_NAME)
+        api_url = Config.get_github_contents_url(self.CLIENT_NAME, preset=self.preset_name)
         if not api_url:
             logger.warning(
-                f"GitHub API discovery недоступен для {self.CLIENT_NAME} (источник не из GitHub Contents API); "
+                f"GitHub API discovery недоступен для {self.CLIENT_NAME} ({self.preset_name}) "
+                "(источник не из GitHub Contents API); "
                 "очистка устаревших файлов будет идти строго по опубликованному набору"
             )
             self.is_fallback_discovery = True
-            return list(self.FALLBACK_FILES)
+            return Config.get_display_rules([], client=self.CLIENT_NAME, preset=self.preset_name)
 
         try:
             req = urllib.request.Request(
@@ -109,10 +126,10 @@ class BaseProcessor(ABC):
                     self.is_fallback_discovery = False
                     return sorted(discovered)
         except Exception as e:
-            logger.warning(f"GitHub API discovery failed for {self.CLIENT_NAME} ({e}), using fallback file list")
+            logger.warning(f"GitHub API discovery failed for {self.CLIENT_NAME} ({self.preset_name}) ({e}), using fallback file list")
             
         self.is_fallback_discovery = True
-        return list(self.FALLBACK_FILES)
+        return Config.get_display_rules([], client=self.CLIENT_NAME, preset=self.preset_name)
 
     def _remove_local_geo_databases(self, target_dir: Path) -> None:
         """Удаляет устаревшие локальные geoip.dat/geosite.dat из каталога клиента.
@@ -153,17 +170,20 @@ class BaseProcessor(ABC):
         if not target_dir.is_dir():
             return
 
-        from app.config import Config
         from app.publisher import Publisher
 
-        preset = Config.ROUTING_SOURCE_PRESET
+        preset = self.preset_name
 
         # Для пресетов geogaga и vahellame (а также как страховка для других пресетов)
         # учитываем реальный список опубликованных файлов сессии из Publisher.published_registry
+        expected_prefix = f"{self.preset_prefix}/" if self.preset_prefix else ""
         session_published = {
             info.filename
             for key, info in Publisher.published_registry.items()
-            if key.startswith(f"{target_dir.name}/") or key.startswith(f"{self.CLIENT_NAME}/")
+            if (
+                key.startswith(f"{expected_prefix}{target_dir.name}/")
+                or key.startswith(f"{expected_prefix}{self.CLIENT_NAME}/")
+            )
         }
         effective_valid = set(valid_filenames) | session_published
 

@@ -29,14 +29,20 @@ class GeoManager:
         self.downloader = downloader
         self.custom_geo_dir = custom_geo_dir
         
-    def resolve_and_fetch(self, client: str, geo_type: str, default_json_data: Optional[dict] = None) -> bytes:
+    def resolve_and_fetch(
+        self,
+        client: str,
+        geo_type: str,
+        default_json_data: Optional[dict] = None,
+        preset: Optional[str] = None,
+    ) -> bytes:
         """
         Резолвит источник geo-базы с учетом приоритетов и возвращает байты содержимого.
         Приоритет:
         0. Локальный файл в custom_geo/<client>/<geo_type>.dat или custom_geo/<geo_type>.dat
         1. а) Пользовательский URL из .env (GEOIP_SOURCE_URL / GEOSITE_SOURCE_URL), заданный явно
         2. б) Иначе проверить локальный DEFAULT.JSON (если есть)
-        3. в) Иначе использовать URL пресета (geogaga/vahellame)
+        3. в) Иначе использовать URL пресета (geogaga/vahellame/hydraponique)
         4. г) Если загрузка не удалась -> fallback на официальные релизы GitHub (v2fly/meta-rules-dat / runetfreedom)
         """
         # 0. Проверяем локальные файлы в custom_geo
@@ -94,20 +100,20 @@ class GeoManager:
             except DownloadError as e:
                 logger.warning(f"  Failed to download from primary source ({e}), trying preset fallback...")
 
-        # в) Иначе используем URL пресета (geogaga/vahellame)
-        preset_urls = Config.SOURCE_PRESETS.get(Config.ROUTING_SOURCE_PRESET, {})
-        fallback_url = preset_urls.get("geoip_url" if geo_type == "geoip" else "geosite_url", "")
+        # в) Иначе используем URL пресета (geogaga/vahellame/hydraponique)
+        fallback_url = Config.get_preset_geoip_url(preset) if geo_type == "geoip" else Config.get_preset_geosite_url(preset)
         if not fallback_url:
             fallback_url = f"https://github.com/bratishkadrugoimamysynishka/geogaga-client-flavor/releases/latest/download/{geo_type}.dat"
         if fallback_url in self._memory_cache:
             logger.info(f"  Reusing preset {geo_type} for {client}")
             return self._memory_cache[fallback_url]
 
-        logger.info(f"  Downloading {geo_type} for {client} from preset: {fallback_url}")
+        active_p = (preset or Config.PRIMARY_PRESET).lower()
+        logger.info(f"  Downloading {geo_type} for {client} from preset ({active_p}): {fallback_url}")
         try:
             data = self.downloader.fetch(
                 fallback_url,
-                f"global_{geo_type}_fallback",
+                f"global_{geo_type}_{active_p}",
                 kind="binary",
                 trusted_url=False,
             )
@@ -141,7 +147,14 @@ class GeoManager:
             f"Failed to resolve and fetch {geo_type} for {client} from all available sources. Last error: {last_error}"
         )
 
-    def sync_client_geo(self, client: str, target_dir: Path, default_json_data: Optional[dict] = None) -> bool:
+    def sync_client_geo(
+        self,
+        client: str,
+        target_dir: Path,
+        default_json_data: Optional[dict] = None,
+        preset: Optional[str] = None,
+        key_prefix: str = "",
+    ) -> bool:
         """Синхронизирует geoip.dat и geosite.dat для указанного клиента."""
         logger.info(f"Processing {client} GEO databases...")
         success = True
@@ -160,8 +173,8 @@ class GeoManager:
                 continue
 
             try:
-                content = self.resolve_and_fetch(client, geo_type, default_json_data)
-                if not Publisher.publish_file(target_dir, filename, content):
+                content = self.resolve_and_fetch(client, geo_type, default_json_data, preset=preset)
+                if not Publisher.publish_file(target_dir, filename, content, key_prefix=key_prefix):
                     success = False
                 # Очищаем устаревшие .sha256 файлы, если они остались от старых версий
                 old_sha = target_dir / f"{filename}.sha256"

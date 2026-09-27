@@ -326,6 +326,22 @@ ROUTING_SOURCE_PRESET=geogaga
 PUBLIC_GEO_BASE_URL=https://geo-node.example.com/секретный_токен
 ```
 
+#### 6. Мульти-пресет: одновременная раздача двух и более источников
+Позволяет тестировать новые базы (например, GeoGaga), **не отключая действующих клиентов** от Hydraponique, в рамках одного контейнера:
+```env
+DOMAIN=geo.example.com
+ROUTING_TOKEN=секретный_токен
+ENABLED_CLIENTS=HAPP,INCY
+ROUTING_SOURCE_PRESET=hydraponique,geogaga
+```
+* **Основной пресет (`hydraponique`):** отдаётся по стандартным путям (100% совместимость со всеми текущими клиентами):
+  * `https://<DOMAIN>/<TOKEN>/HAPP/`
+  * `https://<DOMAIN>/<TOKEN>/INCY/`
+* **Вторичный пресет (`geogaga`):** изолирован в собственном пространстве путей:
+  * `https://<DOMAIN>/<TOKEN>/GEOGAGA/HAPP/` (в диплинки зашиты ссылки на `.../GEOGAGA/HAPP/geoip.dat`)
+  * `https://<DOMAIN>/<TOKEN>/GEOGAGA/INCY/`
+* **В Remnawave:** для тестового сквада в `squads.json` или меню укажите правило `GEOGAGA/HAPP.JSON` (или просто `HAPP.JSON` — сервер найдет его автоматически).
+
 </details>
 
 

@@ -2,8 +2,34 @@ import os
 import re
 import sys
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 from urllib.parse import quote, urlparse
+
+def _calc_preset_fn(env_preset: str, env_repo: str, presets: dict) -> str:
+    p = env_preset.strip().lower()
+    if p in presets or p == "custom":
+        return p
+    if "hydraponique" in env_repo:
+        return "hydraponique"
+    elif "vahellame" in env_repo:
+        return "vahellame"
+    elif env_repo:
+        return "custom"
+    return "geogaga"
+
+
+def _calc_presets_fn(env_preset: str, env_repo: str, presets: dict) -> list[str]:
+    raw_items = [p.strip().lower() for p in env_preset.split(",") if p.strip()]
+    result = []
+    for p in raw_items:
+        if p in presets or p == "custom":
+            if p not in result:
+                result.append(p)
+    if result:
+        return result
+    single = _calc_preset_fn(env_preset, env_repo, presets)
+    return [single]
+
 
 class Config:
     """Конфигурация приложения, загружаемая из переменных окружения и файлов."""
@@ -61,14 +87,14 @@ class Config:
         return True
 
     @classmethod
-    def get_active_rules(cls, discovered_rules: List[str], client: str = "") -> List[str]:
+    def get_active_rules(cls, discovered_rules: List[str], client: str = "", preset: Optional[str] = None) -> List[str]:
         """Возвращает отфильтрованный список правил для генерации с учетом пресета."""
-        preset = cls.ROUTING_SOURCE_PRESET
+        p = (preset or cls.ROUTING_SOURCE_PRESET).lower()
         c = client.upper() if client else "HAPP"
 
-        if preset == "geogaga":
+        if p == "geogaga":
             return [f"{c}.JSON"]
-        if preset == "vahellame":
+        if p == "vahellame":
             return ["WHITELIST.JSON"]
 
         if not cls.ROUTING_RULES:
@@ -85,16 +111,19 @@ class Config:
         return active or discovered_rules or ["DEFAULT.JSON", "JSONSUB.JSON", "WHITELIST.JSON"]
 
     @classmethod
-    def get_display_rules(cls, discovered_rules: list[str] | None = None, client: str = "") -> list[str]:
+    def get_display_rules(cls, discovered_rules: list[str] | None = None, client: str = "", preset: Optional[str] = None) -> list[str]:
         """Список правил для баннера/сводки: пресет и ROUTING_RULES из конфигурации.
 
         В отличие от get_active_rules([]) не возвращает пустой список, когда
         discovery не выполнялся: без явно заданных ROUTING_RULES берётся
         стандартный набор правил (совпадает с BaseProcessor.FALLBACK_FILES).
         """
-        fallback = ["DEFAULT.JSON", "JSONSUB.JSON", "WHITELIST.JSON"]
+        p = (preset or cls.ROUTING_SOURCE_PRESET).lower()
+        fallback = ["HAPP.JSON" if client.upper() != "INCY" else "INCY.JSON"] if p == "geogaga" else (
+            ["WHITELIST.JSON"] if p == "vahellame" else ["DEFAULT.JSON", "JSONSUB.JSON", "WHITELIST.JSON"]
+        )
         candidates = list(discovered_rules) if discovered_rules else list(cls.ROUTING_RULES or fallback)
-        return cls.get_active_rules(candidates, client=client)
+        return cls.get_active_rules(candidates, client=client, preset=p)
 
     # Внешний URL к гео-базам (если базы отдаются с другого сервера)
     _raw_public_geo = os.getenv("PUBLIC_GEO_BASE_URL", "").strip().rstrip("/")
@@ -103,7 +132,7 @@ class Config:
     PUBLIC_GEO_BASE_URL = _raw_public_geo
     
     @classmethod
-    def get_external_geo_url(cls, client: str) -> str:
+    def get_external_geo_url(cls, client: str, preset: Optional[str] = None) -> str:
         """
         Возвращает публичный URL к внешним базам для конкретного клиента.
         Если указан корень (https://domain/token) -> добавит /{client}
@@ -112,10 +141,11 @@ class Config:
         raw = cls.PUBLIC_GEO_BASE_URL.rstrip("/")
         if not raw:
             return ""
+        p_suffix = f"/{preset.upper()}" if preset and preset.lower() != cls.PRIMARY_PRESET.lower() else ""
         if raw.upper().endswith("/HAPP") or raw.upper().endswith("/INCY"):
             root = raw.rsplit("/", 1)[0]
-            return f"{root}/{client.upper()}"
-        return f"{raw}/{client.upper()}"
+            return f"{root}{p_suffix}/{client.upper()}"
+        return f"{raw}{p_suffix}/{client.upper()}"
     
     @staticmethod
     def _validate_http_url(url: str) -> str:
@@ -154,24 +184,17 @@ class Config:
         },
     }
 
-    def _calc_preset(env_preset: str, env_repo: str, presets: dict) -> str:
-        preset = env_preset.strip().lower()
-        if preset in presets or preset == "custom":
-            return preset
-        if "hydraponique" in env_repo:
-            return "hydraponique"
-        elif "vahellame" in env_repo:
-            return "vahellame"
-        elif env_repo:
-            return "custom"
-        return "geogaga"
+    _calc_preset = staticmethod(_calc_preset_fn)
+    _calc_presets = staticmethod(_calc_presets_fn)
 
-    ROUTING_SOURCE_PRESET = _calc_preset(
+    ACTIVE_PRESETS = _calc_presets_fn(
         os.getenv("ROUTING_SOURCE_PRESET", ""),
         os.getenv("ROUTING_SOURCE_REPO", ""),
         SOURCE_PRESETS
     )
-    _active_preset = SOURCE_PRESETS.get(ROUTING_SOURCE_PRESET, SOURCE_PRESETS["geogaga"])
+    PRIMARY_PRESET = ACTIVE_PRESETS[0]
+    ROUTING_SOURCE_PRESET = PRIMARY_PRESET
+    _active_preset = SOURCE_PRESETS.get(PRIMARY_PRESET, SOURCE_PRESETS["geogaga"])
 
     _custom_geoip = _validate_http_url(os.getenv("GEOIP_SOURCE_URL", ""))
     _custom_geosite = _validate_http_url(os.getenv("GEOSITE_SOURCE_URL", ""))
@@ -189,36 +212,49 @@ class Config:
     ROUTING_SOURCE_REPO = (_custom_repo or _active_preset["routing_repo"]).rstrip("/")
 
     @classmethod
-    def get_preset_geoip_url(cls) -> str:
-        """Возвращает дефолтный URL geoip для активного пресета (без кастомного переопределения)."""
-        preset = cls.SOURCE_PRESETS.get(cls.ROUTING_SOURCE_PRESET, cls.SOURCE_PRESETS["geogaga"])
-        return preset["geoip_url"]
+    def get_preset_info(cls, preset: Optional[str] = None) -> dict:
+        p = (preset or cls.ROUTING_SOURCE_PRESET).lower()
+        return cls.SOURCE_PRESETS.get(p, cls.SOURCE_PRESETS.get(cls.PRIMARY_PRESET, cls.SOURCE_PRESETS["geogaga"]))
 
     @classmethod
-    def get_preset_geosite_url(cls) -> str:
-        """Возвращает дефолтный URL geosite для активного пресета (без кастомного переопределения)."""
-        preset = cls.SOURCE_PRESETS.get(cls.ROUTING_SOURCE_PRESET, cls.SOURCE_PRESETS["geogaga"])
-        return preset["geosite_url"]
+    def get_preset_geoip_url(cls, preset: Optional[str] = None) -> str:
+        """Возвращает дефолтный URL geoip для пресета."""
+        return cls.get_preset_info(preset)["geoip_url"]
+
+    @classmethod
+    def get_preset_geosite_url(cls, preset: Optional[str] = None) -> str:
+        """Возвращает дефолтный URL geosite для пресета."""
+        return cls.get_preset_info(preset)["geosite_url"]
+
+    @classmethod
+    def get_preset_repo(cls, preset: Optional[str] = None) -> str:
+        """Возвращает URL репозитория правил для пресета."""
+        if not preset or preset.lower() == cls.ROUTING_SOURCE_PRESET.lower():
+            return cls.ROUTING_SOURCE_REPO
+        p = preset.lower()
+        info = cls.get_preset_info(p)
+        return info.get("routing_repo", cls.ROUTING_SOURCE_REPO).rstrip("/")
 
     @classmethod
     def get_source_preset(cls) -> str:
         return cls.ROUTING_SOURCE_PRESET
 
     @classmethod
-    def get_rule_url(cls, client: str, file_name: str) -> str:
+    def get_rule_url(cls, client: str, file_name: str, preset: Optional[str] = None) -> str:
         """Возвращает URL для загрузки правила с учетом пресета или кастомного репозитория."""
-        preset = cls.ROUTING_SOURCE_PRESET
-        if preset == "geogaga":
-            return f"{cls.ROUTING_SOURCE_REPO}/{client.lower()}.json"
-        elif preset == "vahellame":
+        p = (preset or cls.ROUTING_SOURCE_PRESET).lower()
+        repo = cls.get_preset_repo(p)
+        if p == "geogaga":
+            return f"{repo}/{client.lower()}.json"
+        elif p == "vahellame":
             return f"https://vahellame.github.io/russia-whitelist-routing/{client.lower()}/"
         else:
-            return f"{cls.ROUTING_SOURCE_REPO}/{client}/{file_name}"
+            return f"{repo}/{client}/{file_name}"
 
     @classmethod
-    def get_default_rule_url(cls, client: str) -> str:
+    def get_default_rule_url(cls, client: str, preset: Optional[str] = None) -> str:
         """Возвращает URL дефолтного правила для извлечения upstream-метаданных."""
-        return cls.get_rule_url(client, "DEFAULT.JSON")
+        return cls.get_rule_url(client, "DEFAULT.JSON", preset=preset)
     
     # Telegram Notifications (опционально)
     TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
@@ -257,12 +293,14 @@ class Config:
         return token
 
     @classmethod
-    def get_base_url(cls, token: str) -> str:
-        """Формирует базовый публичный HTTPS URL."""
+    def get_base_url(cls, token: str, preset: Optional[str] = None) -> str:
+        """Формирует базовый публичный HTTPS URL с учетом пресета."""
+        if preset and preset.lower() != cls.PRIMARY_PRESET.lower():
+            return f"https://{cls.DOMAIN}/{token}/{preset.upper()}"
         return f"https://{cls.DOMAIN}/{token}"
 
     @classmethod
-    def get_github_contents_url(cls, client: str) -> str:
+    def get_github_contents_url(cls, client: str, preset: Optional[str] = None) -> str:
         """Возвращает URL GitHub Contents API для raw.githubusercontent.com источника.
 
         Раскладка каталогов согласуется с get_rule_url:
@@ -272,7 +310,9 @@ class Config:
         Custom sources вне GitHub нельзя безопасно сопоставить с Contents API,
         поэтому discovery для них отключается (возвращается пустая строка).
         """
-        parsed = urlparse(cls.ROUTING_SOURCE_REPO)
+        p = (preset or cls.ROUTING_SOURCE_PRESET).lower()
+        repo = cls.get_preset_repo(p)
+        parsed = urlparse(repo)
         if parsed.scheme != "https" or parsed.hostname != "raw.githubusercontent.com":
             return ""
 
@@ -280,17 +320,17 @@ class Config:
         if len(parts) < 3:
             return ""
 
-        owner, repo, ref = parts[:3]
+        owner, repo_name, ref = parts[:3]
         source_path = parts[3:]
-        if cls.ROUTING_SOURCE_PRESET == "geogaga":
+        if p == "geogaga":
             content_path = "/".join(source_path)
-        elif cls.ROUTING_SOURCE_PRESET == "vahellame":
+        elif p == "vahellame":
             content_path = "/".join([*source_path, "profiles"])
         else:
             content_path = "/".join([*source_path, client])
         quoted_path = quote(content_path, safe="/")
         quoted_ref = quote(ref, safe="")
         return (
-            f"https://api.github.com/repos/{owner}/{repo}/contents/"
+            f"https://api.github.com/repos/{owner}/{repo_name}/contents/"
             f"{quoted_path}?ref={quoted_ref}"
         )

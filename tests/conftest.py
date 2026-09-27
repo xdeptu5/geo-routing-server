@@ -96,7 +96,19 @@ def config_with_env(clean_env):
         for key, value in env.items():
             clean_env.setenv(key, str(value))
         importlib.reload(config_module)
+        for mod_name in list(sys.modules):
+            if mod_name.startswith("app."):
+                mod = sys.modules[mod_name]
+                if hasattr(mod, "Config"):
+                    setattr(mod, "Config", config_module.Config)
         return config_module.Config
 
     yield _load
+    for key in CONFIG_ENV_KEYS:
+        clean_env.delenv(key, raising=False)
     importlib.reload(config_module)
+    for mod_name in list(sys.modules):
+        if mod_name.startswith("app."):
+            mod = sys.modules[mod_name]
+            if hasattr(mod, "Config"):
+                setattr(mod, "Config", config_module.Config)

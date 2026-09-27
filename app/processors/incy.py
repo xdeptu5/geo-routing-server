@@ -20,7 +20,7 @@ class IncyProcessor(BaseProcessor):
 
     def process(self) -> bool:
         client = self.CLIENT_NAME
-        target_dir = self.client_dir / client
+        target_dir = self.target_base_dir / client
         success = True
         
         clients_set = set(Config.ENABLED_CLIENTS)
@@ -32,13 +32,14 @@ class IncyProcessor(BaseProcessor):
         
         default_json_data = None
         if needs_geo or needs_routing:
-            url = Config.get_default_rule_url(client)
-            default_key = f"{client}_{client}" if Config.ROUTING_SOURCE_PRESET == "geogaga" else f"{client}_DEFAULT_orig"
+            url = Config.get_default_rule_url(client, preset=self.preset_name)
+            preset_tag = self.preset_name.lower()
+            default_key = f"{client}_{client}_{preset_tag}" if preset_tag == "geogaga" else f"{client}_DEFAULT_orig_{preset_tag}"
             try:
                 raw_bytes = self.downloader.fetch(url, default_key, kind="rule")
                 default_json_data = self.parse_rule_payload(raw_bytes, client)
             except Exception as e:
-                logger.warning(f"Could not load default rule for {client} from {url}: {e}")
+                logger.warning(f"Could not load default rule for {client} ({self.preset_name}) from {url}: {e}")
             
         # 1. Синхронизируем geoip.dat и geosite.dat (или удаляем локальные, если они не требуются)
         serve_geo = geo_enabled and not bool(Config.PUBLIC_GEO_BASE_URL) and (Config.SERVE_GEOIP or Config.SERVE_GEOSITE)
@@ -47,28 +48,34 @@ class IncyProcessor(BaseProcessor):
             # убираем локальные geoip.dat/geosite.dat
             self._remove_local_geo_databases(target_dir)
         else:
-            if not self.geo_manager.sync_client_geo(client, target_dir, default_json_data):
+            if not self.geo_manager.sync_client_geo(
+                client,
+                target_dir,
+                default_json_data,
+                preset=self.preset_name,
+                key_prefix=self.preset_prefix,
+            ):
                 success = False
             
         # 2. Синхронизируем и модифицируем JSON конфигурации (только если нужен роутинг)
         if needs_routing:
-            logger.info(f"Processing {client} configuration files...")
+            logger.info(f"Processing {client} configuration files ({self.preset_name})...")
             config_files = self._discover_config_files()
-            config_files = Config.get_active_rules(config_files, client="INCY")
+            config_files = Config.get_active_rules(config_files, client="INCY", preset=self.preset_name)
             
-            ext_geo_url = Config.get_external_geo_url(client)
+            ext_geo_url = Config.get_external_geo_url(client, preset=self.preset_name)
             if ext_geo_url:
                 # Внешний сервер уже раздаёт базы. Его URL должны попадать в
                 # JSON конфигурацию независимо от флагов локальной раздачи SERVE_GEO*.
                 geoip_public_url = f"{ext_geo_url}/geoip.dat"
                 geosite_public_url = f"{ext_geo_url}/geosite.dat"
             elif needs_geo:
-                base_public_url = Config.get_base_url(self.token)
+                base_public_url = Config.get_base_url(self.token, preset=self.preset_name)
                 geoip_public_url = f"{base_public_url}/{client}/geoip.dat" if Config.SERVE_GEOIP else ""
                 geosite_public_url = f"{base_public_url}/{client}/geosite.dat" if Config.SERVE_GEOSITE else ""
             else:
-                geoip_public_url = (default_json_data or {}).get("Geoipurl") or Config.GEOIP_SOURCE_URL or ""
-                geosite_public_url = (default_json_data or {}).get("Geositeurl") or Config.GEOSITE_SOURCE_URL or ""
+                geoip_public_url = (default_json_data or {}).get("Geoipurl") or Config.get_preset_geoip_url(self.preset_name) or ""
+                geosite_public_url = (default_json_data or {}).get("Geositeurl") or Config.get_preset_geosite_url(self.preset_name) or ""
             
             published_files: Set[str] = set()
             
@@ -78,12 +85,12 @@ class IncyProcessor(BaseProcessor):
                     logger.error(f"Skipping unsafe filename: {file_name}")
                     continue
                     
-                logger.info(f"  Processing {file_name}...")
+                logger.info(f"  Processing {file_name} ({self.preset_name})...")
                 file_key = file_name.rsplit(".", 1)[0].upper()
-                url = Config.get_rule_url(client, file_name)
+                url = Config.get_rule_url(client, file_name, preset=self.preset_name)
                 
                 try:
-                    raw_bytes = self.downloader.fetch(url, f"{client}_{file_key}", kind="rule")
+                    raw_bytes = self.downloader.fetch(url, f"{client}_{file_key}_{self.preset_name}", kind="rule")
                     data = self.parse_rule_payload(raw_bytes, client)
                     if not isinstance(data, dict):
                         logger.error(f"Invalid JSON format for {file_name} (expected object): {type(data)}")
@@ -104,7 +111,7 @@ class IncyProcessor(BaseProcessor):
                     # Форматируем и публикуем модифицированный JSON, если включена отдача JSON
                     if Config.should_serve_json(client):
                         json_content = json.dumps(data, indent=2, ensure_ascii=False)
-                        if not Publisher.publish_file(target_dir, file_name, json_content):
+                        if not Publisher.publish_file(target_dir, file_name, json_content, key_prefix=self.preset_prefix):
                             success = False
                             continue
                         published_files.add(file_name)
@@ -114,13 +121,13 @@ class IncyProcessor(BaseProcessor):
                         deeplink_content = self.build_deeplink(client, data)
                         # Единый контракт именования: <БАЗА В ВЕРХНЕМ РЕГИСТРЕ>.DEEPLINK
                         deeplink_filename = deeplink_filename_for(file_name)
-                        if Publisher.publish_file(target_dir, deeplink_filename, deeplink_content):
+                        if Publisher.publish_file(target_dir, deeplink_filename, deeplink_content, key_prefix=self.preset_prefix):
                             published_files.add(deeplink_filename)
                         else:
                             success = False
                         
                 except Exception as e:
-                    logger.error(f"Failed to process {file_name}: {e}")
+                    logger.error(f"Failed to process {file_name} ({self.preset_name}): {e}")
                     success = False
                 
         # 4. Удаляем старые файлы, если они больше не существуют.

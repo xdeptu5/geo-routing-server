@@ -171,6 +171,48 @@ def get_status_info(manager: Optional[SquadManager] = None) -> Dict[str, Any]:
                 "external": False,
             }
 
+    # Вторичные пресеты ссылки
+    if len(Config.ACTIVE_PRESETS) > 1:
+        links["secondary_presets"] = {}
+        for sec_preset in Config.ACTIVE_PRESETS[1:]:
+            sec_base_url = Config.get_base_url(token, preset=sec_preset)
+            sec_happ_rules = [
+                r.removesuffix(".JSON") for r in Config.get_display_rules(client="HAPP", preset=sec_preset)
+            ]
+            sec_incy_rules = [
+                r.removesuffix(".JSON") for r in Config.get_display_rules(client="INCY", preset=sec_preset)
+            ]
+            sec_entry: Dict[str, Any] = {"happ": {}, "incy": {}}
+            if any(c in clients_set for c in ("HAPP", "HAPP_DEEPLINK", "HAPP_LOCAL", "HAPP_GEO")):
+                if Config.should_serve_deeplink("HAPP"):
+                    sec_entry["happ"]["deeplinks"] = [
+                        {"rule": r, "url": f"{sec_base_url}/HAPP/{r}.DEEPLINK"} for r in sec_happ_rules
+                    ]
+                if Config.should_serve_json("HAPP"):
+                    sec_entry["happ"]["json"] = [
+                        {"rule": r, "url": f"{sec_base_url}/HAPP/{r}.JSON"} for r in sec_happ_rules
+                    ]
+                sec_entry["happ"]["geo"] = {
+                    "geoip": f"{sec_base_url}/HAPP/geoip.dat" if Config.SERVE_GEOIP else None,
+                    "geosite": f"{sec_base_url}/HAPP/geosite.dat" if Config.SERVE_GEOSITE else None,
+                    "external": False,
+                }
+            if any(c in clients_set for c in ("INCY", "INCY_GEO")):
+                if Config.should_serve_json("INCY"):
+                    sec_entry["incy"]["autorouting_headers"] = [
+                        {
+                            "rule": r,
+                            "header": f"incy://autorouting/onadd/{sec_base_url}/INCY/{r}.JSON",
+                        }
+                        for r in sec_incy_rules
+                    ]
+                sec_entry["incy"]["geo"] = {
+                    "geoip": f"{sec_base_url}/INCY/geoip.dat" if Config.SERVE_GEOIP else None,
+                    "geosite": f"{sec_base_url}/INCY/geosite.dat" if Config.SERVE_GEOSITE else None,
+                    "external": False,
+                }
+            links["secondary_presets"][sec_preset] = sec_entry
+
     return {
         "status": sync_status.get("state", "not_run"),
         "last_sync": sync_status.get("recorded_at"),
@@ -180,6 +222,8 @@ def get_status_info(manager: Optional[SquadManager] = None) -> Dict[str, Any]:
         "base_url": base_url,
         "token": token,
         "routing_source_preset": Config.ROUTING_SOURCE_PRESET,
+        "active_presets": Config.ACTIVE_PRESETS,
+        "primary_preset": Config.PRIMARY_PRESET,
         "enabled_clients": Config.ENABLED_CLIENTS,
         "remnawave": {
             "configured": RemnawaveSync.is_configured(),

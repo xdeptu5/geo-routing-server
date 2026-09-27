@@ -63,7 +63,13 @@ class Publisher:
         return hexdigest
 
     @classmethod
-    def publish_file(cls, dest_dir: Path, filename: str, content: Union[str, bytes]) -> bool:
+    def publish_file(
+        cls,
+        dest_dir: Path,
+        filename: str,
+        content: Union[str, bytes],
+        key_prefix: str = "",
+    ) -> bool:
         """
         Атомарно публикует файл:
         - Проверяет безопасность пути назначения (защита от path traversal)
@@ -140,7 +146,11 @@ class Publisher:
         else:
             logger.debug(f"  Unchanged: {filename}")
 
-        file_key = f"{dest_dir.name}/{filename}"
+        if key_prefix:
+            file_key = f"{key_prefix.strip('/')}/{dest_dir.name}/{filename}"
+        else:
+            file_key = f"{dest_dir.name}/{filename}"
+
         cls.published_registry[file_key] = PublishedFileInfo(
             filename=filename,
             size_bytes=len(raw_data),

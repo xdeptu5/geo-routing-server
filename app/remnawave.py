@@ -210,23 +210,21 @@ class RemnawaveSync:
         return squads
 
     @classmethod
-    def _read_deeplink_content(cls, happ_dir: Path, rule_name: str) -> Optional[str]:
-        """Читает сгенерированный файл .DEEPLINK для указанного правила.
-
-        Имя файла берётся из общего контракта именования (deeplink_filename_for):
-        <БАЗА В ВЕРХНЕМ РЕГИСТРЕ>.DEEPLINK — ровно так же его пишет publisher.
-        """
+    def _read_deeplink_from_dir(cls, dir_path: Path, rule_name: str) -> Optional[str]:
+        """Читает сгенерированный файл .DEEPLINK из указанного каталога."""
+        if not dir_path.is_dir():
+            return None
         base_name = Path(rule_name).name.rsplit(".", 1)[0].upper()
         if not re.match(r"^[A-Za-z0-9_.-]+$", base_name):
             logger.error(f"[Remnawave] Invalid rule name format: {rule_name}")
             return None
-        deeplink_path = (happ_dir / deeplink_filename_for(rule_name)).resolve()
+        deeplink_path = (dir_path / deeplink_filename_for(rule_name)).resolve()
         try:
-            if not deeplink_path.is_relative_to(happ_dir.resolve()):
+            if not deeplink_path.is_relative_to(dir_path.resolve()):
                 logger.error(f"[Remnawave] Path traversal detected in rule: {rule_name}")
                 return None
         except AttributeError:
-            if not str(deeplink_path).startswith(str(happ_dir.resolve()) + os.sep):
+            if not str(deeplink_path).startswith(str(dir_path.resolve()) + os.sep):
                 logger.error(f"[Remnawave] Path traversal detected in rule: {rule_name}")
                 return None
         if deeplink_path.is_file():
@@ -236,12 +234,9 @@ class RemnawaveSync:
                 logger.error(f"Failed to read deeplink file {deeplink_path}: {e}")
                 return None
 
-        # Регистр имени файла задаёт источник, а правило из конфигурации обычно
-        # приходит в верхнем регистре: если точное имя не найдено, ищем файл,
-        # отличающийся только регистром (например, записанный старой версией).
         target_name = deeplink_path.name.lower()
         try:
-            variants = [p for p in happ_dir.iterdir() if p.is_file() and p.name.lower() == target_name]
+            variants = [p for p in dir_path.iterdir() if p.is_file() and p.name.lower() == target_name]
         except OSError:
             variants = []
         if len(variants) == 1:
@@ -257,6 +252,44 @@ class RemnawaveSync:
                 f"[Remnawave] Несколько файлов совпадают с {deeplink_path.name} по регистру: "
                 f"{sorted(v.name for v in variants)} — уточните имя правила"
             )
+        return None
+
+    @classmethod
+    def _read_deeplink_content(cls, happ_dir: Path, rule_name: str) -> Optional[str]:
+        """Читает сгенерированный файл .DEEPLINK для указанного правила.
+
+        Поддерживает:
+        - Прямые правила: JSONSUB.JSON -> ищет в happ_dir
+        - Явные префиксы пресетов: GEOGAGA/HAPP.JSON или GEOGAGA:HAPP.JSON -> ищет в happ_dir.parent / GEOGAGA / HAPP
+        - Автопоиск по вторичным пресетам, если в основном happ_dir файл не найден.
+        """
+        clean_rule = rule_name.strip()
+        if "/" in clean_rule or ":" in clean_rule:
+            sep = "/" if "/" in clean_rule else ":"
+            pfx, r_part = clean_rule.split(sep, 1)
+            pfx = pfx.strip().upper()
+            r_part = r_part.strip()
+            if pfx == Config.PRIMARY_PRESET.upper():
+                target_dir = happ_dir
+            else:
+                target_dir = happ_dir.parent / pfx / "HAPP"
+            return cls._read_deeplink_from_dir(target_dir, r_part)
+
+        # 1. Сначала ищем в основном каталоге HAPP
+        content = cls._read_deeplink_from_dir(happ_dir, clean_rule)
+        if content is not None:
+            return content
+
+        # 2. Если в основном каталоге не найдено, ищем во вторичных активных пресетах
+        for sec_preset in Config.ACTIVE_PRESETS[1:]:
+            sec_dir = happ_dir.parent / sec_preset.upper() / "HAPP"
+            sec_content = cls._read_deeplink_from_dir(sec_dir, clean_rule)
+            if sec_content is not None:
+                logger.info(
+                    f"[Remnawave] Правило {clean_rule} найдено во вторичном пресете {sec_preset.upper()}"
+                )
+                return sec_content
+
         return None
 
     @classmethod
