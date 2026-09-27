@@ -188,9 +188,9 @@ def test_banner_displays_all_active_presets(monkeypatch, tmp_path):
 
     banner = get_summary_banner_text(TOKEN, storage_dir)
 
-    # Присутствует первичный пресет [HAPP] и [INCY]
-    assert "[HAPP]" in banner
-    assert "[INCY]" in banner
+    # Присутствует первичный пресет [HAPP (hydraponique...)] и [INCY (hydraponique...)]
+    assert "[HAPP (hydraponique (Legacy) — Основной пресет)]" in banner
+    assert "[INCY (hydraponique (Legacy) — Основной пресет)]" in banner
     assert f"https://multi.example.com/{TOKEN}/HAPP/geoip.dat" in banner
 
     # Присутствует вторичный пресет с его заголовком и изолированными URL

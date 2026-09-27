@@ -190,7 +190,10 @@ def _build_preset_sections(token: str, storage_dir: Optional[Path], preset: Opti
     happ_deeplink = "HAPP" in clients_set or "HAPP_DEEPLINK" in clients_set or "HAPP_LOCAL" in clients_set
 
     if happ_geo or happ_deeplink:
-        header_title = "[HAPP]" if is_primary else f"[HAPP ({p_title})]"
+        if len(Config.ACTIVE_PRESETS) > 1 and is_primary:
+            header_title = f"[HAPP ({p_title} — Основной пресет)]"
+        else:
+            header_title = f"[HAPP ({p_title})]"
         happ_lines = [header_title]
         if is_primary and RemnawaveSync.is_configured():
             happ_lines.append("  - Прямая интеграция с Remnawave API: АКТИВНА (автопатч сквадов без сторонних сервисов)")
@@ -260,7 +263,10 @@ def _build_preset_sections(token: str, storage_dir: Optional[Path], preset: Opti
 
     # INCY блок
     if "INCY" in clients_set or "INCY_GEO" in clients_set:
-        header_title = "[INCY]" if is_primary else f"[INCY ({p_title})]"
+        if len(Config.ACTIVE_PRESETS) > 1 and is_primary:
+            header_title = f"[INCY ({p_title} — Основной пресет)]"
+        else:
+            header_title = f"[INCY ({p_title})]"
         incy_lines = [header_title]
         ext_geo_incy = Config.get_external_geo_url("INCY", preset=p_name if not is_primary else None)
 
