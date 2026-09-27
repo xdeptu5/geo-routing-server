@@ -322,9 +322,10 @@ renumber_squads() {
 
     # Дефолт правила по умолчанию зависит от пресета источника:
     # geogaga -> HAPP.JSON, vahellame -> WHITELIST.JSON, иначе -> JSONSUB.JSON
-    local preset default_rule
+    local preset default_rule primary_preset
     preset="$(get_env_val "ROUTING_SOURCE_PRESET" "$file" "geogaga")"
-    case "$preset" in
+    primary_preset="${preset%%,*}"
+    case "$primary_preset" in
         geogaga)   default_rule="HAPP.JSON" ;;
         vahellame) default_rule="WHITELIST.JSON" ;;
         *)         default_rule="JSONSUB.JSON" ;;
@@ -598,7 +599,8 @@ active_rule_names() {
     local preset="$1"
     local client="$2"
     local rules_str="$3"
-    case "$preset" in
+    local primary="${preset%%,*}"
+    case "$primary" in
         geogaga)
             printf '%s\n' "$client"
             ;;
@@ -792,6 +794,27 @@ cmd_status() {
                 echo -e "      ${C_GRAY}• ${r} (JSON):${C_RESET} ${C_WHITE}https://${domain}/${token}/HAPP/${r}.JSON${C_RESET}"
             fi
         done < <(active_rule_names "$preset_val" "HAPP" "$rules_str")
+        if [[ "$preset_val" == *","* ]]; then
+            local sec_presets_str="${preset_val#*,}"
+            local sec_p_arr=()
+            local sec_p
+            IFS=',' read -r -a sec_p_arr <<< "$sec_presets_str"
+            for sec_p in "${sec_p_arr[@]}"; do
+                sec_p="$(printf '%s' "$sec_p" | tr -d '[:space:]')"
+                [ -n "$sec_p" ] || continue
+                local sec_u
+                sec_u="$(printf '%s' "$sec_p" | tr '[:lower:]' '[:upper:]')"
+                echo -e "  • Вторичный пресет [ ${C_YELLOW}$sec_p${C_RESET} ]:"
+                if format_serves "$serve_formats" "HAPP" "deeplink"; then
+                    echo -e "      ${C_GRAY}• ${sec_u} (DEEPLINK):${C_RESET} ${C_WHITE}https://${domain}/${token}/${sec_u}/HAPP/${sec_u}.DEEPLINK${C_RESET}"
+                fi
+                if format_serves "$serve_formats" "HAPP" "json"; then
+                    echo -e "      ${C_GRAY}• ${sec_u} (JSON):${C_RESET} ${C_WHITE}https://${domain}/${token}/${sec_u}/HAPP/${sec_u}.JSON${C_RESET}"
+                fi
+                [ "$serve_geoip" = "true" ] && echo -e "      ${C_GRAY}• GeoIP:${C_RESET}   ${C_WHITE}https://${domain}/${token}/${sec_u}/HAPP/geoip.dat${C_RESET}"
+                [ "$serve_geosite" = "true" ] && echo -e "      ${C_GRAY}• GeoSite:${C_RESET} ${C_WHITE}https://${domain}/${token}/${sec_u}/HAPP/geosite.dat${C_RESET}"
+            done
+        fi
         echo ""
     fi
 
@@ -1082,7 +1105,7 @@ cmd_proxy() {
     proxy_set_header X-Forwarded-Proto \$scheme;
 }${C_RESET}"
     else
-        echo -e "${C_GREEN}location ~ ^/[A-Za-z0-9_-]{16,64}/(HAPP|INCY)/ {
+        echo -e "${C_GREEN}location ~ ^/[A-Za-z0-9_-]{16,64}/([A-Za-z0-9_-]+/)?(HAPP|INCY)/ {
     proxy_pass http://127.0.0.1:${port};
     proxy_http_version 1.1;
     proxy_set_header Host \$host;
@@ -1216,7 +1239,84 @@ select_rule_for_squad() {
     local chosen=""
     local custom_r=""
 
-    if [ "$preset" = "geogaga" ]; then
+    if [[ "$preset" == *","* ]]; then
+        local p_list=()
+        local p
+        IFS=',' read -r -a p_list <<< "$preset"
+
+        local opt_rules=()
+        local opt_labels=()
+        local pi
+
+        for ((pi=0; pi<${#p_list[@]}; pi++)); do
+            p="$(printf '%s' "${p_list[$pi]}" | tr -d '[:space:]')"
+            [ -n "$p" ] || continue
+            local p_upper
+            p_upper="$(printf '%s' "$p" | tr '[:lower:]' '[:upper:]')"
+
+            if [ "$pi" -eq 0 ]; then
+                case "$p" in
+                    geogaga)
+                        opt_rules+=("HAPP.JSON")
+                        opt_labels+=("HAPP.JSON ($p: Split-tunneling) [Основной]")
+                        ;;
+                    vahellame)
+                        opt_rules+=("WHITELIST.JSON")
+                        opt_labels+=("WHITELIST.JSON ($p: Строгий белый список) [Основной]")
+                        ;;
+                    *)
+                        opt_rules+=("JSONSUB.JSON" "WHITELIST.JSON" "DEFAULT.JSON")
+                        opt_labels+=("JSONSUB.JSON ($p: маршрут подписок) [Основной]" \
+                                    "WHITELIST.JSON ($p: белый список) [Основной]" \
+                                    "DEFAULT.JSON ($p: базовый) [Основной]")
+                        ;;
+                esac
+            else
+                case "$p" in
+                    geogaga)
+                        opt_rules+=("${p_upper}/HAPP.JSON")
+                        opt_labels+=("${p_upper}/HAPP.JSON ($p: Split-tunneling) [Вторичный]")
+                        ;;
+                    vahellame)
+                        opt_rules+=("${p_upper}/WHITELIST.JSON")
+                        opt_labels+=("${p_upper}/WHITELIST.JSON ($p: Строгий белый список) [Вторичный]")
+                        ;;
+                    *)
+                        opt_rules+=("${p_upper}/JSONSUB.JSON" "${p_upper}/WHITELIST.JSON")
+                        opt_labels+=("${p_upper}/JSONSUB.JSON ($p: подписки) [Вторичный]" \
+                                    "${p_upper}/WHITELIST.JSON ($p: белый список) [Вторичный]")
+                        ;;
+                esac
+            fi
+        done
+
+        local n_opts=${#opt_rules[@]}
+        local i
+        for ((i=0; i<n_opts; i++)); do
+            echo "  $((i+1))) ${opt_labels[$i]}" >&2
+        done
+        local custom_opt=$((n_opts + 1))
+        echo "  ${custom_opt}) Другое правило (ввести вручную)" >&2
+        echo "  0) ⬅️ Отмена" >&2
+
+        local prompt_msg="Номер правила [1-${n_opts}, Enter = 1, 0 = отмена]: "
+        [ -n "$cur_val" ] && prompt_msg="Номер [1-${n_opts}, Enter = оставить $cur_val, 0 = отмена]: "
+        read -r -p "$prompt_msg" ans
+        if [ "$ans" = "0" ]; then
+            return 1
+        elif [ "$ans" = "$custom_opt" ]; then
+            read -r -p "Введите имя правила: " custom_r
+            custom_r="${custom_r#"${custom_r%%[![:space:]]*}"}"
+            custom_r="${custom_r%"${custom_r##*[![:space:]]}"}"
+            chosen="${custom_r:-${opt_rules[0]}}"
+        elif [ -z "$ans" ] && [ -n "$cur_val" ]; then
+            chosen="$cur_val"
+        elif [ -n "$ans" ] && [ "$ans" -ge 1 ] && [ "$ans" -le "$n_opts" ] 2>/dev/null; then
+            chosen="${opt_rules[$((ans - 1))]}"
+        else
+            chosen="${opt_rules[0]}"
+        fi
+    elif [ "$preset" = "geogaga" ]; then
         echo "  1) HAPP.JSON (GeoGaga Split-tunneling) [По умолчанию]" >&2
         echo "  2) Другое правило (ввести вручную)" >&2
         echo "  0) ⬅️ Отмена" >&2
@@ -1819,7 +1919,9 @@ menu_clients_bases() {
         cur_repo="$(get_env_val "ROUTING_SOURCE_REPO" "$env_file" "")"
 
         local preset_label="GeoGaga (Рекомендуется)"
-        if [ "$cur_preset" = "hydraponique" ] || [[ "$cur_repo" == *"hydraponique"* ]]; then
+        if [[ "$cur_preset" == *","* ]]; then
+            preset_label="$cur_preset (Мульти-пресет)"
+        elif [ "$cur_preset" = "hydraponique" ] || [[ "$cur_repo" == *"hydraponique"* ]]; then
             preset_label="hydraponique (Legacy)"
         elif [ "$cur_preset" = "vahellame" ] || [[ "$cur_repo" == *"vahellame"* ]]; then
             preset_label="vahellame (Strict Whitelist)"
@@ -1920,9 +2022,14 @@ menu_clients_bases() {
                 echo "     • Базы russia-whitelist-geoip / geosite"
                 echo ""
                 echo -e "  ${C_WHITE}4) ⚙️ Кастомный источник (вручную указать репозиторий и базы)${C_RESET}"
+                echo ""
+                echo -e "  ${C_MAGENTA}5) ⚡ Мульти-пресет: hydraponique + geogaga (Одновременная раздача)${C_RESET}"
+                echo "     • Основные базы и правила: hydraponique (JSONSUB, WHITELIST)"
+                echo "     • Вторичные базы и правила: geogaga (/GEOGAGA/HAPP/)"
+                echo "     • Безопасное A/B тестирование без отключения клиентов"
                 echo "  0) ⬅️ Назад"
                 echo ""
-                read -r -p "Номер [1-4, Enter = отмена]: " s_opt
+                read -r -p "Номер [1-5, Enter = отмена]: " s_opt
                 if [ -z "$s_opt" ] || [ "$s_opt" = "0" ]; then
                     continue
                 fi
@@ -1957,6 +2064,13 @@ menu_clients_bases() {
                         read -r -p "Прямой URL geosite.dat (GEOSITE_SOURCE_URL, Enter = пропустить): " in_gst
                         [ -n "$in_gst" ] && set_env_val "GEOSITE_SOURCE_URL" "$in_gst" "$env_file"
                         set_env_val "ROUTING_SOURCE_PRESET" "custom" "$env_file"
+                        ;;
+                    5)
+                        set_env_val "ROUTING_SOURCE_PRESET" "hydraponique,geogaga" "$env_file"
+                        set_env_val "ROUTING_RULES" "JSONSUB,WHITELIST" "$env_file"
+                        delete_env_val "ROUTING_SOURCE_REPO" "$env_file"
+                        delete_env_val "GEOIP_SOURCE_URL" "$env_file"
+                        delete_env_val "GEOSITE_SOURCE_URL" "$env_file"
                         ;;
                     *) continue ;;
                 esac
@@ -2120,21 +2234,23 @@ wizard_install() {
     echo "      1) GeoGaga (Client Flavor) [Рекомендуется — легкие базы, умный Split-tunneling]"
     echo "      2) hydraponique (Legacy — классический roscomvpn-routing)"
     echo "      3) vahellame (Strict Whitelist — строгий белый список)"
+    echo "      4) Мульти-пресет (hydraponique + geogaga — одновременная раздача)"
     local def_src_opt="1"
     case "$prev_preset" in
-        hydraponique) def_src_opt="2" ;;
-        vahellame)    def_src_opt="3" ;;
-        custom)       def_src_opt="4" ;;
+        hydraponique)                 def_src_opt="2" ;;
+        vahellame)                    def_src_opt="3" ;;
+        "hydraponique,geogaga"|*","*) def_src_opt="4" ;;
+        custom)                       def_src_opt="5" ;;
     esac
-    local src_list="1-3"
-    if [ "$def_src_opt" = "4" ]; then
-        echo "      4) Оставить текущий кастомный источник (ROUTING_SOURCE_REPO)"
-        src_list="1-4"
+    local src_list="1-4"
+    if [ "$def_src_opt" = "5" ]; then
+        echo "      5) Оставить текущий кастомный источник (ROUTING_SOURCE_REPO)"
+        src_list="1-5"
     fi
     local src_ans=""
     read -r -p "      Выберите вариант [${src_list}, Enter = ${def_src_opt}]: " src_ans || src_ans=""
     case "$src_ans" in
-        1|2|3|4) ;;
+        1|2|3|4|5) ;;
         *) src_ans="$def_src_opt" ;;
     esac
     local source_preset="geogaga"
@@ -2142,7 +2258,8 @@ wizard_install() {
     case "$src_ans" in
         2) source_preset="hydraponique"; def_rules="JSONSUB,WHITELIST" ;;
         3) source_preset="vahellame"; def_rules="WHITELIST" ;;
-        4)
+        4) source_preset="hydraponique,geogaga"; def_rules="JSONSUB,WHITELIST" ;;
+        5)
             if [ "$prev_preset" = "custom" ]; then
                 source_preset="custom"
                 def_rules="${prev_rules:-JSONSUB,WHITELIST}"
