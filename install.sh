@@ -296,106 +296,7 @@ delete_env_val() {
     mv -f "$tmp" "$file"
 }
 
-get_squad_indices() {
-    local file="$1"
-    if [ ! -f "$file" ]; then
-        return
-    fi
-    grep -oE '^(REMNAWAVE_)?SQUAD_[0-9]+_UUID=' "$file" 2>/dev/null | grep -oE '[0-9]+' | sort -nu || true
-}
-
-# Следующий свободный индекс сквада = (максимальный существующий индекс) + 1.
-# count+1 давал коллизию, если средний сквад удаляли (индексы не сплошные).
-next_squad_index() {
-    local file="$1"
-    local max_idx=0
-    local idx
-    while IFS= read -r idx; do
-        if [ -n "$idx" ] && [ "$idx" -gt "$max_idx" ] 2>/dev/null; then
-            max_idx="$idx"
-        fi
-    done < <(get_squad_indices "$file")
-    echo $((max_idx + 1))
-}
-
-renumber_squads() {
-    local file="$1"
-    [ -f "$file" ] || return 0
-
-    # Дефолт правила по умолчанию зависит от пресета источника:
-    # geogaga -> HAPP.JSON, vahellame -> WHITELIST.JSON, иначе -> JSONSUB.JSON
-    local preset default_rule primary_preset
-    preset="$(get_env_val "ROUTING_SOURCE_PRESET" "$file" "geogaga")"
-    primary_preset="${preset%%,*}"
-    case "$primary_preset" in
-        geogaga)   default_rule="HAPP.JSON" ;;
-        vahellame) default_rule="WHITELIST.JSON" ;;
-        *)         default_rule="JSONSUB.JSON" ;;
-    esac
-
-    local indices=()
-    local idx
-    while IFS= read -r idx; do
-        [ -n "$idx" ] && indices+=("$idx")
-    done < <(get_squad_indices "$file")
-
-    if [ ${#indices[@]} -eq 0 ]; then
-        return 0
-    fi
-
-    # Считываем все значения ДО перезаписи файла: дальше — одна атомарная
-    # операция (temp-файл + mv), а не середина из промежуточных set_env_val.
-    local tmp_squads=()
-    local u r n
-    for idx in "${indices[@]}"; do
-        u="$(get_env_val "REMNAWAVE_SQUAD_${idx}_UUID" "$file" "")"
-        [ -z "$u" ] && u="$(get_env_val "SQUAD_${idx}_UUID" "$file" "")"
-        r="$(get_env_val "REMNAWAVE_SQUAD_${idx}_RULE" "$file" "")"
-        [ -z "$r" ] && r="$(get_env_val "SQUAD_${idx}_RULE" "$file" "")"
-        [ -z "$r" ] && r="$default_rule"
-        n="$(get_env_val "REMNAWAVE_SQUAD_${idx}_NAME" "$file" "")"
-        [ -z "$n" ] && n="$(get_env_val "SQUAD_${idx}_NAME" "$file" "")"
-        if [ -n "$u" ]; then
-            tmp_squads+=("$u"$'\t'"$r"$'\t'"$n")
-        fi
-    done
-
-    # Сохраняем резервную копию .env.bak перед изменением
-    cp -p "$file" "${file}.bak" 2>/dev/null || true
-
-    local tmp new_i=1 s
-    tmp="$(mktemp "${file}.renumber.XXXXXX")" || return 1
-    # Вырезаем все ключи вида REMNAWAVE_SQUAD_N_* и SQUAD_N_* (один проход)
-    if GRS_SQUAD_RE='^(REMNAWAVE_)?SQUAD_[0-9]+_(UUID|RULE|NAME)=' awk '
-        BEGIN { re = ENVIRON["GRS_SQUAD_RE"] }
-        $0 !~ re { print }
-    ' "$file" > "$tmp"; then
-        :
-    else
-        rm -f "$tmp"
-        return 1
-    fi
-    # Дописываем пере-нумерованные сквады в конец
-    if {
-        for s in "${tmp_squads[@]}"; do
-            IFS=$'\t' read -r u r n <<< "$s"
-            printf 'REMNAWAVE_SQUAD_%d_UUID=%s\n' "$new_i" "$u"
-            printf 'REMNAWAVE_SQUAD_%d_RULE=%s\n' "$new_i" "$r"
-            if [ -n "$n" ]; then
-                printf 'REMNAWAVE_SQUAD_%d_NAME=%s\n' "$new_i" "$n"
-            fi
-            new_i=$((new_i + 1))
-        done
-        :
-    } >> "$tmp"; then
-        :
-    else
-        rm -f "$tmp"
-        return 1
-    fi
-    chmod --reference="$file" "$tmp" 2>/dev/null || true
-    mv -f "$tmp" "$file"
-}
+# Управление сквадами Remnawave делегировано в Python SquadManager (app.squads / app.cli)
 
 is_port_in_use() {
     local port="$1"
@@ -584,7 +485,7 @@ human_schedule() {
                 if [[ "${m:-}" =~ ^[0-9]+$ ]] && [[ "${h:-}" =~ ^[0-9]+$ ]]; then
                     printf "Ежедневно в %02d:%02d UTC\n" "$h" "$m"
                     return
-                elif [ "$m" = "0" ] && [[ "$h" =~ ^\*/([0-9]+)$ ]]; then
+                elif [ "${m:-}" = "0" ] && [[ "${h:-}" =~ ^\*/([0-9]+)$ ]]; then
                     echo "Каждые ${BASH_REMATCH[1]} ч."
                     return
                 fi
@@ -597,60 +498,6 @@ human_schedule() {
 # Имена файлов правил (без .JSON), которые реально публикует сервер для клиента.
 # Совпадает с Config.get_active_rules(): geogaga -> HAPP.JSON/INCY.JSON,
 # vahellame -> WHITELIST.JSON, иначе — список из ROUTING_RULES.
-active_rule_names() {
-    local preset="$1"
-    local client="$2"
-    local rules_str="$3"
-    local primary="${preset%%,*}"
-    case "$primary" in
-        geogaga)
-            printf '%s\n' "$client"
-            ;;
-        vahellame)
-            printf '%s\n' "WHITELIST"
-            ;;
-        *)
-            local arr=()
-            local r
-            IFS=',' read -r -a arr <<< "$rules_str"
-            for r in "${arr[@]}"; do
-                r="$(printf '%s' "$r" | tr -d '[:space:]' | tr '[:lower:]' '[:upper:]')"
-                r="${r%.JSON}"
-                [ -n "$r" ] && printf '%s\n' "$r"
-            done
-            ;;
-    esac
-    return 0
-}
-
-# Сервится ли формат (json|deeplink) для клиента при текущем SERVE_FORMATS.
-# Зеркалит Config.should_serve_json/should_serve_deeplink.
-format_serves() {
-    local fmt="$1"
-    local client="$2"
-    local kind="$3"
-    case "$fmt" in
-        JSON)
-            [ "$kind" = "json" ]
-            ;;
-        DEEPLINK)
-            [ "$kind" = "deeplink" ]
-            ;;
-        CLIENT_OPTIMIZED|OPTIMIZED)
-            # Happ -> только DEEPLINK, Incy -> только JSON
-            if [ "$kind" = "deeplink" ]; then
-                [ "$client" != "INCY" ]
-            else
-                [ "$client" != "HAPP" ]
-            fi
-            ;;
-        *)
-            # ALL и прочие значения: оба формата
-            return 0
-            ;;
-    esac
-}
-
 cmd_status() {
     local install_dir
     install_dir="$(get_install_dir)"
@@ -667,14 +514,11 @@ cmd_status() {
     fi
 
     if [ ! -r "$env_file" ]; then
-        # .env создаётся с правами 600 и владельцем root: без root значения
-        # прочитались бы как пустые — подсказываем вместо тихого пустого вывода.
         echo -e "${C_YELLOW}Файл $env_file не читается без прав root (права 600).${C_RESET}"
         echo -e "${C_YELLOW}Запустите: ${C_BOLD}sudo geoserver status${C_RESET}"
         return 0
     fi
 
-    # Если контейнер запущен, пробуем получить готовую сводку из контейнера (.sync-summary.txt или app.cli status)
     local compose_cmd
     compose_cmd="$(detect_compose)"
     if is_container_running && [ -n "$compose_cmd" ]; then
@@ -689,156 +533,29 @@ cmd_status() {
         fi
     fi
 
-    local domain token clients port schedule rules_str ext_geo serve_geoip serve_geosite preset_val serve_formats
+    # Базовая сводка параметров, если контейнер остановлен
+    local domain token clients port preset_val
     domain="$(get_env_val "DOMAIN" "$env_file" "geo.example.com")"
     token="$(get_env_val "ROUTING_TOKEN" "$env_file" "")"
     clients="$(get_env_val "ENABLED_CLIENTS" "$env_file" "HAPP,INCY")"
     port="$(get_env_val "HTTP_PORT" "$env_file" "8080")"
-    schedule="$(get_env_val "SCHEDULE" "$env_file" "0 10 * * *")"
-    rules_str="$(get_env_val "ROUTING_RULES" "$env_file" "JSONSUB,WHITELIST")"
-    ext_geo="$(get_env_val "PUBLIC_GEO_BASE_URL" "$env_file" "")"
-    serve_geoip="$(get_env_val "SERVE_GEOIP" "$env_file" "true")"
-    serve_geosite="$(get_env_val "SERVE_GEOSITE" "$env_file" "true")"
-    serve_formats="$(get_env_val "SERVE_FORMATS" "$env_file" "CLIENT_OPTIMIZED" | tr '[:lower:]' '[:upper:]')"
-    [ "$rules_str" = "ALL" ] && rules_str="DEFAULT,JSONSUB,WHITELIST"
+    preset_val="$(get_env_val "ROUTING_SOURCE_PRESET" "$env_file" "geogaga")"
 
-    # Пресет определяет имена публикуемых файлов правил (см. active_rule_names)
-    preset_val="$(get_env_val "ROUTING_SOURCE_PRESET" "$env_file" "")"
-    if [ -z "$preset_val" ]; then
-        local repo_val
-        repo_val="$(get_env_val "ROUTING_SOURCE_REPO" "$env_file" "")"
-        case "$repo_val" in
-            *hydraponique*) preset_val="hydraponique" ;;
-            *vahellame*)    preset_val="vahellame" ;;
-            "")             preset_val="geogaga" ;;
-            *)              preset_val="custom" ;;
-        esac
-    fi
-
-    echo -e "${C_WHITE}📋 Параметры сервера:${C_RESET}"
+    echo -e "${C_WHITE}📋 Параметры сервера (.env):${C_RESET}"
     printf "   ${C_LIGHT_GRAY}%-20s${C_RESET} ${C_WHITE}%s${C_RESET}\n" "Домен:" "https://${domain}"
     printf "   ${C_LIGHT_GRAY}%-20s${C_RESET} ${C_WHITE}%s${C_RESET}\n" "Локальный порт:" "127.0.0.1:${port}"
-    printf "   ${C_LIGHT_GRAY}%-20s${C_RESET} ${C_WHITE}%s${C_RESET}\n" "Токен:" "${token:0:6}...${token: -4}"
+    if [ -n "$token" ]; then
+        if [ "${#token}" -ge 8 ]; then
+            printf "   ${C_LIGHT_GRAY}%-20s${C_RESET} ${C_WHITE}%s${C_RESET}\n" "Токен:" "${token:0:6}...${token: -4}"
+        else
+            printf "   ${C_LIGHT_GRAY}%-20s${C_RESET} ${C_WHITE}%s${C_RESET}\n" "Токен:" "$token"
+        fi
+    fi
     printf "   ${C_LIGHT_GRAY}%-20s${C_RESET} ${C_WHITE}%s${C_RESET}\n" "Клиенты:" "$clients"
-    printf "   ${C_LIGHT_GRAY}%-20s${C_RESET} ${C_WHITE}%s${C_RESET} ${C_GRAY}(%s)${C_RESET}\n" "Расписание:" "$(human_schedule "$schedule")" "$schedule"
+    printf "   ${C_LIGHT_GRAY}%-20s${C_RESET} ${C_WHITE}%s${C_RESET}\n" "Пресет:" "$preset_val"
     echo ""
-
-    echo -e "${C_GREEN}${C_BOLD}🔗 Публичные ссылки для клиентов:${C_RESET}"
-    hr 54
-
-    local happ_has_geo=false
-    local c_item
-    local c_arr=()
-    IFS=',' read -r -a c_arr <<< "$clients"
-    for c_item in "${c_arr[@]}"; do
-        c_item="$(echo "$c_item" | tr -d ' ' | tr '[:lower:]' '[:upper:]')"
-        if [ "$c_item" = "HAPP" ] || [ "$c_item" = "HAPP_GEO" ]; then
-            happ_has_geo=true
-        fi
-    done
-
-    if [[ "$clients" =~ "INCY" ]]; then
-        local incy_geo_base="https://${domain}/${token}/INCY"
-        [ -n "$ext_geo" ] && incy_geo_base="${ext_geo%/}/INCY"
-        local r
-        echo -e "  ${C_CYAN}${C_BOLD}[ Incy ]${C_RESET}"
-        if format_serves "$serve_formats" "INCY" "json"; then
-            echo -e "  • Заголовки подписки (autorouting):"
-            while IFS= read -r r; do
-                [ -n "$r" ] || continue
-                echo -e "      ${C_GRAY}• ${r}:${C_RESET} ${C_WHITE}incy://autorouting/onadd/https://${domain}/${token}/INCY/${r}.JSON${C_RESET}"
-            done < <(active_rule_names "$preset_val" "INCY" "$rules_str")
-        fi
-        if format_serves "$serve_formats" "INCY" "deeplink"; then
-            echo -e "  • Deep-link файлы:"
-            while IFS= read -r r; do
-                [ -n "$r" ] || continue
-                echo -e "      ${C_GRAY}• ${r}:${C_RESET} ${C_WHITE}https://${domain}/${token}/INCY/${r}.DEEPLINK${C_RESET}"
-            done < <(active_rule_names "$preset_val" "INCY" "$rules_str")
-        fi
-        if [ -n "$ext_geo" ]; then
-            echo -e "  • GeoIP база:   ${incy_geo_base}/geoip.dat (внешняя)"
-            echo -e "  • GeoSite база: ${incy_geo_base}/geosite.dat (внешняя)"
-        else
-            [ "$serve_geoip" = "true" ] && echo -e "  • GeoIP база:   ${incy_geo_base}/geoip.dat"
-            [ "$serve_geosite" = "true" ] && echo -e "  • GeoSite база: ${incy_geo_base}/geosite.dat"
-        fi
-        echo ""
-    fi
-
-    if [[ "$clients" =~ "HAPP" ]]; then
-        local happ_geo_base="https://${domain}/${token}/HAPP"
-        [ -n "$ext_geo" ] && happ_geo_base="${ext_geo%/}/HAPP"
-        local r
-        echo -e "  ${C_CYAN}${C_BOLD}[ Happ ]${C_RESET}"
-        if [ -n "$ext_geo" ]; then
-            echo -e "  • GeoIP база:     ${happ_geo_base}/geoip.dat (внешняя)"
-            echo -e "  • GeoSite база:   ${happ_geo_base}/geosite.dat (внешняя)"
-        elif [ "$happ_has_geo" = "true" ]; then
-            [ "$serve_geoip" = "true" ] && echo -e "  • GeoIP база:     ${happ_geo_base}/geoip.dat"
-            [ "$serve_geosite" = "true" ] && echo -e "  • GeoSite база:   ${happ_geo_base}/geosite.dat"
-        fi
-        local remna_check
-        remna_check="$(get_env_val "REMNAWAVE_BASE_URL" "$env_file" "")"
-        if [ -n "$remna_check" ]; then
-            echo -e "  • Правила:        ${C_GRAY}Применяются автоматически в сквады Remnawave (см. блок ниже)${C_RESET}"
-        else
-            echo -e "  • Правила:        ${C_GRAY}Настраиваются в сквадах панели (подключение API: пункт 4)${C_RESET}"
-        fi
-        # Ссылки на правила Happ с учётом SERVE_FORMATS
-        echo -e "  • Ссылки на правила:"
-        while IFS= read -r r; do
-            [ -n "$r" ] || continue
-            if format_serves "$serve_formats" "HAPP" "deeplink"; then
-                echo -e "      ${C_GRAY}• ${r} (DEEPLINK):${C_RESET} ${C_WHITE}https://${domain}/${token}/HAPP/${r}.DEEPLINK${C_RESET}"
-            fi
-            if format_serves "$serve_formats" "HAPP" "json"; then
-                echo -e "      ${C_GRAY}• ${r} (JSON):${C_RESET} ${C_WHITE}https://${domain}/${token}/HAPP/${r}.JSON${C_RESET}"
-            fi
-        done < <(active_rule_names "$preset_val" "HAPP" "$rules_str")
-        if [[ "$preset_val" == *","* ]]; then
-            local sec_presets_str="${preset_val#*,}"
-            local sec_p_arr=()
-            local sec_p
-            IFS=',' read -r -a sec_p_arr <<< "$sec_presets_str"
-            for sec_p in "${sec_p_arr[@]}"; do
-                sec_p="$(printf '%s' "$sec_p" | tr -d '[:space:]')"
-                [ -n "$sec_p" ] || continue
-                local sec_u
-                sec_u="$(printf '%s' "$sec_p" | tr '[:lower:]' '[:upper:]')"
-                echo -e "  • Вторичный пресет [ ${C_YELLOW}$sec_p${C_RESET} ]:"
-                if format_serves "$serve_formats" "HAPP" "deeplink"; then
-                    echo -e "      ${C_GRAY}• ${sec_u} (DEEPLINK):${C_RESET} ${C_WHITE}https://${domain}/${token}/${sec_u}/HAPP/${sec_u}.DEEPLINK${C_RESET}"
-                fi
-                if format_serves "$serve_formats" "HAPP" "json"; then
-                    echo -e "      ${C_GRAY}• ${sec_u} (JSON):${C_RESET} ${C_WHITE}https://${domain}/${token}/${sec_u}/HAPP/${sec_u}.JSON${C_RESET}"
-                fi
-                [ "$serve_geoip" = "true" ] && echo -e "      ${C_GRAY}• GeoIP:${C_RESET}   ${C_WHITE}https://${domain}/${token}/${sec_u}/HAPP/geoip.dat${C_RESET}"
-                [ "$serve_geosite" = "true" ] && echo -e "      ${C_GRAY}• GeoSite:${C_RESET} ${C_WHITE}https://${domain}/${token}/${sec_u}/HAPP/geosite.dat${C_RESET}"
-            done
-        fi
-        echo ""
-    fi
-
-    local remna_url
-    remna_url="$(get_env_val "REMNAWAVE_BASE_URL" "$env_file" "")"
-    if [ -n "$remna_url" ]; then
-        echo -e "  ${C_CYAN}${C_BOLD}[ Remnawave Панель ]${C_RESET}"
-        echo -e "  • URL API: ${C_WHITE}$remna_url${C_RESET}"
-        local indices=()
-        while IFS= read -r idx; do
-            [ -n "$idx" ] && indices+=("$idx")
-        done < <(get_squad_indices "$env_file")
-        for i in "${indices[@]}"; do
-            local sq_uuid sq_rule sq_name
-            sq_uuid="$(get_env_val "REMNAWAVE_SQUAD_${i}_UUID" "$env_file" "")"
-            [ -z "$sq_uuid" ] && sq_uuid="$(get_env_val "SQUAD_${i}_UUID" "$env_file" "")"
-            sq_rule="$(get_env_val "REMNAWAVE_SQUAD_${i}_RULE" "$env_file" "JSONSUB.JSON")"
-            sq_name="$(get_env_val "REMNAWAVE_SQUAD_${i}_NAME" "$env_file" "Сквад #$i")"
-            echo -e "    ✓ ${C_WHITE}${sq_name}${C_RESET} (${sq_uuid:0:8}...) → ${C_GREEN}${sq_rule}${C_RESET}"
-        done
-        echo ""
-    fi
+    echo -e "${C_YELLOW}[!] Контейнер остановлен.${C_RESET}"
+    echo -e "    Для формирования ссылок и актуального статуса запустите: ${C_BOLD}geoserver start${C_RESET}"
 }
 
 cmd_sync() {
@@ -1060,103 +777,30 @@ cmd_edit() {
 cmd_proxy() {
     local install_dir
     install_dir="$(get_install_dir)"
-    local env_file="$install_dir/.env"
     local compose_cmd
     compose_cmd="$(detect_compose)"
 
     if is_container_running && [ -n "$compose_cmd" ]; then
-        local cli_proxy=""
-        cli_proxy=$( (cd "$install_dir" && $compose_cmd exec -T geo-routing-server python3 -m app.cli proxy 2>/dev/null) || true )
-        if [ -n "$cli_proxy" ]; then
-            print_banner
-            echo -e "$cli_proxy"
-            return 0
-        fi
+        (cd "$install_dir" && $compose_cmd exec -T geo-routing-server python3 -m app.cli proxy)
+        return 0
     fi
 
-    local domain port token preset
+    local env_file="$install_dir/.env"
+    local domain port token
     domain="$(get_env_val "DOMAIN" "$env_file" "geo.example.com")"
     port="$(get_env_val "HTTP_PORT" "$env_file" "8080")"
     token="$(get_env_val "ROUTING_TOKEN" "$env_file" "")"
-    preset="$(get_env_val "ROUTING_SOURCE_PRESET" "$env_file" "geogaga")"
 
     print_banner
-    echo -e "${C_WHITE}📋 Конфигурация Reverse Proxy для домена ${C_CYAN}${domain}${C_RESET}\n"
-    
-    echo -e "${C_WHITE}${C_BOLD}1. Для Nginx (внутри блока server { ... }):${C_RESET}"
-    hr 55
-    echo -e "${C_YELLOW}Вариант А (Выделенный поддомен — на домене только geo-routing-server):${C_RESET}"
-    echo -e "${C_GREEN}location / {
-    proxy_pass http://127.0.0.1:${port};
-    proxy_http_version 1.1;
-    proxy_set_header Host \$host;
-    proxy_set_header X-Real-IP \$remote_addr;
-    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto \$scheme;
-}${C_RESET}"
-    echo ""
-    echo -e "${C_YELLOW}Вариант Б (Общий домен с другим сайтом/сервисом — корень '/' занят):${C_RESET}"
-    echo -e "${C_GRAY}Проксирует только геобазы по токену, не затрагивая корень '/':${C_RESET}"
+    echo -e "${C_WHITE}📋 Reverse Proxy для домена ${C_CYAN}${domain}${C_RESET} (порт: ${C_GREEN}127.0.0.1:${port}${C_RESET})\n"
+    echo -e "${C_YELLOW}Nginx (выделенный поддомен):${C_RESET}"
+    echo -e "  location / { proxy_pass http://127.0.0.1:${port}; }"
     if [ -n "$token" ]; then
-        echo -e "${C_GREEN}location /${token}/ {
-    proxy_pass http://127.0.0.1:${port};
-    proxy_http_version 1.1;
-    proxy_set_header Host \$host;
-    proxy_set_header X-Real-IP \$remote_addr;
-    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto \$scheme;
-}${C_RESET}"
-    else
-        echo -e "${C_GREEN}location ~ ^/[A-Za-z0-9_-]{16,64}/([A-Za-z0-9_-]+/)?(HAPP|INCY)/ {
-    proxy_pass http://127.0.0.1:${port};
-    proxy_http_version 1.1;
-    proxy_set_header Host \$host;
-    proxy_set_header X-Real-IP \$remote_addr;
-    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto \$scheme;
-}${C_RESET}"
+        echo -e "${C_YELLOW}Nginx (общий домен по токену):${C_RESET}"
+        echo -e "  location /${token}/ { proxy_pass http://127.0.0.1:${port}; }"
     fi
     echo ""
-
-    echo -e "${C_WHITE}${C_BOLD}2. Для Caddy (добавьте в Caddyfile):${C_RESET}"
-    hr 55
-    echo -e "${C_YELLOW}Вариант А (Выделенный поддомен):${C_RESET}"
-    echo -e "${C_GREEN}${domain} {
-    reverse_proxy 127.0.0.1:${port}
-}${C_RESET}"
-    echo ""
-    if [ -n "$token" ]; then
-        echo -e "${C_YELLOW}Вариант Б (Общий домен — внутри существующего блока ${domain} { ... }):${C_RESET}"
-        echo -e "${C_GREEN}handle /${token}/* {
-    reverse_proxy 127.0.0.1:${port}
-}${C_RESET}"
-        echo ""
-    fi
-
-    if [ "$preset" = "geogaga" ]; then
-        echo -e "${C_WHITE}${C_BOLD}3. Outbound-правила Xray (GeoGaga Server-Flavor: анти-DMCA, Torrent, SMTP):${C_RESET}"
-        hr 55
-        echo -e "${C_GRAY}Опционально: для защиты вашего VPN-сервера от абуз (BitTorrent, спам, локальные утечки)${C_RESET}"
-        echo -e "${C_GRAY}добавьте правила в секцию \"routing\": { \"rules\": [...] } конфигурации Xray:${C_RESET}\n"
-        echo -e "${C_CYAN}  {
-    \"type\": \"field\",
-    \"protocol\": [\"bittorrent\"],
-    \"outboundTag\": \"blocked\"
-  },
-  {
-    \"type\": \"field\",
-    \"port\": \"25,465,587\",
-    \"outboundTag\": \"blocked\"
-  },
-  {
-    \"type\": \"field\",
-    \"ip\": [\"geoip:private\"],
-    \"outboundTag\": \"blocked\"
-  }${C_RESET}"
-        echo ""
-    fi
-
-    echo -e "${C_GRAY}Готовые полные примеры доступны в репозитории: Caddyfile.example и nginx.conf.example${C_RESET}\n"
+    echo -e "${C_GRAY}Для полных интерактивных сниппетов Caddy/Nginx запустите сервис: geoserver start && geoserver proxy${C_RESET}\n"
 }
 
 cmd_uninstall() {
@@ -1218,14 +862,13 @@ cmd_help() {
     echo "  status       Статус сервиса и ссылки на базы/диплинки"
     echo "  sync         Принудительная синхронизация баз прямо сейчас"
     echo "  logs         Просмотр логов контейнера (Ctrl+C для выхода)"
-    echo "  restart        Перезапуск Docker-контейнера"
-    echo "  update         Меню обновлений (образ, скрипт, всё)"
-    echo "  update-all     Обновить всё (Docker-образ + скрипт)"
-    echo "  update-image   Обновление только Docker-образа"
-    echo "  update-script  Обновление только скрипта управления с GitHub"
-    echo "  stop / start   Остановка и запуск контейнера"
-    echo "  config       Редактирование файла .env в редакторе"
+    echo "  squads       Управление сквадами Remnawave (CLI TUI)"
     echo "  proxy        Сниппеты для настройки Caddy и Nginx"
+    echo "  restart      Перезапуск Docker-контейнера"
+    echo "  stop / start Остановка и запуск контейнера"
+    echo "  update       Меню обновлений (образ, скрипт, всё)"
+    echo "  config       Редактирование файла .env в редакторе"
+    echo "  cli          Прямой вызов встроенных Python CLI утилит"
     echo "  uninstall    Полное удаление сервиса с сервера"
     echo ""
     echo "Вызов ${C_BOLD}geoserver${C_RESET} без аргументов открывает интерактивную панель управления."
@@ -1235,187 +878,23 @@ cmd_help() {
 # МОДУЛЬНЫЕ НАСТРОЙКИ (В СТИЛЕ DIGNENZZZ)
 # ==============================================================================
 
-select_rule_for_squad() {
-    local preset="$1"
-    local cur_val="${2:-}"
-    local chosen=""
-    local custom_r=""
+cmd_squads() {
+    local install_dir
+    install_dir="$(get_install_dir)"
+    local compose_cmd
+    compose_cmd="$(detect_compose)"
 
-    if [[ "$preset" == *","* ]]; then
-        local p_list=()
-        local p
-        IFS=',' read -r -a p_list <<< "$preset"
+    local tty_flag="-T"
+    [ -t 0 ] && tty_flag="-it"
 
-        local opt_rules=()
-        local opt_labels=()
-        local pi
-
-        for ((pi=0; pi<${#p_list[@]}; pi++)); do
-            p="$(printf '%s' "${p_list[$pi]}" | tr -d '[:space:]')"
-            [ -n "$p" ] || continue
-            local p_upper
-            p_upper="$(printf '%s' "$p" | tr '[:lower:]' '[:upper:]')"
-
-            if [ "$pi" -eq 0 ]; then
-                case "$p" in
-                    geogaga)
-                        opt_rules+=("HAPP.JSON")
-                        opt_labels+=("HAPP.JSON ($p: Split-tunneling) [Основной]")
-                        ;;
-                    vahellame)
-                        opt_rules+=("WHITELIST.JSON")
-                        opt_labels+=("WHITELIST.JSON ($p: Строгий белый список) [Основной]")
-                        ;;
-                    *)
-                        opt_rules+=("JSONSUB.JSON" "WHITELIST.JSON" "DEFAULT.JSON")
-                        opt_labels+=("JSONSUB.JSON ($p: маршрут подписок) [Основной]" \
-                                    "WHITELIST.JSON ($p: белый список) [Основной]" \
-                                    "DEFAULT.JSON ($p: базовый) [Основной]")
-                        ;;
-                esac
-            else
-                case "$p" in
-                    geogaga)
-                        opt_rules+=("${p_upper}/HAPP.JSON")
-                        opt_labels+=("${p_upper}/HAPP.JSON ($p: Split-tunneling) [Вторичный]")
-                        ;;
-                    vahellame)
-                        opt_rules+=("${p_upper}/WHITELIST.JSON")
-                        opt_labels+=("${p_upper}/WHITELIST.JSON ($p: Строгий белый список) [Вторичный]")
-                        ;;
-                    *)
-                        opt_rules+=("${p_upper}/JSONSUB.JSON" "${p_upper}/WHITELIST.JSON")
-                        opt_labels+=("${p_upper}/JSONSUB.JSON ($p: подписки) [Вторичный]" \
-                                    "${p_upper}/WHITELIST.JSON ($p: белый список) [Вторичный]")
-                        ;;
-                esac
-            fi
-        done
-
-        local n_opts=${#opt_rules[@]}
-        local i
-        for ((i=0; i<n_opts; i++)); do
-            echo "  $((i+1))) ${opt_labels[$i]}" >&2
-        done
-        local custom_opt=$((n_opts + 1))
-        echo "  ${custom_opt}) Другое правило (ввести вручную)" >&2
-        echo "  0) ⬅️ Отмена" >&2
-
-        local prompt_msg="Номер правила [1-${n_opts}, Enter = 1, 0 = отмена]: "
-        [ -n "$cur_val" ] && prompt_msg="Номер [1-${n_opts}, Enter = оставить $cur_val, 0 = отмена]: "
-        read -r -p "$prompt_msg" ans
-        if [ "$ans" = "0" ]; then
-            return 1
-        elif [ "$ans" = "$custom_opt" ]; then
-            read -r -p "Введите имя правила: " custom_r
-            custom_r="${custom_r#"${custom_r%%[![:space:]]*}"}"
-            custom_r="${custom_r%"${custom_r##*[![:space:]]}"}"
-            chosen="${custom_r:-${opt_rules[0]}}"
-        elif [ -z "$ans" ] && [ -n "$cur_val" ]; then
-            chosen="$cur_val"
-        elif [ -n "$ans" ] && [ "$ans" -ge 1 ] && [ "$ans" -le "$n_opts" ] 2>/dev/null; then
-            chosen="${opt_rules[$((ans - 1))]}"
-        else
-            chosen="${opt_rules[0]}"
-        fi
-    elif [ "$preset" = "geogaga" ]; then
-        echo "  1) HAPP.JSON (GeoGaga Split-tunneling) [По умолчанию]" >&2
-        echo "  2) Другое правило (ввести вручную)" >&2
-        echo "  0) ⬅️ Отмена" >&2
-        local prompt_msg="Номер [1, Enter = HAPP.JSON, 0 = отмена]: "
-        [ -n "$cur_val" ] && prompt_msg="Номер [1, Enter = оставить $cur_val, 0 = отмена]: "
-        read -r -p "$prompt_msg" ans
-        if [ "$ans" = "0" ]; then
-            return 1
-        elif [ "$ans" = "2" ]; then
-            read -r -p "Введите имя правила [например, HAPP.JSON]: " custom_r
-            custom_r="${custom_r#"${custom_r%%[![:space:]]*}"}"
-            custom_r="${custom_r%"${custom_r##*[![:space:]]}"}"
-            chosen="${custom_r:-HAPP.JSON}"
-        elif [ -z "$ans" ] && [ -n "$cur_val" ]; then
-            chosen="$cur_val"
-        else
-            chosen="HAPP.JSON"
-        fi
-    elif [ "$preset" = "vahellame" ]; then
-        echo "  1) WHITELIST.JSON (Строгий белый список vahellame)" >&2
-        echo "  2) Другое правило (ввести вручную)" >&2
-        echo "  0) ⬅️ Отмена" >&2
-        local prompt_msg="Номер [1, Enter = WHITELIST.JSON, 0 = отмена]: "
-        [ -n "$cur_val" ] && prompt_msg="Номер [1, Enter = оставить $cur_val, 0 = отмена]: "
-        read -r -p "$prompt_msg" ans
-        if [ "$ans" = "0" ]; then
-            return 1
-        elif [ "$ans" = "2" ]; then
-            read -r -p "Введите имя правила [например, WHITELIST.JSON]: " custom_r
-            custom_r="${custom_r#"${custom_r%%[![:space:]]*}"}"
-            custom_r="${custom_r%"${custom_r##*[![:space:]]}"}"
-            chosen="${custom_r:-WHITELIST.JSON}"
-        elif [ -z "$ans" ] && [ -n "$cur_val" ]; then
-            chosen="$cur_val"
-        else
-            chosen="WHITELIST.JSON"
-        fi
+    if is_container_running && [ -n "$compose_cmd" ]; then
+        (cd "$install_dir" && $compose_cmd exec $tty_flag geo-routing-server python3 -m app.cli squads "$@")
     else
-        echo "  1) JSONSUB.JSON (маршрут подписок)" >&2
-        echo "  2) WHITELIST.JSON (белый список)" >&2
-        echo "  3) DEFAULT.JSON" >&2
-        echo "  4) Другое правило (ввести вручную)" >&2
-        echo "  0) ⬅️ Отмена" >&2
-        local prompt_msg="Номер правила [1-3, Enter = 1, 0 = отмена]: "
-        [ -n "$cur_val" ] && prompt_msg="Номер [1-3, Enter = оставить $cur_val, 0 = отмена]: "
-        read -r -p "$prompt_msg" ans
-        if [ "$ans" = "0" ]; then
-            return 1
-        elif [ "$ans" = "2" ]; then
-            chosen="WHITELIST.JSON"
-        elif [ "$ans" = "3" ]; then
-            chosen="DEFAULT.JSON"
-        elif [ "$ans" = "4" ]; then
-            read -r -p "Введите имя правила: " custom_r
-            custom_r="${custom_r#"${custom_r%%[![:space:]]*}"}"
-            custom_r="${custom_r%"${custom_r##*[![:space:]]}"}"
-            chosen="${custom_r:-JSONSUB.JSON}"
-        elif [ -z "$ans" ] && [ -n "$cur_val" ]; then
-            chosen="$cur_val"
-        else
-            chosen="JSONSUB.JSON"
-        fi
+        echo -e "${C_YELLOW}[!] Контейнер остановлен.${C_RESET}"
+        echo -e "    Для управления сквадами запустите контейнер: ${C_BOLD}geoserver start${C_RESET}"
     fi
-    printf '%s' "$chosen"
-    return 0
 }
 
-# Разбор ответа API внешних сквадов. python3 на хосте НЕ требуется:
-# сначала разбираем внутри нашего контейнера (docker — обязательная
-# зависимость), затем пробуем python3 на хосте, если он случайно есть.
-parse_external_squads() {
-    local resp="$1"
-    local parsed=""
-    local py_code='
-import sys, json
-try:
-    data = json.load(sys.stdin)
-    items = data.get("response", data) if isinstance(data, dict) else data
-    if isinstance(items, dict):
-        items = items.get("externalSquads", items.get("items", []))
-    if isinstance(items, list):
-        for s in items:
-            uuid = s.get("uuid", "")
-            name = s.get("name", "External Squad")
-            if uuid:
-                print(f"{uuid}\t{name}")
-except Exception:
-    pass
-'
-    if [ "$(docker inspect -f '{{.State.Running}}' geo-routing-server 2>/dev/null || true)" = "true" ]; then
-        parsed="$(printf '%s' "$resp" | docker exec -i geo-routing-server python3 -c "$py_code" 2>/dev/null || true)"
-    fi
-    if [ -z "$parsed" ] && command -v python3 >/dev/null 2>&1; then
-        parsed="$(printf '%s' "$resp" | python3 -c "$py_code" 2>/dev/null || true)"
-    fi
-    printf '%s' "$parsed"
-}
 
 menu_remnawave() {
     local install_dir
@@ -1423,29 +902,28 @@ menu_remnawave() {
     local env_file="$install_dir/.env"
 
     while true; do
-        print_banner
-        echo -e "  ${C_WHITE}Раздел:${C_RESET} ⚡ Управление сквадами Remnawave"
-        hr 50
-        echo ""
-
         local remna_url remna_token
         remna_url="$(get_env_val "REMNAWAVE_BASE_URL" "$env_file" "")"
         remna_token="$(get_env_val "REMNAWAVE_TOKEN" "$env_file" "")"
 
-        if [ -z "$remna_url" ]; then
-            echo -e "${C_YELLOW}Интеграция с Remnawave пока не настроена.${C_RESET}\n"
-            echo "  1) Подключить панель Remnawave (URL и API Token)"
+        print_banner
+        echo -e "  ${C_WHITE}Раздел:${C_RESET} ⚡ Интеграция с Remnawave API"
+        hr 50
+        echo ""
+
+        if [ -z "$remna_url" ] || [ -z "$remna_token" ]; then
+            echo -e "${C_YELLOW}Интеграция с Remnawave пока не настроена.${C_RESET}"
+            echo -e "Сервер может автоматически обновлять правила маршрутизации в сквадах Remnawave.\n"
+            echo "  1) 🔗 Подключить панель Remnawave (URL и токен API)"
             echo "  0) ⬅️ Назад"
             echo ""
             read -r -p "Выберите действие [0-1]: " choice
             case "$choice" in
                 1)
                     read -r -p "URL API панели [Enter = http://remnawave:3000/api, 0 = отмена]: " input_url
-                    if [ "$input_url" = "0" ]; then
-                        continue
-                    fi
+                    if [ "$input_url" = "0" ]; then continue; fi
                     remna_url="$(normalize_remna_url "${input_url:-http://remnawave:3000/api}")"
-                    read -r -p "JWT токен администратора [Enter = отмена]: " remna_token
+                    read -r -p "JWT токен администратора [0 = отмена]: " remna_token
                     if [ -z "$remna_token" ] || [ "$remna_token" = "0" ]; then
                         echo -e "${C_GRAY}Отмена.${C_RESET}"
                         sleep 1
@@ -1453,246 +931,62 @@ menu_remnawave() {
                     fi
                     set_env_val "REMNAWAVE_BASE_URL" "$remna_url" "$env_file"
                     set_env_val "REMNAWAVE_TOKEN" "$remna_token" "$env_file"
-                    echo -e "${C_GREEN}[✓] Подключение сохранено!${C_RESET}"
+                    apply_compose "$install_dir" || continue
+                    echo -e "${C_GREEN}[✓] Remnawave успешно подключен!${C_RESET}"
+                    sleep 1
+                    cmd_squads
+                    ;;
+                0) return 0 ;;
+                *) continue ;;
+            esac
+        else
+            echo -e "  ${C_WHITE}Статус:${C_RESET}     ${C_GREEN}● Подключено${C_RESET}"
+            echo -e "  ${C_WHITE}URL API:${C_RESET}    $remna_url"
+            echo -e "  ${C_WHITE}Токен:${C_RESET}      ${remna_token:0:6}...${remna_token: -4}"
+            echo ""
+            echo "  1) ⚡ Управление сквадами (интерактивный TUI: список, добавление, синк)"
+            echo "  2) 🔄 Запустить синхронизацию сквадов прямо сейчас"
+            echo "  3) ✏️ Изменить URL API или токен"
+            echo "  4) ❌ Отключить интеграцию с Remnawave"
+            echo "  0) ⬅️ Назад"
+            echo ""
+            read -r -p "Выберите действие [0-4]: " choice
+            case "$choice" in
+                1)
+                    cmd_squads
+                    ;;
+                2)
+                    cmd_squads sync
+                    echo ""
+                    read -r -p "Нажмите Enter для возврата в меню..."
+                    ;;
+                3)
+                    read -r -p "Новый URL API [Enter = оставить $remna_url, 0 = отмена]: " new_url
+                    if [ "$new_url" != "0" ] && [ -n "$new_url" ]; then
+                        set_env_val "REMNAWAVE_BASE_URL" "$(normalize_remna_url "$new_url")" "$env_file"
+                    fi
+                    read -r -p "Новый токен [Enter = оставить текущий, 0 = отмена]: " new_token
+                    if [ "$new_token" != "0" ] && [ -n "$new_token" ]; then
+                        set_env_val "REMNAWAVE_TOKEN" "$new_token" "$env_file"
+                    fi
+                    apply_compose "$install_dir" || continue
+                    echo -e "${C_GREEN}[✓] Параметры API обновлены.${C_RESET}"
                     sleep 1
                     ;;
-                *) return 0 ;;
+                4)
+                    read -r -p "Вы уверены, что хотите отключить Remnawave? [y/N]: " conf_dis
+                    if [[ "$conf_dis" =~ ^[Yy]$ ]]; then
+                        delete_env_val "REMNAWAVE_BASE_URL" "$env_file"
+                        delete_env_val "REMNAWAVE_TOKEN" "$env_file"
+                        apply_compose "$install_dir" || continue
+                        echo -e "${C_YELLOW}[✓] Интеграция с Remnawave отключена.${C_RESET}"
+                        sleep 1
+                    fi
+                    ;;
+                0) return 0 ;;
+                *) continue ;;
             esac
-            continue
         fi
-
-        echo -e "${C_WHITE}📋 Подключение к панели:${C_RESET}"
-        printf "   ${C_LIGHT_GRAY}%-15s${C_RESET} ${C_WHITE}%s${C_RESET}\n" "URL API:" "$remna_url"
-        printf "   ${C_LIGHT_GRAY}%-15s${C_RESET} ${C_WHITE}%s${C_RESET}\n" "API Token:" "${remna_token:0:6}...${remna_token: -4} (${#remna_token} симв.)"
-        echo ""
-
-        echo -e "${C_WHITE}📋 Текущие привязки сквадов:${C_RESET}"
-        local indices=()
-        while IFS= read -r idx; do
-            [ -n "$idx" ] && indices+=("$idx")
-        done < <(get_squad_indices "$env_file")
-        local count=${#indices[@]}
-        local num=1
-        for idx in "${indices[@]}"; do
-            local sq_uuid sq_rule sq_name
-            sq_uuid="$(get_env_val "REMNAWAVE_SQUAD_${idx}_UUID" "$env_file" "")"
-            [ -z "$sq_uuid" ] && sq_uuid="$(get_env_val "SQUAD_${idx}_UUID" "$env_file" "")"
-            sq_rule="$(get_env_val "REMNAWAVE_SQUAD_${idx}_RULE" "$env_file" "JSONSUB.JSON")"
-            sq_name="$(get_env_val "REMNAWAVE_SQUAD_${idx}_NAME" "$env_file" "Сквад #$num")"
-            echo -e "   ${C_WHITE}${num})${C_RESET} ${sq_name} (${C_GRAY}${sq_uuid:0:8}...${C_RESET}) → ${C_GREEN}${sq_rule}${C_RESET}"
-            num=$((num + 1))
-        done
-
-        if [ "$count" -eq 0 ]; then
-            echo -e "   ${C_GRAY}(нет привязанных сквадов)${C_RESET}"
-        fi
-        echo ""
-
-        echo -e "${C_WHITE}⚙️ Действия:${C_RESET}"
-        echo "   1) 🔄 Синхронизировать список сквадов через Remnawave API"
-        echo "   2) ✏️ Изменить правило для конкретного сквада"
-        echo "   3) ➕ Добавить сквад вручную (по UUID)"
-        echo "   4) ❌ Удалить привязку сквада"
-        echo "   5) 🔑 Изменить URL или API Token панели"
-        echo "   6) 🛡️ Отключить интеграцию с Remnawave"
-        echo "   0) ⬅️ Назад"
-        echo ""
-        read -r -p "Выберите опцию [0-6]: " choice
-
-        case "$choice" in
-            1)
-                echo -e "\n${C_YELLOW}[*] Запрос списка внешних сквадов из Remnawave API...${C_RESET}"
-                local cf_id cf_sec
-                cf_id="$(get_env_val "CLOUDFLARE_ZERO_TRUST_CLIENT_ID" "$env_file" "")"
-                cf_sec="$(get_env_val "CLOUDFLARE_ZERO_TRUST_CLIENT_SECRET" "$env_file" "")"
-                
-                local curl_args=(-fsSL --max-time 10 -H "Authorization: Bearer $remna_token")
-                if [ -n "$cf_id" ] && [ -n "$cf_sec" ]; then
-                    curl_args+=(-H "CF-Access-Client-Id: $cf_id" -H "CF-Access-Client-Secret: $cf_sec")
-                fi
-
-                local api_resp api_base
-                api_base="$(normalize_remna_url "$remna_url")"
-                api_resp=$(curl "${curl_args[@]}" "${api_base}/external-squads" 2>/dev/null || true)
-                if [ -z "$api_resp" ] && [ "$(docker inspect -f '{{.State.Running}}' geo-routing-server 2>/dev/null || true)" = "true" ]; then
-                    api_resp=$(docker exec -e REMNAWAVE_BASE_URL="$api_base" -e REMNAWAVE_TOKEN="$remna_token" geo-routing-server python3 -c '
-from app.remnawave import RemnawaveSync
-import json
-data = RemnawaveSync._api_request("GET", f"{RemnawaveSync.get_api_url()}/external-squads")
-if data:
-    print(json.dumps(data))
-' 2>/dev/null || true)
-                fi
-                if [ -z "$api_resp" ]; then
-                    echo -e "${C_RED}[!] Не удалось получить ответ от API Remnawave. Проверьте URL и токен.${C_RESET}"
-                    read -r -p "Нажмите Enter для возврата в меню..."
-                    continue
-                fi
-
-                # Парсинг сквадов (python3 на хосте не нужен — см. parse_external_squads)
-                local squad_lines=()
-                while IFS= read -r line; do
-                    [ -n "$line" ] && squad_lines+=("$line")
-                done < <(parse_external_squads "$api_resp")
-
-                if [ ${#squad_lines[@]} -eq 0 ]; then
-                    echo -e "${C_YELLOW}[i] Внешние сквады (External Squads) не найдены в панели (проверьте URL/токен и что контейнер geo-routing-server запущен).${C_RESET}"
-                    read -r -p "Нажмите Enter для возврата в меню..."
-                    continue
-                fi
-
-                echo -e "\n${C_GREEN}Найдено ${#squad_lines[@]} внешних сквадов в панели:${C_RESET}"
-                local idx=1
-                for s in "${squad_lines[@]}"; do
-                    local u n
-                    u=$(echo "$s" | cut -f1)
-                    n=$(echo "$s" | cut -f2)
-                    echo "  $idx) $n (${u:0:8}...)"
-                    idx=$((idx + 1))
-                done
-
-                echo ""
-                read -r -p "Привязать сквад по номеру [1-${#squad_lines[@]}, Enter = отмена]: " pick_sq
-                if [ -z "$pick_sq" ] || [ "$pick_sq" = "0" ]; then
-                    continue
-                fi
-                if [ "$pick_sq" -ge 1 ] && [ "$pick_sq" -le "${#squad_lines[@]}" ] 2>/dev/null; then
-                    local sel_line="${squad_lines[$((pick_sq - 1))]}"
-                    local sel_uuid sel_name
-                    sel_uuid=$(echo "$sel_line" | cut -f1)
-                    sel_name=$(echo "$sel_line" | cut -f2)
-
-                    local cur_preset
-                    cur_preset="$(get_env_val "ROUTING_SOURCE_PRESET" "$env_file" "geogaga")"
-                    echo -e "\nВыберите правило для сквада ${C_WHITE}$sel_name${C_RESET}:"
-                    local sel_rule
-                    sel_rule="$(select_rule_for_squad "$cur_preset")" || continue
-                    [ -z "$sel_rule" ] && continue
-
-                    local new_idx
-                    new_idx="$(next_squad_index "$env_file")"
-                    set_env_val "REMNAWAVE_SQUAD_${new_idx}_UUID" "$sel_uuid" "$env_file"
-                    set_env_val "REMNAWAVE_SQUAD_${new_idx}_RULE" "$sel_rule" "$env_file"
-                    set_env_val "REMNAWAVE_SQUAD_${new_idx}_NAME" "$sel_name" "$env_file"
-                    renumber_squads "$env_file"
-                    echo -e "${C_GREEN}[✓] Сквад успешно привязан!${C_RESET}"
-                    apply_compose "$install_dir" || continue
-                    sleep 1
-                fi
-                ;;
-            2)
-                # Точечное изменение правила для конкретного сквада
-                if [ "$count" -eq 0 ]; then
-                    echo -e "${C_YELLOW}Нет сквадов для редактирования.${C_RESET}"
-                    sleep 1
-                    continue
-                fi
-                read -r -p "Введите номер сквада [1-$count, Enter = отмена]: " pick_num
-                if [ -z "$pick_num" ] || [ "$pick_num" = "0" ]; then
-                    continue
-                fi
-                if [ "$pick_num" -ge 1 ] && [ "$pick_num" -le "$count" ] 2>/dev/null; then
-                    local real_idx="${indices[$((pick_num - 1))]}"
-                    local cur_r cur_n cur_preset
-                    cur_r="$(get_env_val "REMNAWAVE_SQUAD_${real_idx}_RULE" "$env_file" "HAPP.JSON")"
-                    cur_n="$(get_env_val "REMNAWAVE_SQUAD_${real_idx}_NAME" "$env_file" "Сквад #$pick_num")"
-                    cur_preset="$(get_env_val "ROUTING_SOURCE_PRESET" "$env_file" "geogaga")"
-
-                    echo -e "\nТекущее правило для ${C_WHITE}$cur_n${C_RESET}: ${C_GREEN}$cur_r${C_RESET}"
-                    echo "Выберите новое правило:"
-                    local new_rule
-                    new_rule="$(select_rule_for_squad "$cur_preset" "$cur_r")" || continue
-                    [ -z "$new_rule" ] && continue
-
-                    set_env_val "REMNAWAVE_SQUAD_${real_idx}_RULE" "$new_rule" "$env_file"
-                    echo -e "${C_GREEN}[✓] Правило для '$cur_n' изменено на: $new_rule${C_RESET}"
-                    apply_compose "$install_dir" || continue
-                    sleep 1
-                fi
-                ;;
-            3)
-                read -r -p "Введите UUID сквада из Remnawave [Enter = отмена]: " new_uuid
-                if [ -z "$new_uuid" ] || [ "$new_uuid" = "0" ]; then
-                    continue
-                fi
-                read -r -p "Название сквада (для себя) [Enter = Сквад, 0 = отмена]: " new_name
-                if [ "$new_name" = "0" ]; then
-                    continue
-                fi
-                new_name="${new_name:-Сквад}"
-                local cur_preset
-                cur_preset="$(get_env_val "ROUTING_SOURCE_PRESET" "$env_file" "geogaga")"
-                echo "Выберите правило:"
-                local r_val
-                r_val="$(select_rule_for_squad "$cur_preset")" || continue
-                [ -z "$r_val" ] && continue
-
-                local n_idx
-                n_idx="$(next_squad_index "$env_file")"
-                set_env_val "REMNAWAVE_SQUAD_${n_idx}_UUID" "$new_uuid" "$env_file"
-                set_env_val "REMNAWAVE_SQUAD_${n_idx}_RULE" "$r_val" "$env_file"
-                set_env_val "REMNAWAVE_SQUAD_${n_idx}_NAME" "$new_name" "$env_file"
-                renumber_squads "$env_file"
-                echo -e "${C_GREEN}[✓] Сквад добавлен.${C_RESET}"
-                apply_compose "$install_dir" || continue
-                sleep 1
-                ;;
-            4)
-                if [ "$count" -eq 0 ]; then
-                    echo -e "${C_YELLOW}Нет привязанных сквадов для удаления.${C_RESET}"
-                    sleep 1
-                    continue
-                fi
-                read -r -p "Введите номер сквада для удаления [1-$count, Enter = отмена]: " del_num
-                if [ -z "$del_num" ] || [ "$del_num" = "0" ]; then
-                    continue
-                fi
-                if [ "$del_num" -ge 1 ] && [ "$del_num" -le "$count" ] 2>/dev/null; then
-                    local del_idx="${indices[$((del_num - 1))]}"
-                    delete_env_val "REMNAWAVE_SQUAD_${del_idx}_UUID" "$env_file"
-                    delete_env_val "REMNAWAVE_SQUAD_${del_idx}_RULE" "$env_file"
-                    delete_env_val "REMNAWAVE_SQUAD_${del_idx}_NAME" "$env_file"
-                    delete_env_val "SQUAD_${del_idx}_UUID" "$env_file"
-                    delete_env_val "SQUAD_${del_idx}_RULE" "$env_file"
-                    delete_env_val "SQUAD_${del_idx}_NAME" "$env_file"
-                    renumber_squads "$env_file"
-                    apply_compose "$install_dir" || continue
-                    echo -e "${C_GREEN}[✓] Привязка сквада удалена.${C_RESET}"
-                    sleep 1
-                fi
-                ;;
-            5)
-                read -r -p "Новый URL API [Enter = оставить $remna_url, 0 = отмена]: " new_url
-                if [ "$new_url" = "0" ]; then
-                    continue
-                fi
-                new_url="$(normalize_remna_url "${new_url:-$remna_url}")"
-                read -r -p "Новый JWT токен [Enter = оставить текущий, 0 = отмена]: " new_token
-                if [ "$new_token" = "0" ]; then
-                    continue
-                fi
-                new_token="${new_token:-$remna_token}"
-                set_env_val "REMNAWAVE_BASE_URL" "$new_url" "$env_file"
-                set_env_val "REMNAWAVE_TOKEN" "$new_token" "$env_file"
-                apply_compose "$install_dir" || continue
-                echo -e "${C_GREEN}[✓] Параметры API обновлены.${C_RESET}"
-                sleep 1
-                ;;
-            6)
-                read -r -p "Вы уверены, что хотите отключить Remnawave? [y/N, Enter = отмена]: " conf_dis
-                if [[ "$conf_dis" =~ ^[Yy]$ ]]; then
-                    delete_env_val "REMNAWAVE_BASE_URL" "$env_file"
-                    delete_env_val "REMNAWAVE_TOKEN" "$env_file"
-                    apply_compose "$install_dir" || continue
-                    echo -e "${C_YELLOW}[✓] Интеграция с Remnawave отключена.${C_RESET}"
-                    sleep 1
-                else
-                    echo -e "${C_GRAY}Отмена.${C_RESET}"
-                    sleep 1
-                fi
-                ;;
-            0) return 0 ;;
-        esac
     done
 }
 
@@ -2528,6 +1822,18 @@ main() {
         update-all)                  cmd_update && cmd_update_script ;;
         proxy)                       cmd_proxy ;;
         edit|config)                 cmd_edit ;;
+        squads)
+            shift
+            cmd_squads "$@"
+            ;;
+        cli)
+            shift
+            local install_dir compose_cmd tty_flag="-T"
+            [ -t 0 ] && tty_flag="-it"
+            install_dir="$(get_install_dir)"
+            compose_cmd="$(detect_compose)"
+            (cd "$install_dir" && $compose_cmd exec $tty_flag geo-routing-server python3 -m app.cli "$@")
+            ;;
         uninstall)                   cmd_uninstall || true ;;
         install|setup)               wizard_install ;;
         help|-h|--help)              cmd_help ;;

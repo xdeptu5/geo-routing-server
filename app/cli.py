@@ -415,7 +415,7 @@ def cmd_squads_add(
     c = Colors(supports_color())
 
     if not uuid:
-        if sys.stdin.isatty():
+        if sys.stdin and hasattr(sys.stdin, "isatty") and sys.stdin.isatty():
             try:
                 uuid = input("UUID сквада: ").strip()
             except (KeyboardInterrupt, EOFError):
@@ -431,7 +431,7 @@ def cmd_squads_add(
             if Config.get_active_rules([], "HAPP")
             else "JSONSUB.JSON"
         )
-        if sys.stdin.isatty():
+        if sys.stdin and hasattr(sys.stdin, "isatty") and sys.stdin.isatty():
             try:
                 entered = input(f"Правило [{default_rule}]: ").strip()
                 rule = entered or default_rule
@@ -441,7 +441,7 @@ def cmd_squads_add(
         else:
             rule = default_rule
 
-    if name is None and sys.stdin.isatty():
+    if name is None and sys.stdin and hasattr(sys.stdin, "isatty") and sys.stdin.isatty():
         try:
             n_in = input("Имя сквада (опционально, Enter для пропуска): ").strip()
             name = n_in if n_in else None
@@ -474,7 +474,7 @@ def cmd_squads_remove(
         if not squads:
             print(f"{c.GRAY}Нет привязанных сквадов для удаления.{c.RESET}")
             return 0
-        if sys.stdin.isatty():
+        if sys.stdin and hasattr(sys.stdin, "isatty") and sys.stdin.isatty():
             print("Список сквадов:")
             for idx, sq in enumerate(squads, 1):
                 name = sq.get("name") or "Без имени"
@@ -696,7 +696,7 @@ def main(args: Optional[list[str]] = None) -> int:
     parsed_args = parser.parse_args(args)
 
     if not parsed_args.command:
-        if sys.stdin.isatty():
+        if sys.stdin and hasattr(sys.stdin, "isatty") and sys.stdin.isatty():
             return cmd_menu()
         parser.print_help()
         return 0
@@ -716,6 +716,9 @@ def main(args: Optional[list[str]] = None) -> int:
     if parsed_args.command == "squads":
         sq_cmd = parsed_args.squads_command
         if not sq_cmd:
+            if sys.stdin and hasattr(sys.stdin, "isatty") and sys.stdin.isatty():
+                menu_squads(SquadManager())
+                return 0
             if RemnawaveSync.is_configured():
                 return cmd_squads()
             return cmd_squads_list()
