@@ -46,6 +46,7 @@
 * 🛡️ **Автономность раздачи:** после первой успешной синхронизации базы `geoip.dat`, `geosite.dat` и правила раздаются локально с вашего VPS — клиенты не зависят от доступности GitHub или сторонних CDN (пока данные находятся в локальном volume).
 * 📱 **Поддержка Happ и Incy:** генерация Base64-диплинков для Happ (`.DEEPLINK`) и динамических JSON-правил подписки для Incy (`.JSON`).
 * ⚡ **Нативная интеграция с Remnawave API:** прямое автообновление правил сквадов без сторонних скриптов (поддерживается до 10+ сквадов и Cloudflare Zero Trust).
+* 🔄 **Мульти-пресетная одновременная раздача (A/B тестирование):** параллельная генерация и независимая отдача гео-баз и правил сразу от нескольких источников (`ROUTING_SOURCE_PRESET=hydraponique,geogaga`) в рамках одного токена — для безопасного тестирования новых баз без риска отключения действующих клиентов.
 * 🔒 **Безопасность:** закрытый доступ по секретному URL-токену (`/<ROUTING_TOKEN>/...`). Без токена сервер не отвечает сканерам.
 * 📁 **Чистые экосистемные пресеты:** правила маршрутизации и гео-базы согласованы на 100% без несовместимых тегов и гибридов:
   - **GeoGaga (Client Flavor)** — *Рекомендуется*: сбалансированный Split-tunneling для РФ, актуальные базы, честные файлы `HAPP.JSON` / `HAPP.DEEPLINK` и `INCY.JSON`.
@@ -65,6 +66,12 @@
 | **`geogaga`**<br>🟢 *Рекомендуется* | `bratishkadrugoimamysynishka/geogaga-client-flavor` | **`HAPP.JSON`** (и `.DEEPLINK`)<br>**`INCY.JSON`** | `geogaga-direct`<br>`geogaga-proxy`<br>`geogaga-block` | **Основной выбор для РФ:** умный сплит-туннель (YouTube, Discord, заблокированные ресурсы — через VPN; банки, Госуслуги, VK, локальные сервисы и CDN — напрямую). |
 | **`hydraponique`**<br>📦 *Legacy* | `hydraponique/roscomvpn-routing` | **`JSONSUB.JSON`**<br>**`WHITELIST.JSON`**<br>**`DEFAULT.JSON`** | `category-ru`<br>`ru`<br>`antizapret` | **Классический режим:** старый набор раздельных правил подписки и белого списка. |
 | **`vahellame`**<br>🛡️ *Whitelist* | `vahellame/russia-whitelist-routing` | **`WHITELIST.JSON`** | `russia-whitelist` | **Строгий белый список:** для периодов тотальных блокировок и шатдаунов ТСПУ. |
+
+> 💡 **Мульти-пресет (Одновременная раздача нескольких источников):**  
+> Вы можете указать несколько пресетов через запятую, например `ROUTING_SOURCE_PRESET=hydraponique,geogaga`.  
+> * **Основной пресет** (первый в списке) раздаётся по стандартным путям: `/<TOKEN>/HAPP/` и `/<TOKEN>/INCY/` (100% совместимость со старыми клиентами).  
+> * **Вторичные пресеты** изолируются в подкаталогах верхнего регистра: `/<TOKEN>/GEOGAGA/HAPP/` (в диплинки зашиты ссылки на базы geogaga).  
+> * **Remnawave:** сквады привязываются к правилам вторичных пресетов (`GEOGAGA/HAPP.JSON`) для бесшовного тестирования.
 
 ---
 
@@ -326,6 +333,9 @@ Happ принимает правила через Base64-диплинк `happ://
   * `https://geo.example.com/<ROUTING_TOKEN>/HAPP/JSONSUB.DEEPLINK`
   * `https://geo.example.com/<ROUTING_TOKEN>/HAPP/WHITELIST.DEEPLINK`
 
+  **Мульти-пресет (Вторичный источник, например GeoGaga):**
+  * `https://geo.example.com/<ROUTING_TOKEN>/GEOGAGA/HAPP/HAPP.DEEPLINK`
+
 ### INCY
 Клиент Incy динамически скачивает JSON-правила по HTTPS. В панели (Remnawave, Marzban, 3x-ui) добавьте заголовок профиля подписки:
 * **Header Name:** `autorouting`
@@ -340,6 +350,9 @@ Happ принимает правила через Base64-диплинк `happ://
   * `incy://autorouting/onadd/https://geo.example.com/<ROUTING_TOKEN>/INCY/JSONSUB.JSON`
   * `incy://autorouting/onadd/https://geo.example.com/<ROUTING_TOKEN>/INCY/WHITELIST.JSON`
 
+  **Мульти-пресет (Вторичный источник, например GeoGaga):**
+  * `incy://autorouting/onadd/https://geo.example.com/<ROUTING_TOKEN>/GEOGAGA/INCY/INCY.JSON`
+
 ---
 
 <details>
@@ -351,7 +364,7 @@ Happ принимает правила через Base64-диплинк `happ://
 | `DOMAIN` | `geo.example.com` | Домен для HTTPS-прокси (не нужен в режиме `HAPP_DEEPLINK`) |
 | `ROUTING_TOKEN` | — | **Обязательно** для раздачи файлов: минимум 4 символа из `[A-Za-z0-9_-]`; установщик генерирует 32-символьный токен |
 | `ENABLED_CLIENTS` | `HAPP,INCY` | Модули: `HAPP,INCY`, `HAPP`, `INCY`, `HAPP_GEO`, `INCY_GEO`, `HAPP_DEEPLINK` |
-| `ROUTING_SOURCE_PRESET` | `geogaga` | Пресет источников: `geogaga` (Рекомендуется), `hydraponique` (Legacy), `vahellame` (Strict Whitelist), `custom` |
+| `ROUTING_SOURCE_PRESET` | `geogaga` | Пресет источников: `geogaga` (Рекомендуется), `hydraponique` (Legacy), `vahellame` (Strict Whitelist), `custom` или несколько через запятую для мульти-пресета (например, `hydraponique,geogaga`) |
 | `ROUTING_RULES` | *пусто* (все правила источника) | Выборочные правила через запятую (`HAPP`/`INCY` для geogaga; `JSONSUB,WHITELIST` для hydraponique; `WHITELIST` для vahellame); `ALL` или пусто — все правила источника. Мастер установки записывает значение, соответствующее пресету |
 | `SERVE_FORMATS` | `CLIENT_OPTIMIZED` | Форматы файлов: `CLIENT_OPTIMIZED` (Happ → `.DEEPLINK`, Incy → `.JSON`), `ALL`, `JSON`, `DEEPLINK` |
 | `SERVE_GEOIP` | `true` | Раздача файла `geoip.dat` (`true` / `false`) |
