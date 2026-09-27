@@ -38,6 +38,64 @@ def get_default_squads_path() -> Path:
     return Path("squads.json")
 
 
+def normalize_squad_rule(rule: str) -> str:
+    """Нормализует имя правила сквада с сохранением префикса пресета (если задан).
+
+    Примеры:
+    - 'JSONSUB.JSON' -> 'JSONSUB.JSON'
+    - 'WHITELIST' -> 'WHITELIST.JSON'
+    - 'whitelist.deeplink' -> 'WHITELIST.JSON'
+    - 'GEOGAGA/HAPP.JSON' -> 'GEOGAGA/HAPP.JSON'
+    - 'geogaga/happ' -> 'GEOGAGA/HAPP.JSON'
+    - 'https://.../token/GEOGAGA/HAPP/HAPP.JSON' -> 'GEOGAGA/HAPP.JSON'
+    - 'https://.../token/HAPP/JSONSUB.JSON' -> 'JSONSUB.JSON'
+    """
+    raw = str(rule).strip().replace("\\", "/")
+    if not raw:
+        return ""
+
+    if "://" in raw:
+        try:
+            import urllib.parse
+
+            path = urllib.parse.urlparse(raw).path.strip("/")
+            parts = path.split("/")
+            known_presets = set(
+                [p.upper() for p in getattr(Config, "ACTIVE_PRESETS", [])]
+                + [p.upper() for p in getattr(Config, "SOURCE_PRESETS", {}).keys()]
+            )
+            if len(parts) >= 3 and parts[-2].upper() == "HAPP":
+                cand_preset = parts[-3].upper()
+                file_part = parts[-1]
+                if cand_preset in known_presets:
+                    raw = f"{cand_preset}/{file_part}"
+                else:
+                    raw = file_part
+            else:
+                raw = parts[-1]
+        except Exception:
+            raw = raw.split("/")[-1]
+
+    raw = raw.upper()
+    if "/" in raw or ":" in raw:
+        sep = "/" if "/" in raw else ":"
+        pfx, r_name = raw.split(sep, 1)
+        pfx = pfx.strip()
+        r_name = r_name.strip()
+        if r_name.endswith(".DEEPLINK"):
+            r_name = r_name.removesuffix(".DEEPLINK") + ".JSON"
+        elif not r_name.endswith(".JSON"):
+            r_name = f"{r_name}.JSON"
+        return f"{pfx}/{r_name}"
+    else:
+        r_name = raw.strip()
+        if r_name.endswith(".DEEPLINK"):
+            r_name = r_name.removesuffix(".DEEPLINK") + ".JSON"
+        elif not r_name.endswith(".JSON"):
+            r_name = f"{r_name}.JSON"
+        return r_name
+
+
 class SquadManager:
     """Управление привязками сквадов Remnawave в структурированном файле squads.json."""
 
@@ -98,11 +156,7 @@ class SquadManager:
         if not rule_raw:
             raise ValueError("Имя правила не может быть пустым")
 
-        rule_clean = Path(rule_raw).name.upper()
-        if rule_clean.endswith(".DEEPLINK"):
-            rule_clean = rule_clean.removesuffix(".DEEPLINK") + ".JSON"
-        elif not rule_clean.endswith(".JSON"):
-            rule_clean = f"{rule_clean}.JSON"
+        rule_clean = normalize_squad_rule(rule_raw)
 
         squads = self.list_squads()
         updated = False
@@ -274,11 +328,7 @@ class SquadManager:
                 raise ValueError(f"Недопустимый формат UUID: '{uuid}'")
             if not rule:
                 raise ValueError(f"Имя правила не может быть пустым для сквада {uuid}")
-            rule_clean = Path(rule).name.upper()
-            if rule_clean.endswith(".DEEPLINK"):
-                rule_clean = rule_clean.removesuffix(".DEEPLINK") + ".JSON"
-            elif not rule_clean.endswith(".JSON"):
-                rule_clean = f"{rule_clean}.JSON"
+            rule_clean = normalize_squad_rule(rule)
             entry: Dict[str, Any] = {"uuid": uuid, "rule": rule_clean}
             if name is not None and str(name).strip():
                 entry["name"] = str(name).strip()

@@ -108,6 +108,13 @@ def test_load_squad_configs_uses_remnawave_prefix(monkeypatch):
     assert squads == [{"uuid": "abcdef12-3456", "rule": "HAPP.JSON"}]
 
 
+def test_load_squad_configs_preserves_preset_prefix(monkeypatch):
+    monkeypatch.setenv("REMNAWAVE_SQUAD_1_UUID", "ABCDEF12-3456")
+    monkeypatch.setenv("REMNAWAVE_SQUAD_1_RULE", "GEOGAGA/HAPP.JSON")
+    squads = RemnawaveSync.load_squad_configs()
+    assert squads == [{"uuid": "abcdef12-3456", "rule": "GEOGAGA/HAPP.JSON"}]
+
+
 def test_load_squad_configs_default_rule(monkeypatch):
     """Без явного RULE используется правило по умолчанию для текущего пресета."""
     monkeypatch.setattr(Config, "ROUTING_SOURCE_PRESET", "geogaga")

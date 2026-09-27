@@ -240,3 +240,25 @@ def test_sync_squads_delegates_to_remnawave_sync(manager, tmp_path):
         res = manager.sync_squads_to_remnawave(www_dir=happ_dir)
         assert res is True
         mock_sync.assert_called_once()
+
+
+def test_normalize_squad_rule_cases():
+    from app.squads import normalize_squad_rule
+
+    assert normalize_squad_rule("JSONSUB.JSON") == "JSONSUB.JSON"
+    assert normalize_squad_rule("whitelist") == "WHITELIST.JSON"
+    assert normalize_squad_rule("whitelist.deeplink") == "WHITELIST.JSON"
+    assert normalize_squad_rule("GEOGAGA/HAPP.JSON") == "GEOGAGA/HAPP.JSON"
+    assert normalize_squad_rule("geogaga/happ") == "GEOGAGA/HAPP.JSON"
+    assert normalize_squad_rule("geogaga:happ.deeplink") == "GEOGAGA/HAPP.JSON"
+    assert normalize_squad_rule("https://domain.com/token/GEOGAGA/HAPP/HAPP.JSON") == "GEOGAGA/HAPP.JSON"
+    assert normalize_squad_rule("https://domain.com/token/HAPP/JSONSUB.JSON") == "JSONSUB.JSON"
+
+
+def test_add_squad_preserves_multi_preset_prefix(manager):
+    sq = manager.add_squad("12345678-abcd", "GEOGAGA/HAPP.JSON", name="Geogaga Trial")
+    assert sq["rule"] == "GEOGAGA/HAPP.JSON"
+
+    found = manager.get_squad("12345678-abcd")
+    assert found is not None
+    assert found["rule"] == "GEOGAGA/HAPP.JSON"

@@ -197,11 +197,13 @@ class RemnawaveSync:
                 logger.warning(f"[Remnawave] Skipping invalid UUID format for squad #{i}: '{uuid}'")
                 continue
                 
+            from app.squads import normalize_squad_rule
+
             default_rule = Config.get_active_rules([], "HAPP")[0] if Config.get_active_rules([], "HAPP") else "HAPP.JSON"
-            rule = rule.split("/")[-1] if rule else default_rule
+            rule_clean = normalize_squad_rule(rule) if rule else default_rule
             squad_item = {
                 "uuid": uuid.lower(),
-                "rule": rule.upper()
+                "rule": rule_clean.upper()
             }
             if name:
                 squad_item["name"] = name
@@ -310,7 +312,9 @@ class RemnawaveSync:
         
         # 1. Синхронизация глобальных настроек подписок (если задано)
         if global_rule:
-            rule_file = global_rule.split("/")[-1].replace(".DEEPLINK", ".JSON").upper()
+            from app.squads import normalize_squad_rule
+
+            rule_file = normalize_squad_rule(global_rule)
             deeplink = cls._read_deeplink_content(happ_dir, rule_file)
             if deeplink:
                 settings_url = f"{base_api_url}/subscription-settings"

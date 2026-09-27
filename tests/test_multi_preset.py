@@ -220,3 +220,69 @@ def test_cli_status_info_multi_preset(monkeypatch, tmp_path):
     
     sec_links = info["links"]["secondary_presets"]["geogaga"]
     assert sec_links["happ"]["geo"]["geoip"] == f"https://multi.example.com/{TOKEN}/GEOGAGA/HAPP/geoip.dat"
+
+
+def test_remnawave_sync_multi_preset_squads(monkeypatch, tmp_path):
+    """Тест синхронизации сквадов Remnawave при нескольких пресетах:
+    Squad 1 использует основное правило (JSONSUB.JSON),
+    Squad 2 использует правило вторичного пресета (GEOGAGA/HAPP.JSON).
+    """
+    token_dir = tmp_path / TOKEN
+    primary_happ = token_dir / "HAPP"
+    primary_happ.mkdir(parents=True)
+    sec_happ = token_dir / "GEOGAGA" / "HAPP"
+    sec_happ.mkdir(parents=True)
+
+    (primary_happ / "JSONSUB.DEEPLINK").write_text("happ://routing/onadd/primary_sub\n", encoding="utf-8")
+    (sec_happ / "HAPP.DEEPLINK").write_text("happ://routing/onadd/secondary_geogaga\n", encoding="utf-8")
+
+    cfg = config_module.Config
+    monkeypatch.setattr(cfg, "PRIMARY_PRESET", "hydraponique")
+    monkeypatch.setattr(cfg, "ACTIVE_PRESETS", ["hydraponique", "geogaga"])
+    monkeypatch.setenv("REMNAWAVE_BASE_URL", "https://panel.example.com")
+    monkeypatch.setenv("REMNAWAVE_TOKEN", "test-token")
+
+    squad_1_uuid = "11111111-1111-1111-1111-111111111111"
+    squad_2_uuid = "22222222-2222-2222-2222-222222222222"
+    squads = [
+        {"uuid": squad_1_uuid, "rule": "JSONSUB.JSON", "name": "Squad Primary"},
+        {"uuid": squad_2_uuid, "rule": "GEOGAGA/HAPP.JSON", "name": "Squad Secondary"},
+    ]
+
+    patched_squads = {}
+
+    def fake_api_request(method, url, payload=None):
+        if method == "GET" and url.endswith("/external-squads"):
+            return {
+                "response": [
+                    {
+                        "uuid": squad_1_uuid,
+                        "name": "Squad Primary",
+                        "responseHeadersAdd": {},
+                        "responseHeadersRemove": [],
+                    },
+                    {
+                        "uuid": squad_2_uuid,
+                        "name": "Squad Secondary",
+                        "responseHeadersAdd": {},
+                        "responseHeadersRemove": [],
+                    },
+                ]
+            }
+        if method == "PATCH" and url.endswith("/external-squads"):
+            sq_uuid = payload.get("uuid")
+            header_val = payload.get("responseHeadersAdd", {}).get(RemnawaveSync.ROUTING_HEADER)
+            patched_squads[sq_uuid] = header_val
+            return {}
+        return None
+
+    monkeypatch.setattr(RemnawaveSync, "_api_request", fake_api_request)
+
+    res = RemnawaveSync.sync_squads(squads, primary_happ)
+    assert res is True
+    assert RemnawaveSync.last_errors == []
+
+    # Squad 1 должен получить диплинк из primary happ_dir
+    assert patched_squads[squad_1_uuid] == "happ://routing/onadd/primary_sub"
+    # Squad 2 должен получить диплинк из вторичного пресета (GEOGAGA)
+    assert patched_squads[squad_2_uuid] == "happ://routing/onadd/secondary_geogaga"
