@@ -1771,11 +1771,16 @@ main_menu() {
         echo "  8) 📋 Сниппеты Caddy / Nginx"
         echo "  9) 🚀 Центр обновлений (образ, скрипт, всё)"
         echo " 10) 🔄 Перезапустить контейнер"
-        echo " 11) 📝 Редактировать .env напрямую"
-        echo " 12) ❌ Удалить сервис (Uninstall)"
+        if is_container_running; then
+            echo " 11) ⏹️  Остановить контейнер"
+        else
+            echo " 11) 🟢 Запустить контейнер"
+        fi
+        echo " 12) 📝 Редактировать .env напрямую"
+        echo " 13) ❌ Удалить сервис (Uninstall)"
         echo "  0) 🚪 Выход"
         echo ""
-        read -r -p "  Выберите действие [0-12]: " choice
+        read -r -p "  Выберите действие [0-13]: " choice
 
         case "$choice" in
             1) cmd_status; echo ""; read -r -p "Нажмите Enter для возврата в меню..." ;;
@@ -1787,9 +1792,20 @@ main_menu() {
             7) menu_clients_bases ;;
             8) cmd_proxy; echo ""; read -r -p "Нажмите Enter для возврата в меню..." ;;
             9) menu_updates ;;
-            10) cmd_restart || true; echo ""; read -r -p "Нажмите Enter для возврата в меню..." ;;
-            11) cmd_edit || true ;;
-            12)
+            10|restart) cmd_restart || true; echo ""; read -r -p "Нажмите Enter для возврата в меню..." ;;
+            11)
+                if is_container_running; then
+                    cmd_stop || true
+                else
+                    cmd_start || true
+                fi
+                echo ""
+                read -r -p "Нажмите Enter для возврата в меню..."
+                ;;
+            stop) cmd_stop || true; echo ""; read -r -p "Нажмите Enter для возврата в меню..." ;;
+            start) cmd_start || true; echo ""; read -r -p "Нажмите Enter для возврата в меню..." ;;
+            12|edit|config) cmd_edit || true ;;
+            13|uninstall)
                 # cmd_uninstall возвращает 0 только после реально выполненного
                 # удаления; при отмене/отказе (1) возвращаемся в меню, а не выходим
                 if cmd_uninstall; then
