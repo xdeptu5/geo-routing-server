@@ -627,7 +627,7 @@ cmd_update() {
     local compose_cmd
     compose_cmd="$(detect_compose)"
     echo -e "\n${C_YELLOW}[*] Загрузка свежего Docker-образа...${C_RESET}"
-    if (cd "$install_dir" && $compose_cmd pull && $compose_cmd up -d); then
+    if (cd "$install_dir" && $compose_cmd pull && $compose_cmd up -d --force-recreate); then
         echo -e "${C_GREEN}[✓] Сервис успешно обновлён до последней версии.${C_RESET}\n"
     else
         echo -e "${C_RED}[!] Обновление не применено: Docker Compose завершился с ошибкой выше.${C_RESET}\n"
