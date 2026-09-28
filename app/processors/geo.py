@@ -25,9 +25,8 @@ class GeoManager:
         ],
     }
 
-    def __init__(self, downloader: Downloader, custom_geo_dir: Path):
+    def __init__(self, downloader: Downloader):
         self.downloader = downloader
-        self.custom_geo_dir = custom_geo_dir
         
     def resolve_and_fetch(
         self,
@@ -39,45 +38,10 @@ class GeoManager:
         """
         Резолвит источник geo-базы с учетом приоритетов и возвращает байты содержимого.
         Приоритет:
-        0. Локальный файл в custom_geo/<client>/<geo_type>.dat или custom_geo/<geo_type>.dat
-        1. а) Пользовательский URL из .env (GEOIP_SOURCE_URL / GEOSITE_SOURCE_URL), заданный явно
-        2. б) Иначе проверить локальный DEFAULT.JSON (если есть)
-        3. в) Иначе использовать URL пресета (geogaga/vahellame/hydraponique)
-        4. г) Если загрузка не удалась -> fallback на официальные релизы GitHub (v2fly/meta-rules-dat / runetfreedom)
+        1) Проверить локальный DEFAULT.JSON (если есть Geoipurl/Geositeurl) -> скачать.
+        2) Иначе использовать URL пресета (geogaga/vahellame/hydraponique)
+        3) Если загрузка не удалась -> fallback на официальные релизы GitHub (v2fly/meta-rules-dat / runetfreedom)
         """
-        # 0. Проверяем локальные файлы в custom_geo
-        local_candidates = [
-            self.custom_geo_dir / client / f"{geo_type}.dat",
-            self.custom_geo_dir / f"{geo_type}.dat"
-        ]
-        for candidate in local_candidates:
-            if candidate.is_file():
-                content = candidate.read_bytes()
-                if self.downloader._validate_content(content, "binary"):
-                    logger.info(f"  Using local {geo_type} file for {client} from {candidate}")
-                    return content
-                logger.warning(f"  Ignoring invalid local {geo_type} file: {candidate}")
-
-        # а) Пользовательский URL из .env (ветка срабатывает только если задан явно)
-        custom_url = Config.GEOIP_SOURCE_URL_EXPLICIT if geo_type == "geoip" else Config.GEOSITE_SOURCE_URL_EXPLICIT
-        if custom_url:
-            if custom_url in self._memory_cache:
-                logger.info(f"  Reusing already downloaded {geo_type} for {client}")
-                return self._memory_cache[custom_url]
-            logger.info(f"  Downloading {geo_type} for {client} from custom URL: {custom_url}")
-            try:
-                data = self.downloader.fetch(
-                    custom_url,
-                    f"geo_{geo_type}_custom",
-                    kind="binary",
-                    trusted_url=True,
-                )
-                self._memory_cache[custom_url] = data
-                return data
-            except DownloadError as e:
-                logger.warning(f"  Failed to download {geo_type} from custom URL ({e}), falling back to preset/official sources...")
-
-        # б) Иначе проверяем URL из DEFAULT.JSON
         url = None
         if default_json_data:
             key = "Geoipurl" if geo_type == "geoip" else "Geositeurl"

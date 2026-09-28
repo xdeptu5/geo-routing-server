@@ -52,7 +52,6 @@
   - **GeoGaga (Client Flavor)** — *Рекомендуется*: сбалансированный Split-tunneling для РФ, актуальные базы, честные файлы `HAPP.JSON` / `HAPP.DEEPLINK` и `INCY.JSON`.
   - **roscomvpn-routing (hydraponique)** — классический источник (правила `DEFAULT`, `JSONSUB`, `WHITELIST`).
   - **vahellame (Strict Whitelist)** — строгий белый список для максимальных ограничений ТСПУ.
-  - Поддержка кастомных репозиториев, прямых ссылок и локальных баз в `./custom_geo/`.
 * 📦 **Zero Dependencies:** один контейнер (Alpine + Python 3 + Nginx), архитектуры `amd64` и `arm64`.
 
 ---
@@ -167,8 +166,7 @@ bash install.sh      # запуск установки
        volumes:
          - routing_data:/app/www
          - ./.cache:/app/.cache
-         - ./custom_geo:/app/custom_geo:ro
-       healthcheck:
+         healthcheck:
          test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:80/health"]
          interval: 30s
          timeout: 5s
@@ -375,9 +373,6 @@ Happ принимает правила через Base64-диплинк `happ://
 | `HTTP_PORT` | `8080` | Порт для реверс-прокси |
 | `SCHEDULE` | `0 10 * * *` | Расписание автообновления (cron UTC, дефолт 10:00 UTC) |
 | `SYNC_ON_START` | `true` | Выполнять синхронизацию при запуске контейнера |
-| `GEOIP_SOURCE_URL` | *пусто* | Кастомный источник `geoip.dat` |
-| `GEOSITE_SOURCE_URL` | *пусто* | Кастомный источник `geosite.dat` |
-| `ROUTING_SOURCE_REPO` | *geogaga* | Репозиторий правил GitHub (автоматически определяется пресетом) |
 | **Telegram** | | |
 | `TELEGRAM_BOT_TOKEN` | *пусто* | Токен бота Telegram для алертов |
 | `TELEGRAM_CHAT_ID` | *пусто* | ID чата / группы |
@@ -529,7 +524,6 @@ docker compose exec geo-routing-server python -m app.cli squads migrate
 ```
 </details>
 
-> 📁 **Кастомные базы:** Локальные файлы `geoip.dat` и `geosite.dat` можно положить в папку `./custom_geo/` — сервер подхватит их автоматически вместо загрузки из сети.
 
 ---
 
@@ -566,7 +560,7 @@ CI (`.github/workflows/docker.yml`) на каждый push в `main`, тег, pu
 <summary><b>Что происходит при повторном запуске install.sh?</b></summary>
 
 <b>Запуск без аргументов:</b> если установка уже обнаружена (есть <code>.env</code> и <code>compose.yaml</code>), скрипт открывает меню <code>geoserver</code> и ничего не перезаписывает.<br><br>
-<b>Явный повторный запуск визарда</b> (<code>install.sh install</code>): существующий <code>.env</code> сначала сохраняется в резервную копию <code>.env.bak.&lt;дата-время&gt;</code> (об этом сообщается в выводе), прежние значения подставляются в качестве дефолтов ответов визарда, а ключи, которые визард не спрашивает (например, <code>TELEGRAM_*</code>), переносятся из старого файла в новый. Docker volume с данными и каталог <code>custom_geo/</code> визард не затрагивает.
+<b>Явный повторный запуск визарда</b> (<code>install.sh install</code>): существующий <code>.env</code> сначала сохраняется в резервную копию <code>.env.bak.&lt;дата-время&gt;</code> (об этом сообщается в выводе), прежние значения подставляются в качестве дефолтов ответов визарда, а ключи, которые визард не спрашивает (например, <code>TELEGRAM_*</code>), переносятся из старого файла в новый. Docker volume с данными визард не затрагивает.
 </details>
 
 ---
@@ -583,3 +577,5 @@ CI (`.github/workflows/docker.yml`) на каждый push в `main`, тег, pu
 ## 📄 Лицензия
 
 Распространяется под свободной лицензией [MIT](./LICENSE).
+
+

@@ -5,30 +5,23 @@ from pathlib import Path
 from typing import List, Optional
 from urllib.parse import quote, urlparse
 
-def _calc_preset_fn(env_preset: str, env_repo: str, presets: dict) -> str:
+def _calc_preset_fn(env_preset: str, presets: dict) -> str:
     p = env_preset.strip().lower()
-    if p in presets or p == "custom":
+    if p in presets:
         return p
-    if "hydraponique" in env_repo:
-        return "hydraponique"
-    elif "vahellame" in env_repo:
-        return "vahellame"
-    elif env_repo:
-        return "custom"
     return "geogaga"
 
 
-def _calc_presets_fn(env_preset: str, env_repo: str, presets: dict) -> list[str]:
+def _calc_presets_fn(env_preset: str, presets: dict) -> list[str]:
     raw_items = [p.strip().lower() for p in env_preset.split(",") if p.strip()]
     result = []
     for p in raw_items:
-        if p in presets or p == "custom":
+        if p in presets:
             if p not in result:
                 result.append(p)
     if result:
         return result
-    single = _calc_preset_fn(env_preset, env_repo, presets)
-    return [single]
+    return [_calc_preset_fn(env_preset, presets)]
 
 
 class Config:
@@ -37,7 +30,6 @@ class Config:
     BASE_DIR = Path(os.getenv("BASE_DIR", "/app"))
     STORAGE_DIR = Path(os.getenv("STORAGE_DIR", str(BASE_DIR / "www")))
     CACHE_DIR = Path(os.getenv("CACHE_DIR", str(BASE_DIR / ".cache")))
-    CUSTOM_GEO_DIR = Path(os.getenv("CUSTOM_GEO_DIR", str(BASE_DIR / "custom_geo")))
     LOCK_FILE = BASE_DIR / ".sync.lock"
     
     DOMAIN = re.sub(r"^https?://", "", os.getenv("DOMAIN", "geo.example.com").strip()).rstrip("/")
@@ -189,27 +181,15 @@ class Config:
 
     ACTIVE_PRESETS = _calc_presets_fn(
         os.getenv("ROUTING_SOURCE_PRESET", ""),
-        os.getenv("ROUTING_SOURCE_REPO", ""),
         SOURCE_PRESETS
     )
     PRIMARY_PRESET = ACTIVE_PRESETS[0]
     ROUTING_SOURCE_PRESET = PRIMARY_PRESET
     _active_preset = SOURCE_PRESETS.get(PRIMARY_PRESET, SOURCE_PRESETS["geogaga"])
 
-    _custom_geoip = _validate_http_url(os.getenv("GEOIP_SOURCE_URL", ""))
-    _custom_geosite = _validate_http_url(os.getenv("GEOSITE_SOURCE_URL", ""))
-    _custom_repo = _validate_http_url(os.getenv("ROUTING_SOURCE_REPO", ""))
-
-    # URL, заданный пользователем явно в .env: пустая строка, если переменная не установлена.
-    # Это приоритетная ветка «пользовательский URL» в GeoManager.resolve_and_fetch;
-    # без неё приоритет переходит к DEFAULT.JSON, затем к URL пресета.
-    GEOIP_SOURCE_URL_EXPLICIT: str = _custom_geoip
-    GEOSITE_SOURCE_URL_EXPLICIT: str = _custom_geosite
-
-    # Итоговые URL для обратной совместимости: пользовательский, иначе URL пресета.
-    GEOIP_SOURCE_URL = _custom_geoip or _active_preset["geoip_url"]
-    GEOSITE_SOURCE_URL = _custom_geosite or _active_preset["geosite_url"]
-    ROUTING_SOURCE_REPO = (_custom_repo or _active_preset["routing_repo"]).rstrip("/")
+    GEOIP_SOURCE_URL = _active_preset["geoip_url"]
+    GEOSITE_SOURCE_URL = _active_preset["geosite_url"]
+    ROUTING_SOURCE_REPO = _active_preset["routing_repo"].rstrip("/")
 
     @classmethod
     def get_preset_info(cls, preset: Optional[str] = None) -> dict:
@@ -229,9 +209,7 @@ class Config:
     @classmethod
     def get_preset_repo(cls, preset: Optional[str] = None) -> str:
         """Возвращает URL репозитория правил для пресета."""
-        if not preset or preset.lower() == cls.ROUTING_SOURCE_PRESET.lower():
-            return cls.ROUTING_SOURCE_REPO
-        p = preset.lower()
+        p = preset.lower() if preset else cls.ROUTING_SOURCE_PRESET.lower()
         info = cls.get_preset_info(p)
         return info.get("routing_repo", cls.ROUTING_SOURCE_REPO).rstrip("/")
 

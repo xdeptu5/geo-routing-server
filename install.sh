@@ -377,7 +377,6 @@ services:
     volumes:
       - routing_data:/app/www
       - ./.cache:/app/.cache
-      - ./custom_geo:/app/custom_geo:ro
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:80/health"]
       interval: 30s
@@ -427,7 +426,6 @@ services:
     volumes:
       - routing_data:/app/www
       - ./.cache:/app/.cache
-      - ./custom_geo:/app/custom_geo:ro
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:80/health"]
       interval: 30s
@@ -1211,17 +1209,14 @@ menu_clients_bases() {
         cur_rules="$(get_env_val "ROUTING_RULES" "$env_file" "JSONSUB,WHITELIST")"
         ext_geo="$(get_env_val "PUBLIC_GEO_BASE_URL" "$env_file" "")"
         cur_preset="$(get_env_val "ROUTING_SOURCE_PRESET" "$env_file" "geogaga")"
-        cur_repo="$(get_env_val "ROUTING_SOURCE_REPO" "$env_file" "")"
 
         local preset_label="GeoGaga (Рекомендуется)"
         if [[ "$cur_preset" == *","* ]]; then
             preset_label="$cur_preset (Мульти-пресет)"
-        elif [ "$cur_preset" = "hydraponique" ] || [[ "$cur_repo" == *"hydraponique"* ]]; then
+        elif [ "$cur_preset" = "hydraponique" ] ; then
             preset_label="hydraponique (Legacy)"
-        elif [ "$cur_preset" = "vahellame" ] || [[ "$cur_repo" == *"vahellame"* ]]; then
+        elif [ "$cur_preset" = "vahellame" ] ; then
             preset_label="vahellame (Strict Whitelist)"
-        elif [ "$cur_preset" = "custom" ] || [ -n "$cur_repo" ]; then
-            preset_label="Кастомный источник"
         fi
 
         echo -e "  ${C_WHITE}Клиенты:${C_RESET}         ${C_GREEN}$cur_clients${C_RESET}"
@@ -1316,15 +1311,13 @@ menu_clients_bases() {
                 echo "     • Строгий белый список для жестких ограничений ТСПУ"
                 echo "     • Базы russia-whitelist-geoip / geosite"
                 echo ""
-                echo -e "  ${C_WHITE}4) ⚙️ Кастомный источник (вручную указать репозиторий и базы)${C_RESET}"
-                echo ""
-                echo -e "  ${C_MAGENTA}5) ⚡ Мульти-пресет: hydraponique + geogaga (Одновременная раздача)${C_RESET}"
+                echo -e "  ${C_MAGENTA}4) ⚡ Мульти-пресет: hydraponique + geogaga (Одновременная раздача)${C_RESET}"
                 echo "     • Основные базы и правила: hydraponique (JSONSUB, WHITELIST)"
                 echo "     • Вторичные базы и правила: geogaga (/GEOGAGA/HAPP/)"
                 echo "     • Безопасное A/B тестирование без отключения клиентов"
                 echo "  0) ⬅️ Назад"
                 echo ""
-                read -r -p "Номер [1-5, Enter = отмена]: " s_opt
+                read -r -p "Номер [1-4, Enter = отмена]: " s_opt
                 if [ -z "$s_opt" ] || [ "$s_opt" = "0" ]; then
                     continue
                 fi
@@ -1332,40 +1325,18 @@ menu_clients_bases() {
                     1)
                         set_env_val "ROUTING_SOURCE_PRESET" "geogaga" "$env_file"
                         set_env_val "ROUTING_RULES" "HAPP" "$env_file"
-                        delete_env_val "ROUTING_SOURCE_REPO" "$env_file"
-                        delete_env_val "GEOIP_SOURCE_URL" "$env_file"
-                        delete_env_val "GEOSITE_SOURCE_URL" "$env_file"
                         ;;
                     2)
                         set_env_val "ROUTING_SOURCE_PRESET" "hydraponique" "$env_file"
                         set_env_val "ROUTING_RULES" "JSONSUB,WHITELIST" "$env_file"
-                        delete_env_val "ROUTING_SOURCE_REPO" "$env_file"
-                        delete_env_val "GEOIP_SOURCE_URL" "$env_file"
-                        delete_env_val "GEOSITE_SOURCE_URL" "$env_file"
                         ;;
                     3)
                         set_env_val "ROUTING_SOURCE_PRESET" "vahellame" "$env_file"
                         set_env_val "ROUTING_RULES" "WHITELIST" "$env_file"
-                        delete_env_val "ROUTING_SOURCE_REPO" "$env_file"
-                        delete_env_val "GEOIP_SOURCE_URL" "$env_file"
-                        delete_env_val "GEOSITE_SOURCE_URL" "$env_file"
                         ;;
                     4)
-                        echo ""
-                        read -r -p "URL репозитория правил (ROUTING_SOURCE_REPO): " in_repo
-                        [ -n "$in_repo" ] && set_env_val "ROUTING_SOURCE_REPO" "$in_repo" "$env_file"
-                        read -r -p "Прямой URL geoip.dat (GEOIP_SOURCE_URL, Enter = пропустить): " in_gip
-                        [ -n "$in_gip" ] && set_env_val "GEOIP_SOURCE_URL" "$in_gip" "$env_file"
-                        read -r -p "Прямой URL geosite.dat (GEOSITE_SOURCE_URL, Enter = пропустить): " in_gst
-                        [ -n "$in_gst" ] && set_env_val "GEOSITE_SOURCE_URL" "$in_gst" "$env_file"
-                        set_env_val "ROUTING_SOURCE_PRESET" "custom" "$env_file"
-                        ;;
-                    5)
                         set_env_val "ROUTING_SOURCE_PRESET" "hydraponique,geogaga" "$env_file"
                         set_env_val "ROUTING_RULES" "JSONSUB,WHITELIST" "$env_file"
-                        delete_env_val "ROUTING_SOURCE_REPO" "$env_file"
-                        delete_env_val "GEOIP_SOURCE_URL" "$env_file"
-                        delete_env_val "GEOSITE_SOURCE_URL" "$env_file"
                         ;;
                     *) continue ;;
                 esac
@@ -1424,7 +1395,6 @@ wizard_install() {
     read -r -p "      Путь [Enter = ${default_dir}]: " input_dir || input_dir=""
     local install_dir="${input_dir:-$default_dir}"
     mkdir -p "$install_dir"
-    mkdir -p "$install_dir/custom_geo"
     save_install_dir "$install_dir"
 
     # Значения прошлой установки: при повторном запуске визарда они становятся
@@ -1535,17 +1505,12 @@ wizard_install() {
         hydraponique)                 def_src_opt="2" ;;
         vahellame)                    def_src_opt="3" ;;
         "hydraponique,geogaga"|*","*) def_src_opt="4" ;;
-        custom)                       def_src_opt="5" ;;
     esac
     local src_list="1-4"
-    if [ "$def_src_opt" = "5" ]; then
-        echo "      5) Оставить текущий кастомный источник (ROUTING_SOURCE_REPO)"
-        src_list="1-5"
-    fi
     local src_ans=""
     read -r -p "      Выберите вариант [${src_list}, Enter = ${def_src_opt}]: " src_ans || src_ans=""
     case "$src_ans" in
-        1|2|3|4|5) ;;
+        1|2|3|4) ;;
         *) src_ans="$def_src_opt" ;;
     esac
     local source_preset="geogaga"
@@ -1554,12 +1519,6 @@ wizard_install() {
         2) source_preset="hydraponique"; def_rules="JSONSUB,WHITELIST" ;;
         3) source_preset="vahellame"; def_rules="WHITELIST" ;;
         4) source_preset="hydraponique,geogaga"; def_rules="JSONSUB,WHITELIST" ;;
-        5)
-            if [ "$prev_preset" = "custom" ]; then
-                source_preset="custom"
-                def_rules="${prev_rules:-JSONSUB,WHITELIST}"
-            fi
-            ;;
         1) source_preset="geogaga"; def_rules="HAPP" ;;
     esac
     # Пресет не менялся — сохраняем прежний список правил, если он был задан
@@ -1683,12 +1642,7 @@ EOF
                     case "$key" in
                         DOMAIN|ROUTING_TOKEN|ENABLED_CLIENTS|ROUTING_SOURCE_PRESET|ROUTING_RULES|SERVE_FORMATS|SERVE_GEOIP|SERVE_GEOSITE|PUBLIC_GEO_BASE_URL|HTTP_BIND|HTTP_PORT|SCHEDULE|SYNC_ON_START|REMNAWAVE_BASE_URL|REMNAWAVE_TOKEN|DOCKER_NETWORK)
                             continue ;;
-                        ROUTING_SOURCE_REPO|GEOIP_SOURCE_URL|GEOSITE_SOURCE_URL)
-                            # ключи кастомного источника переносим только при пресете custom
-                            if [ "$source_preset" != "custom" ]; then
-                                continue
-                            fi
-                            ;;
+
                     esac
                     if ! grep -q "^${key}=" "$tmp_env"; then
                         printf '%s\n' "$line" >> "$tmp_env"

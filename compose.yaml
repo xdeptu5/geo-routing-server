@@ -50,7 +50,6 @@ services:
     volumes:
       - routing_data:/app/www
       - ./.cache:/app/.cache
-      - ./custom_geo:/app/custom_geo:ro
 
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:80/health"]
@@ -74,3 +73,4 @@ volumes:
 #   remnawave:
 #     external: true
 #     name: "${DOCKER_NETWORK:-remnawave-network}"
+

@@ -19,10 +19,10 @@ __pycache__
 **/__pycache__
 *.py[cod]
 **/*.py[cod]
-custom_geo/*.dat
 *.log
 .env
 token.txt
 *.md
 LICENSE
 *.example
+

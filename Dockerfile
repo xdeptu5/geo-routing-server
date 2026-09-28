@@ -16,7 +16,7 @@ WORKDIR /app
 
 # Настройка встроенного Nginx и перенаправление логов в stdout/stderr
 COPY nginx-internal.conf /etc/nginx/http.d/default.conf
-RUN mkdir -p /app/www /app/.cache /app/custom_geo /run/nginx /var/log/nginx && \
+RUN mkdir -p /app/www /app/.cache /run/nginx /var/log/nginx && \
     chown -R root:nginx /app/www /run/nginx /var/log/nginx && \
     chmod 755 /app/www /run/nginx /var/log/nginx && \
     ln -sf /dev/stdout /var/log/nginx/access.log && \
@@ -34,3 +34,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD wget -q -O /dev/null http://127.0.0.1:80/health || exit 1
 
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
+

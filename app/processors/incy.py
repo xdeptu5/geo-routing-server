@@ -16,7 +16,7 @@ class IncyProcessor(BaseProcessor):
     
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.geo_manager = GeoManager(self.downloader, Config.CUSTOM_GEO_DIR)
+        self.geo_manager = GeoManager(self.downloader)
 
     def process(self) -> bool:
         client = self.CLIENT_NAME
