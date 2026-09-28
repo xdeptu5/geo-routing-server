@@ -1202,7 +1202,7 @@ menu_clients_bases() {
         hr 50
         echo ""
 
-        local cur_clients cur_geoip cur_geosite cur_rules ext_geo cur_preset cur_repo
+        local cur_clients cur_geoip cur_geosite cur_rules ext_geo cur_preset
         cur_clients="$(get_env_val "ENABLED_CLIENTS" "$env_file" "HAPP,INCY")"
         cur_geoip="$(get_env_val "SERVE_GEOIP" "$env_file" "true")"
         cur_geosite="$(get_env_val "SERVE_GEOSITE" "$env_file" "true")"
