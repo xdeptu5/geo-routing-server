@@ -3,7 +3,7 @@
 Все заметные изменения в проекте **Geo Routing Server** документируются в этом файле.  
 Формат основан на [Keep a Changelog](https://keepachangelog.com/ru/1.0.0/), проект придерживается [Семантического версионирования (SemVer)](https://semver.org/lang/ru/).
 
-## [Unreleased]
+## [1.5.2] - 2026-10-07
 
 ### Исправлено
 * **Менеджер сквадов (`app/squads.py`):** `squads.json` по умолчанию хранится в `STORAGE_DIR/.squads.json` (внутри уже смонтированного тома `routing_data`) вместо непостоянного `/app/squads.json` — привязки сквадов больше не теряются при пересоздании контейнера (`docker compose pull`/`up`, `geoserver update`). Старый файл переносится автоматически при первом запуске.
