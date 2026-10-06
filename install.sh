@@ -1637,8 +1637,8 @@ wizard_install() {
         # каталог ([ -d "$saved_dir" ] резолвится от текущего cwd) и тихо
         # съезжал на дефолт /opt/geo-routing-server, хотя файлы лежат в другом месте.
         case "$install_dir" in
-            "~") install_dir="$HOME" ;;
-            "~/"*) install_dir="${HOME}/${install_dir#\~/}" ;;
+            \~) install_dir="$HOME" ;;
+            \~/*) install_dir="${HOME}/${install_dir#\~/}" ;;
         esac
         if [[ "$install_dir" != /* ]]; then
             install_dir="$(pwd)/$install_dir"
@@ -1944,7 +1944,8 @@ EOF
     # возможными ручными правками (build:, labels, доп. сети, лимиты) без
     # следа — тот же принцип защиты, что уже применяется к .env выше.
     if [ -f "$install_dir/compose.yaml" ]; then
-        local compose_backup="$install_dir/compose.yaml.bak.$(date +%Y%m%d-%H%M%S)"
+        local compose_backup
+        compose_backup="$install_dir/compose.yaml.bak.$(date +%Y%m%d-%H%M%S)"
         cp -p "$install_dir/compose.yaml" "$compose_backup" 2>/dev/null \
             && echo -e "      ${C_GRAY}[i] Найден существующий compose.yaml — сохранена резервная копия: $(basename "$compose_backup")${C_RESET}"
     fi
