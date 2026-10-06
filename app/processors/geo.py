@@ -53,9 +53,16 @@ class GeoManager:
                 return self._memory_cache[url]
             logger.info(f"  Downloading {geo_type} for {client} from repository source: {url}")
             try:
+                # Ключ диск-кэша (ETag + stale-if-error) должен включать сам URL:
+                # Geoipurl/Geositeurl берутся из DEFAULT.JSON разных клиентов
+                # (HAPP/INCY) и разных пресетов и могут указывать на разные
+                # источники. С постоянным ключом "global_{geo_type}" второй
+                # fetch отправлял чужой ETag и при сетевой ошибке получал
+                # stale-if-error контент от совсем другого URL (например,
+                # базу другого пресета) — молча и без ошибки в логах.
                 data = self.downloader.fetch(
                     url,
-                    f"global_{geo_type}",
+                    f"global_{geo_type}_{self.downloader._safe_cache_key(url)}",
                     kind="binary",
                     trusted_url=False,
                 )

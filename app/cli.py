@@ -578,7 +578,11 @@ def menu_squads(mgr: SquadManager) -> None:
             except (KeyboardInterrupt, EOFError):
                 pass
         elif choice == "5":
-            env_file = input("Путь к .env [Enter = .env]: ").strip() or None
+            try:
+                env_file = input("Путь к .env [Enter = .env]: ").strip() or None
+            except (KeyboardInterrupt, EOFError):
+                print("\nОтмена.")
+                continue
             cmd_squads_migrate(env_path=env_file, manager=mgr)
             try:
                 input(f"{c.GRAY}Нажмите Enter, чтобы продолжить...{c.RESET}")

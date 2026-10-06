@@ -211,7 +211,7 @@ def _build_preset_sections(token: str, storage_dir: Optional[Path], preset: Opti
                         happ_lines.append(f"      Сквад {u} -> {rule}")
             except Exception:
                 pass
-            if not squads and not os.getenv("REMNAWAVE_GLOBAL_RULE"):
+            if not squads and not (os.getenv("REMNAWAVE_GLOBAL_RULE") or os.getenv("GITHUB_RAW_URL")):
                 happ_lines.append("      [i] Сквады ещё не привязаны. Добавьте сквад через: geoserver -> пункт 4")
                 if Config.should_serve_deeplink("HAPP"):
                     happ_lines.append("  - Доступные диплинки правил (ручной импорт):")
@@ -379,15 +379,28 @@ def main():
     # 5. Инициализируем активные процессоры для всех активных пресетов
     clients_set = set(Config.ENABLED_CLIENTS)
     active_processors = []
-    
+    failures = 0
+
     for preset in Config.ACTIVE_PRESETS:
         p_name = None if preset.lower() == Config.PRIMARY_PRESET.lower() else preset
         if any(k in clients_set for k in ("HAPP", "HAPP_DEEPLINK", "HAPP_LOCAL", "HAPP_GEO")):
-            active_processors.append(HappProcessor(downloader, Config.STORAGE_DIR, token, Config.DOMAIN, preset_name=p_name))
-            
+            try:
+                active_processors.append(HappProcessor(downloader, Config.STORAGE_DIR, token, Config.DOMAIN, preset_name=p_name))
+            except Exception as e:
+                # Конструктор процессора не должен ронять main() целиком: необработанное
+                # исключение здесь падало бы мимо write_sync_status ниже, и
+                # .sync-status.json навсегда остался бы в состоянии "running" —
+                # контейнер выглядел бы «работающим» (и рестартующимся без explicit failed).
+                logger.error(f"Failed to initialize HappProcessor ({preset}): {e}")
+                failures += 1
+
         if any(k in clients_set for k in ("INCY", "INCY_GEO")):
-            active_processors.append(IncyProcessor(downloader, Config.STORAGE_DIR, token, Config.DOMAIN, preset_name=p_name))
-            
+            try:
+                active_processors.append(IncyProcessor(downloader, Config.STORAGE_DIR, token, Config.DOMAIN, preset_name=p_name))
+            except Exception as e:
+                logger.error(f"Failed to initialize IncyProcessor ({preset}): {e}")
+                failures += 1
+
     if not active_processors:
         # Ранний выход при провале старта: фиксируем статус ошибки и выходим с
         # ненулевым кодом, иначе упавший контейнер выглядит «работающим»
@@ -395,8 +408,7 @@ def main():
         logger.error("No valid processors active. Please check ENABLED_CLIENTS in .env")
         write_sync_status(Config.STORAGE_DIR, token, "failed")
         sys.exit(1)
-        
-    failures = 0
+
     for processor in active_processors:
         try:
             if not processor.process():

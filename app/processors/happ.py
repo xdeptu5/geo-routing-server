@@ -79,16 +79,23 @@ class HappProcessor(BaseProcessor):
                     else:
                         r_name = r
                         configured_rules.add(r_name if r_name.endswith(".JSON") else f"{r_name}.JSON")
-            global_rule = os.getenv("REMNAWAVE_GLOBAL_RULE", "").strip().upper()
-            if global_rule:
-                if "/" in global_rule or ":" in global_rule:
-                    sep = "/" if "/" in global_rule else ":"
-                    pfx, g_name = global_rule.split(sep, 1)
+            # GITHUB_RAW_URL — старое имя той же настройки (ещё учитывается в
+            # RemnawaveSync.sync()); без фолбэка здесь правило, заданное
+            # только через него, не попадало бы в configured_rules и могло
+            # не сгенерироваться. normalize_squad_rule() также умеет извлечь
+            # имя правила из полного URL (как исторически записывали
+            # GITHUB_RAW_URL), а не только из короткого "ИМЯ" / "ПРЕФИКС/ИМЯ".
+            global_rule_raw = os.getenv("REMNAWAVE_GLOBAL_RULE", "").strip() or os.getenv("GITHUB_RAW_URL", "").strip()
+            if global_rule_raw:
+                from app.squads import normalize_squad_rule
+
+                global_rule = normalize_squad_rule(global_rule_raw)
+                if "/" in global_rule:
+                    pfx, g_name = global_rule.split("/", 1)
                     if pfx.strip().upper() == (self.preset_prefix or Config.PRIMARY_PRESET.upper()):
-                        configured_rules.add(g_name if g_name.endswith(".JSON") else f"{g_name}.JSON")
-                else:
-                    g_name = global_rule
-                    configured_rules.add(g_name if g_name.endswith(".JSON") else f"{g_name}.JSON")
+                        configured_rules.add(g_name)
+                elif global_rule:
+                    configured_rules.add(global_rule)
 
             if configured_rules and self.preset_name not in ("geogaga", "vahellame"):
                 discovered_by_rule = {file_name.upper(): file_name for file_name in config_files}

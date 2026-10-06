@@ -302,14 +302,20 @@ class RemnawaveSync:
 
         base_api_url = cls.get_api_url()
         happ_dir = Config.STORAGE_DIR / token / "HAPP"
-        
+
         logger.info("[Remnawave] Starting direct Remnawave API synchronization...")
-        
-        cls.last_errors = []
+
+        # Копим ошибки шага 1 (глобальное правило) в локальный список, а не в
+        # cls.last_errors напрямую: sync_squads() ниже сам делает
+        # `cls.last_errors = []` в начале своей работы (у него есть и
+        # самостоятельные вызыватели, которым нужен "чистый" список под себя),
+        # поэтому прямая запись сюда стиралась бы шагом 2 и ошибка глобального
+        # правила не попадала бы ни в Telegram-алерт, ни в .sync-status.json.
+        global_errors: List[str] = []
         success = True
         squads = cls.load_squad_configs()
         global_rule = os.getenv("REMNAWAVE_GLOBAL_RULE", "").strip() or os.getenv("GITHUB_RAW_URL", "").strip()
-        
+
         # 1. Синхронизация глобальных настроек подписок (если задано)
         if global_rule:
             from app.squads import normalize_squad_rule
@@ -323,7 +329,7 @@ class RemnawaveSync:
                     data = settings_data.get("response", settings_data)
                     settings_uuid = data.get("uuid")
                     current_headers = data.get("customResponseHeaders", {}) or {}
-                    
+
                     if current_headers.get(cls.ROUTING_HEADER) != deeplink:
                         current_headers[cls.ROUTING_HEADER] = deeplink
                         patch_payload = {
@@ -333,24 +339,29 @@ class RemnawaveSync:
                         if cls._api_request("PATCH", settings_url, patch_payload) is not None:
                             logger.info("[Remnawave] Successfully updated global subscription-settings routing header!")
                         else:
-                            cls.last_errors.append("Не удалось обновить глобальные subscription-settings в Remnawave")
+                            global_errors.append("Не удалось обновить глобальные subscription-settings в Remnawave")
                             success = False
                     else:
                         logger.info("[Remnawave] Global subscription-settings routing is already up to date.")
                 else:
                     logger.error("[Remnawave] Failed to fetch subscription-settings from Remnawave API")
-                    cls.last_errors.append("Не удалось загрузить subscription-settings из Remnawave API")
+                    global_errors.append("Не удалось загрузить subscription-settings из Remnawave API")
                     success = False
             else:
                 error = f"Настроенный файл {deeplink_filename_for(rule_file)} не найден в {happ_dir}"
                 logger.error(f"[Remnawave] {error}")
-                cls.last_errors.append(error)
+                global_errors.append(error)
                 success = False
 
         # 2. Синхронизация сквадов (External Squads)
         if squads:
             if not cls.sync_squads(squads, happ_dir):
                 success = False
+            # sync_squads() перезаписал cls.last_errors своим списком —
+            # добавляем ошибки шага 1 впереди, не теряя их.
+            cls.last_errors = global_errors + cls.last_errors
+        else:
+            cls.last_errors = global_errors
 
         return success
 

@@ -73,7 +73,16 @@ class BaseProcessor(ABC):
 
     @classmethod
     def parse_rule_payload(cls, raw_bytes: bytes, client: str) -> dict:
-        """Парсит полученные данные правила — чистый JSON либо deeplink onadd/base64."""
+        """Парсит полученные данные правила — чистый JSON либо deeplink onadd/base64.
+
+        Принимает обе формы схемы (как и Downloader._validate_content для kind="rule"):
+        "<client>://routing/onadd/<b64>" и "<client>://autorouting/onadd/<b64>"
+        (последнюю использует Incy: "incy://autorouting/onadd/..."). Раньше здесь
+        матчилась только форма "routing/onadd", поэтому содержимое, уже принятое
+        загрузчиком как валидное правило, здесь могло не распарситься.
+        Base64 допускается как в обычном, так и в URL-safe алфавите (с символами
+        '-'/'_'), с паддингом '=' или без него.
+        """
         text = raw_bytes.decode("utf-8", errors="replace").strip()
         try:
             data = json.loads(text)
@@ -82,11 +91,13 @@ class BaseProcessor(ABC):
         except Exception:
             pass
 
-        pattern = rf"{client.lower()}://routing/onadd/([A-Za-z0-9+/=]+)"
+        pattern = rf"{client.lower()}://(?:routing|autorouting)/onadd/([A-Za-z0-9+/_-]+=*)"
         match = re.search(pattern, text)
         if match:
             b64_str = match.group(1)
-            decoded_json = base64.b64decode(b64_str).decode("utf-8")
+            padded = b64_str + "=" * (-len(b64_str) % 4)
+            decoder = base64.urlsafe_b64decode if ("-" in b64_str or "_" in b64_str) else base64.b64decode
+            decoded_json = decoder(padded).decode("utf-8")
             data = json.loads(decoded_json)
             if isinstance(data, dict):
                 return data

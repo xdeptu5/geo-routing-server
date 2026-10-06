@@ -13,19 +13,84 @@ from app.config import Config
 logger = logging.getLogger("geo-routing-server")
 
 
+def _migrate_legacy_squads_file(legacy_path: Path, target_path: Path) -> None:
+    """Одноразовый перенос squads.json со старого (непостоянного) пути.
+
+    До исправления дефолтным путём был Config.BASE_DIR / 'squads.json'
+    (обычно /app/squads.json) — он лежит не в примонтированном томе
+    (routing_data:/app/www), поэтому привязки сквадов терялись при любом
+    пересоздании контейнера (docker compose pull/up, geoserver update).
+    Если на новом (персистентном) месте файла ещё нет, а старый существует
+    и непустой — переносим его содержимое. Старый файл не удаляется, так что
+    повторный вызов безопасен (срабатывает только пока целевого файла нет).
+    """
+    try:
+        if target_path.exists() or not legacy_path.is_file():
+            return
+        content = legacy_path.read_text(encoding="utf-8")
+        if not content.strip():
+            return
+
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        temp_fd, temp_path = tempfile.mkstemp(
+            prefix=".squads.", suffix=".tmp", dir=str(target_path.parent)
+        )
+        try:
+            with os.fdopen(temp_fd, "w", encoding="utf-8") as f:
+                f.write(content)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temp_path, target_path)
+            try:
+                os.chmod(target_path, 0o600)
+            except OSError:
+                pass
+            logger.info(
+                f"[SquadManager] Привязки сквадов перенесены в постоянное хранилище: "
+                f"{legacy_path} -> {target_path}"
+            )
+        except Exception:
+            if os.path.exists(temp_path):
+                try:
+                    os.unlink(temp_path)
+                except OSError:
+                    pass
+            raise
+    except Exception as e:
+        logger.warning(f"[SquadManager] Не удалось перенести squads.json в постоянное хранилище: {e}")
+
+
 def get_default_squads_path() -> Path:
     """Определяет стандартный путь к squads.json:
 
     1. Переменная окружения SQUADS_FILE (если задана)
-    2. Config.BASE_DIR / 'squads.json' (если Config.BASE_DIR существует)
-    3. /app/squads.json (если родительская директория /app существует)
-    4. squads.json в текущей рабочей директории
+    2. Config.STORAGE_DIR / '.squads.json' — внутри примонтированного тома
+       (routing_data), чтобы привязки сквадов переживали пересоздание
+       контейнера. Имя с точкой исключает отдачу файла через встроенный
+       nginx (location ~ /\\. запрещает доступ к скрытым файлам) при этом
+       файл физически лежит в той же директории, что и публикуемые правила.
+       Используется, только если Config.BASE_DIR существует (признак того,
+       что мы внутри контейнера приложения, а не в произвольном окружении).
+       При первом обращении переносит существующий файл со старого,
+       непостоянного пути (см. _migrate_legacy_squads_file).
+    3. Config.BASE_DIR / 'squads.json' (legacy путь, если STORAGE_DIR
+       недоступен)
+    4. /app/squads.json (если родительская директория /app существует)
+    5. squads.json в текущей рабочей директории
     """
     env_path = os.getenv("SQUADS_FILE", "").strip()
     if env_path:
         return Path(env_path)
 
     base_dir = getattr(Config, "BASE_DIR", None)
+    storage_dir = getattr(Config, "STORAGE_DIR", None)
+
+    if storage_dir and base_dir and Path(base_dir).is_dir():
+        persisted_path = Path(storage_dir) / ".squads.json"
+        legacy_path = Path(base_dir) / "squads.json"
+        _migrate_legacy_squads_file(legacy_path, persisted_path)
+        return persisted_path
+
     if base_dir:
         cand_config = Path(base_dir) / "squads.json"
         if cand_config.is_file() or cand_config.parent.is_dir():

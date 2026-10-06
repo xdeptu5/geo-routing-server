@@ -40,7 +40,11 @@ export ROUTING_TOKEN="$ROUTING_TOKEN_EFFECTIVE"
 
 # Nginx may serve only the current token tree. Old trees remain in the volume
 # for recovery but become unreachable after a token rotation.
-printf 'location ~ ^/(?!health(?:/|$)|HAPP(?:/|$)|INCY(?:/|$)|%s(?:/|$))[^/]+(?:/|$) { return 404; }\n' \
+# GEOGAGA/VAHELLAME/HYDRAPONIQUE are the root symlinks for secondary presets
+# in multi-preset mode (app/main.py ensure_internal_symlinks); they must stay
+# allowed here too, or requests to them get a bare 404 before ever reaching
+# nginx-internal.conf's IP-restricted `location ~ ^/(HAPP|INCY|...)/` block.
+printf 'location ~ ^/(?!health(?:/|$)|HAPP(?:/|$)|INCY(?:/|$)|GEOGAGA(?:/|$)|VAHELLAME(?:/|$)|HYDRAPONIQUE(?:/|$)|%s(?:/|$))[^/]+(?:/|$) { return 404; }\n' \
     "$ROUTING_TOKEN_EFFECTIVE" > /etc/nginx/token-access.conf
 
 cleanup() {

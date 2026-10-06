@@ -38,7 +38,7 @@
 
 > ℹ️ *Caddy или внешний Nginx выполняют свою прямую роль — служат фронтальным HTTPS-прокси с SSL-сертификатом, в то время как контейнер берёт на себя всю логику подготовки данных и интеграций.*
 
-> 📦 **Актуальная версия:** `v1.5.0` (мульти-пресетная раздача, изолированные Geo-базы, автопатч Remnawave).  
+> 📦 **Актуальная версия:** `v1.5.1` (мульти-пресетная раздача, изолированные Geo-базы, автопатч Remnawave).  
 > 📜 Полная история версий и изменений доступна в файле [CHANGELOG.md](CHANGELOG.md).
 
 ## 📌 Возможности
@@ -166,7 +166,7 @@ bash install.sh      # запуск установки
        volumes:
          - routing_data:/app/www
          - ./.cache:/app/.cache
-         healthcheck:
+       healthcheck:
          test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:80/health"]
          interval: 30s
          timeout: 5s
@@ -382,6 +382,7 @@ Happ принимает правила через Base64-диплинк `happ://
 | `REMNAWAVE_BASE_URL` | *пусто* | URL API панели (например, `http://remnawave:3000/api`) |
 | `REMNAWAVE_TOKEN` | *пусто* | JWT-токен администратора панели |
 | `REMNAWAVE_GLOBAL_RULE` | *пусто* | Глобальное правило для всех подписок |
+| `GITHUB_RAW_URL` | *пусто* | *(Legacy)* Старое имя `REMNAWAVE_GLOBAL_RULE`, используется как фолбэк |
 | `CLOUDFLARE_ZERO_TRUST_CLIENT_ID` | *пусто* | Client ID сервисного токена Cloudflare Zero Trust |
 | `CLOUDFLARE_ZERO_TRUST_CLIENT_SECRET` | *пусто* | Client Secret сервисного токена Cloudflare Zero Trust |
 | `REMNAWAVE_SQUAD_N_UUID` | *пусто* | *(Legacy)* UUID сквада N (N = 1..10+). Рекомендуется использовать `squads.json` |
@@ -488,9 +489,9 @@ location /<ROUTING_TOKEN>/ {
 | **Конфиги реверс-прокси** | `geoserver proxy` или пункт `8` | Генератор готовых сниппетов для Caddy и Nginx |
 | **Центр обновлений** | `geoserver update` или пункт `9` | Обновление Docker-образа (`update-image`), скрипта (`update-script`) или всего (`update-all`) |
 | **Перезапуск** | `geoserver restart` или пункт `10` | Перезапуск контейнера с применением настроек `.env` |
-| **Редактирование .env** | `geoserver config` / `edit` или пункт `11` | Прямое редактирование конфигурационного файла |
-| **Удаление сервиса** | `geoserver uninstall` или пункт `12` | Остановка и полное удаление сервиса и скрипта |
-| **Управление контейнером** | `geoserver start` / `stop` | Быстрый запуск или остановка контейнера через CLI |
+| **Управление контейнером** | `geoserver start` / `stop` или пункт `11` | Запуск или остановка контейнера (пункт меняется на "Запустить" / "Остановить" по текущему состоянию) |
+| **Редактирование .env** | `geoserver config` / `edit` или пункт `12` | Прямое редактирование конфигурационного файла |
+| **Удаление сервиса** | `geoserver uninstall` или пункт `13` | Остановка и полное удаление сервиса и скрипта |
 | **Выход** | Пункт `0` | Выход из меню |
 
 > 💡 **Автоматическая проверка обновлений:**  
@@ -533,7 +534,7 @@ docker compose exec geo-routing-server python -m app.cli squads migrate
 
 ```bash
 ruff check app tests            # линтер (конфиг — ruff.toml)
-python -m pytest -q             # юнит-тесты (217 тестов в tests/)
+python -m pytest -q             # юнит-тесты (203 теста в tests/)
 python -m compileall app        # синтаксис всех модулей без запуска
 bash -n install.sh docker-entrypoint.sh   # синтаксис shell-скриптов
 shellcheck -S warning install.sh docker-entrypoint.sh  # статический анализ (нужен shellcheck)
@@ -545,7 +546,7 @@ CI (`.github/workflows/docker.yml`) на каждый push в `main`, тег, pu
 
 | Задача | Что делает |
 | --- | --- |
-| **Python: ruff lint + pytest** | `ruff check app`, `python -m pytest -q` (217 тестов), `python -m compileall app` |
+| **Python: ruff lint + pytest** | `ruff check app`, `python -m pytest -q` (203 теста), `python -m compileall app` |
 | **Shellcheck (install.sh, docker-entrypoint.sh)** | `shellcheck -S warning` обоих скриптов |
 | **Build and publish Docker image** | сборка и публикация образа (GHCR/Docker Hub) — только на push/тег/ручной запуск, после успешного линтинга и shellcheck; на pull request не собирается |
 

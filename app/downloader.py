@@ -274,20 +274,27 @@ class Downloader:
                     if status == 200:
                         if not self._validate_content(body, kind):
                             raise DownloadError(f"Downloaded content from {url} failed validation ({kind})")
-                            
+
                         # Атомарно обновляем кэш
                         tmp_body = cache_body_file.with_name(f".{cache_body_file.name}.tmp")
                         tmp_body.write_bytes(body)
                         tmp_body.replace(cache_body_file)
-                        
+
                         new_etag = res_headers.get("ETag")
                         if new_etag:
                             cache_etag_file.write_text(new_etag.strip(), encoding="utf-8")
                         else:
                             cache_etag_file.unlink(missing_ok=True)
-                            
+
                         return body
-                        
+                    else:
+                        # Любой другой статус (например, нестандартный 2xx от CDN,
+                        # не 304/не 200) раньше тихо проходил этот блок: тело
+                        # прочитано, но ни return, ни ошибка — цикл просто шёл на
+                        # следующую попытку с last_error=None, и после всех
+                        # ретраев падал с бесполезным "Last error: None".
+                        raise DownloadError(f"Unexpected HTTP status {status} from {url} (expected 200)")
+
             except urllib.error.HTTPError as e:
                 if e.code == 304:
                     # 304 Not Modified — используем кэшированную копию
