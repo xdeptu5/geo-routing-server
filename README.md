@@ -101,14 +101,13 @@
 Три звена, каждое со своей ответственностью: хост управляет жизненным циклом, контейнер делает всю работу, клиенты только забирают готовый результат.
 
 ```mermaid
-flowchart TD
-    HOST["🖥️ <b>ХОСТ</b> — Bash-оркестратор (install.sh / geoserver)<br/>• Docker Compose: up / down / restart / logs / pull / update<br/>• Атомарное редактирование .env с ротацией бэкапов<br/>• TUI-меню, делегирующее в Python CLI"]
-    CONTAINER["🐳 <b>КОНТЕЙНЕР</b> — Alpine + Python 3.12 + Nginx<br/>• crond: автообновление по расписанию<br/>• Ядро синхронизации (app/main.py): fallback-цепочка источников, ETag 304<br/>• Менеджер сквадов (app/squads.py): squads.json + API Remnawave<br/>• .sync-status.json / .sync-summary.txt — единый источник правды<br/>• Python CLI (app/cli.py): status, sync, proxy, squads, menu<br/>• Внутренний Nginx: отдача файлов по токену, маскирование логов"]
-    CLIENTS["📱 <b>Клиенты и панели</b><br/>• Incy: заголовок подписки autorouting (pull JSON по HTTPS)<br/>• Happ: Base64-диплинк или автопатч сквада Remnawave<br/>• Базы: geoip.dat / geosite.dat по HTTPS"]
-
-    HOST -->|docker compose| CONTAINER
-    CONTAINER -->|"127.0.0.1:8080 → HTTPS-прокси"| CLIENTS
+flowchart LR
+    HOST["🖥️ Хост<br/>install.sh / geoserver"] -->|docker compose| CONTAINER["🐳 Контейнер<br/>Alpine + Python 3.12 + Nginx"] -->|HTTPS| CLIENTS["📱 Клиенты и панели"]
 ```
+
+* **Хост** — Bash-оркестратор: управление Docker Compose, атомарное редактирование `.env` с бэкапами, TUI-меню.
+* **Контейнер** — делает всю работу: crond по расписанию, ядро синхронизации (`app/main.py`, fallback-цепочка источников, ETag 304), менеджер сквадов (`app/squads.py`), Python CLI (`app/cli.py`), внутренний Nginx.
+* **Клиенты и панели** — только забирают готовый результат: Incy — заголовок подписки `autorouting`, Happ — Base64-диплинк или автопатч сквада Remnawave, базы — `geoip.dat`/`geosite.dat` по HTTPS.
 
 ---
 
