@@ -1,18 +1,35 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# Geo Routing Server — Скрипт установки и управления
+# Geo Routing Server — установка и управление на хосте
 # GitHub: https://github.com/xdeptu5/geo-routing-server
+#
+# Скрипт делает только то, что возможно лишь на хосте: выбор каталога,
+# установку команды geoserver, запуск/остановку/обновление/удаление контейнера.
+# Мастер установки и все настройки .env выполняет CLI внутри образа
+# (python -m app.cli setup / config ...) в разовом контейнере, куда каталог
+# установки монтируется в /host. Так правила проверки и меню существуют в
+# одном экземпляре и покрыты тестами.
+#
+# Контракт с CLI: код возврата 100 у `config ...` означает «изменения
+# сохранены» — скрипт применяет их (`docker compose up -d`) и открывает
+# раздел снова.
 # ==============================================================================
 
 set -euo pipefail
 
-SCRIPT_VERSION="1.5.3"
+SCRIPT_VERSION="1.6.0"
 CONFIG_RECORD="/etc/geo-routing-server.conf"
 DEFAULT_INSTALL_DIR="/opt/geo-routing-server"
 DOCKER_IMAGE="ghcr.io/xdeptu5/geo-routing-server:latest"
 INSTALL_SCRIPT_URL="https://raw.githubusercontent.com/xdeptu5/geo-routing-server/main/install.sh"
+SERVICE="geo-routing-server"
+# Минимальная версия контракта CLI в образе, которая нужна этому скрипту
+REQUIRED_CLI_API=2
+APPLY_RC=100
 
-# Палитра цветов и стилей оформления
+# Переопределения для тестов и разработки: локальный образ и пропуск pull
+IMAGE="${GRS_IMAGE:-$DOCKER_IMAGE}"
+
 C_RESET="\033[0m"
 C_BOLD="\033[1m"
 C_WHITE="\033[1;37m"
@@ -20,9 +37,7 @@ C_GREEN="\033[1;32m"
 C_RED="\033[1;31m"
 C_YELLOW="\033[1;33m"
 C_CYAN="\033[1;36m"
-C_MAGENTA="\033[1;35m"
 C_GRAY="\033[38;5;244m"
-C_LIGHT_GRAY="\033[38;5;250m"
 C_BORDER="\033[38;5;8m"
 
 hr() {
@@ -40,10 +55,15 @@ print_banner() {
     echo -e "${C_RESET}"
 }
 
+pause() {
+    echo ""
+    read -r -p "Нажмите Enter для возврата в меню..." _ || true
+}
+
 check_root() {
     if [ "$(id -u)" -ne 0 ]; then
         echo -e "${C_RED}[!] Для выполнения этой команды требуются права root.${C_RESET}"
-        echo -e "    Пожалуйста, запустите: ${C_BOLD}sudo geoserver${C_RESET} или ${C_BOLD}sudo bash $0${C_RESET}"
+        echo -e "    Пожалуйста, запустите: ${C_BOLD}sudo geoserver${C_RESET} или ${C_BOLD}sudo bash install.sh${C_RESET}"
         exit 1
     fi
 }
@@ -59,46 +79,22 @@ detect_compose() {
 }
 
 is_container_running() {
-    [ "$(docker inspect -f '{{.State.Running}}' geo-routing-server 2>/dev/null || true)" = "true" ]
-}
-
-apply_compose() {
-    local install_dir="$1"
-    local compose_cmd
-    compose_cmd="$(detect_compose)"
-
-    if [ -z "$compose_cmd" ]; then
-        echo -e "${C_RED}[!] Docker Compose не найден.${C_RESET}"
-        return 1
-    fi
-
-    if (cd "$install_dir" && $compose_cmd up -d); then
-        return 0
-    fi
-
-    echo -e "${C_RED}[!] Конфигурация сохранена, но контейнер не запущен. Проверьте ошибку Docker Compose выше.${C_RESET}"
-    return 1
+    [ "$(docker inspect -f '{{.State.Running}}' "$SERVICE" 2>/dev/null || true)" = "true" ]
 }
 
 check_dependencies() {
     local missing=()
     command -v curl >/dev/null 2>&1 || missing+=("curl")
     command -v docker >/dev/null 2>&1 || missing+=("docker")
-    
-    local compose_cmd
-    compose_cmd="$(detect_compose)"
-    if [ -z "$compose_cmd" ]; then
+    if [ -z "$(detect_compose)" ]; then
         missing+=("docker-compose-plugin")
     fi
-
     if [ ${#missing[@]} -gt 0 ]; then
         echo -e "${C_RED}[!] Не найдены обязательные компоненты: ${missing[*]}${C_RESET}"
         echo -e "${C_YELLOW}Установите Docker и Docker Compose перед продолжением.${C_RESET}"
         exit 1
     fi
-
-    # Наличие бинаря docker не означает, что демон запущен — проверяем явно,
-    # чтобы ошибка не всплыла позже с падением на середине установки.
+    # Наличие бинаря docker не означает, что демон запущен
     if ! docker info >/dev/null 2>&1; then
         echo -e "${C_RED}[!] Docker установлен, но демон недоступен (docker info завершился с ошибкой).${C_RESET}"
         echo -e "${C_YELLOW}Запустите демон (systemctl start docker) либо добавьте пользователя в группу docker: sudo usermod -aG docker \$USER${C_RESET}"
@@ -106,7 +102,11 @@ check_dependencies() {
     fi
 }
 
-# Проверка защищенных системных директорий: запрет установки в корень и удаления
+# ------------------------------------------------------------------------------
+# Каталог установки
+# ------------------------------------------------------------------------------
+
+# Защищённые системные каталоги: запрет установки и удаления
 is_protected_dir() {
     local p="${1:-}"
     [ -n "$p" ] || return 0
@@ -129,17 +129,13 @@ is_protected_dir() {
             return 0
         fi
     fi
-
     return 1
 }
 
-# Проверяет, принадлежит ли каталог проекту Geo Routing Server:
-# рядом должен лежать compose.yaml/docker-compose.yml с нашим сервисом.
+# Каталог принадлежит проекту: рядом лежит compose.yaml с нашим сервисом
 has_our_compose() {
     local dir="$1"
-    [ -n "$dir" ] || return 1
-    [ -d "$dir" ] || return 1
-
+    [ -n "$dir" ] && [ -d "$dir" ] || return 1
     local compose_file=""
     if [ -f "$dir/compose.yaml" ]; then
         compose_file="$dir/compose.yaml"
@@ -151,26 +147,20 @@ has_our_compose() {
     grep -q "geo-routing-server" "$compose_file" 2>/dev/null
 }
 
-# Полный маркер УСТАНОВКИ: наш compose И .env с нашими ключами, не системный каталог.
-# Нужен там, где каталог удаляется (uninstall): клон репозитория, где .env
-# ещё не создан, не должен становиться целью rm -rf.
+# Полный маркер установки (нужен перед удалением): наш compose и .env с нашими ключами
 is_project_dir() {
     local dir="$1"
     [ -n "$dir" ] || return 1
     ! is_protected_dir "$dir" || return 1
     has_our_compose "$dir" || return 1
-
-    local env_file="$dir/.env"
-    [ -f "$env_file" ] || return 1
-    grep -qE '^(GEO_ROUTING_|ROUTING_SOURCE_|ROUTING_TOKEN=|ENABLED_CLIENTS=)' "$env_file" 2>/dev/null || return 1
-
-    return 0
+    [ -f "$dir/.env" ] || return 1
+    grep -qE '^(GEO_ROUTING_|ROUTING_SOURCE_|ROUTING_TOKEN=|ENABLED_CLIENTS=)' "$dir/.env" 2>/dev/null
 }
 
 get_install_dir() {
     if [ -f "$CONFIG_RECORD" ]; then
         local saved_dir
-        # Убираем только \r: путь может содержать пробелы, их трогать нельзя
+        # Убираем только \r: путь может содержать пробелы
         saved_dir="$(head -n 1 "$CONFIG_RECORD" 2>/dev/null | tr -d '\r')"
         if [ -n "$saved_dir" ] && [ -d "$saved_dir" ] && ! is_protected_dir "$saved_dir"; then
             echo "$saved_dir"
@@ -179,10 +169,6 @@ get_install_dir() {
     fi
     local cwd
     cwd="$(pwd)"
-    # Для выбора каталога достаточно нашего compose: на первом запуске в
-    # свежем клоне .env ещё нет, и каталог установки не должен съезжать
-    # в /opt из-за этого. Жёсткий маркер (is_project_dir) нужен только
-    # при удалении.
     if has_our_compose "$cwd" && ! is_protected_dir "$cwd"; then
         echo "$cwd"
         return 0
@@ -195,495 +181,263 @@ get_install_dir() {
 }
 
 save_install_dir() {
-    local dir="$1"
     mkdir -p "$(dirname "$CONFIG_RECORD")"
-    echo "$dir" > "$CONFIG_RECORD"
+    echo "$1" > "$CONFIG_RECORD"
+}
+
+# Спрашивает каталог установки и приводит его к абсолютному пути.
+# Относительный путь или буквальный "~/geo" (read не раскрывает '~') иначе
+# сохранились бы как есть, и geoserver из другого cwd не нашёл бы установку.
+ask_install_dir() {
+    local default_dir="$1" input_dir="" dir=""
+    while true; do
+        read -r -p "      Путь [Enter = ${default_dir}]: " input_dir || input_dir=""
+        dir="${input_dir:-$default_dir}"
+        case "$dir" in
+            \~) dir="$HOME" ;;
+            \~/*) dir="${HOME}/${dir#\~/}" ;;
+        esac
+        [[ "$dir" == /* ]] || dir="$(pwd)/$dir"
+        dir="$(realpath -m -- "$dir" 2>/dev/null || echo "$dir")"
+        if is_protected_dir "$dir"; then
+            echo -e "      ${C_RED}[!] '${dir}' — системный или домашний каталог, установка туда запрещена.${C_RESET}" >&2
+            continue
+        fi
+        echo "$dir"
+        return 0
+    done
 }
 
 create_cli_shortcut() {
     local install_dir="$1"
     local bin_path="/usr/local/bin/geoserver"
-
-    # /usr/local/bin доступен только root — проверяем явно, чтобы не упасть
-    # на записи файла посреди установки/обновления.
     if [ "$(id -u)" -ne 0 ]; then
         echo -e "${C_RED}[!] Нет прав для записи в ${bin_path} — запустите от root.${C_RESET}"
-        echo -e "    Пожалуйста, запустите: ${C_BOLD}sudo geoserver${C_RESET} или ${C_BOLD}sudo bash $0${C_RESET}"
         return 1
     fi
-
     cat > "$bin_path" <<EOF
 #!/usr/bin/env bash
 exec bash "$install_dir/install.sh" "\$@"
 EOF
-    chmod +x "$bin_path" 2>/dev/null || true
+    chmod 755 "$bin_path" 2>/dev/null || true
 }
 
-get_env_val() {
-    local key="$1"
-    local file="$2"
-    local def="${3:-}"
-    if [ -f "$file" ]; then
-        local val
-        # -m1: если в файле остались дубли ключа, берём ровно первое значение
-        val=$(grep -m1 "^${key}=" "$file" 2>/dev/null | cut -d'=' -f2- | tr -d '\r' || true)
-        # .env, отредактированный вручную (пункт меню "Редактировать .env
-        # напрямую"), часто содержит значения в кавычках (KEY="value") по
-        # привычке из других dotenv-инструментов. Этот скрипт сам их никогда
-        # не пишет, но должен понимать на чтении — иначе is_valid_token/
-        # is_valid_domain/`case` по ENABLED_CLIENTS не узнают значение в
-        # кавычках и визард молча заменит его дефолтом при повторном запуске.
-        if [[ "$val" == \"*\" && "$val" == *\" ]] || [[ "$val" == \'*\' && "$val" == *\' ]]; then
-            val="${val:1:-1}"
-        fi
-        echo "${val:-$def}"
-    else
-        echo "$def"
+# Сохраняет install.sh в каталог установки.
+# При запуске `bash <(curl ...)` $0 — уже вычитанный пайп /dev/fd/N, и `cp`
+# дал бы пустой файл, поэтому копируем только непустой обычный файл, иначе
+# скачиваем свежую копию.
+persist_install_script() {
+    local target_dir="$1"
+    local target="${target_dir}/install.sh"
+    mkdir -p "$target_dir" 2>/dev/null || true
+    if [ -f "$0" ] && [ -r "$0" ] && [ -s "$0" ] \
+        && [ "$(realpath "$0" 2>/dev/null || true)" != "$(realpath "$target" 2>/dev/null || true)" ]; then
+        cp "$0" "$target" 2>/dev/null || true
     fi
-}
-
-set_env_val() {
-    local key="$1"
-    local val="$2"
-    local file="$3"
-
-    # Значение приводим к ОДНОЙ строке: многострочное значение ломает
-    # docker compose ("unexpected character") и любые построчные фильтры.
-    val="${val%%$'\n'*}"
-    val="${val//$'\r'/}"
-
-    if [ ! -f "$file" ]; then
-        printf '%s=%s\n' "$key" "$val" > "$file"
-        chmod 600 "$file" 2>/dev/null || true
+    if [ ! -s "$target" ]; then
+        curl -fsSL --connect-timeout 10 --max-time 30 "$INSTALL_SCRIPT_URL" -o "$target" 2>/dev/null || true
+    fi
+    if [ -s "$target" ]; then
+        # 755 явно, не "+x": на базе 0600 "+x" даёт 0711, и файл не читается без root
+        chmod 755 "$target" 2>/dev/null || true
         return 0
     fi
-
-    # Сохраняем резервную копию .env.bak перед изменением
-    cp -p "$file" "${file}.bak" 2>/dev/null || true
-
-    # Запись атомарная и без sed-делмитеров: значение уходит в awk через ENVIRON,
-    # поэтому спецсимволы (&, /, |, \, #, кавычки) не интерпретируются.
-    local tmp
-    tmp="$(mktemp "${file}.set.XXXXXX")" || return 1
-    # Если в файле уже остались дубли ключа (например, после ручной правки),
-    # заменяем первое вхождение и УДАЛЯЕМ остальные, а не оставляем как есть.
-    # get_env_val всегда читает первое (-m1), но внешний потребитель
-    # (docker compose env_file) не обязан следовать той же конвенции —
-    # при дублях он мог бы использовать последнее нетронутое вхождение,
-    # и контейнер читал бы не то значение, что показывает меню.
-    if GRS_ENV_KEY="$key" GRS_ENV_VAL="$val" awk '
-        BEGIN { k = ENVIRON["GRS_ENV_KEY"]; v = ENVIRON["GRS_ENV_VAL"]; done = 0 }
-        {
-            if (index($0, k "=") == 1) {
-                if (!done) { print k "=" v; done = 1 }
-                next
-            }
-            print
-        }
-        END { if (!done) print k "=" v }
-    ' "$file" > "$tmp"; then
-        :
-    else
-        rm -f "$tmp"
-        return 1
-    fi
-    chmod --reference="$file" "$tmp" 2>/dev/null || chmod 600 "$tmp" 2>/dev/null || true
-    mv -f "$tmp" "$file"
-}
-
-delete_env_val() {
-    local key="$1"
-    local file="$2"
-    [ -f "$file" ] || return 0
-
-    # Сохраняем резервную копию .env.bak перед изменением
-    cp -p "$file" "${file}.bak" 2>/dev/null || true
-
-    local tmp
-    tmp="$(mktemp "${file}.del.XXXXXX")" || return 1
-    if GRS_ENV_KEY="$key" awk '
-        BEGIN { k = ENVIRON["GRS_ENV_KEY"] }
-        index($0, k "=") != 1 { print }
-    ' "$file" > "$tmp"; then
-        :
-    else
-        rm -f "$tmp"
-        return 1
-    fi
-    chmod --reference="$file" "$tmp" 2>/dev/null || chmod 600 "$tmp" 2>/dev/null || true
-    mv -f "$tmp" "$file"
-}
-
-# Управление сквадами Remnawave делегировано в Python SquadManager (app.squads / app.cli)
-
-is_port_in_use() {
-    local port="$1"
-    if command -v ss >/dev/null 2>&1; then
-        ss -tuln 2>/dev/null | grep -q ":${port} " && return 0
-    elif command -v netstat >/dev/null 2>&1; then
-        netstat -tuln 2>/dev/null | grep -q ":${port} " && return 0
-    fi
+    echo -e "${C_YELLOW}[!] Не удалось сохранить install.sh в ${target_dir} (команда geoserver может не работать).${C_RESET}"
     return 1
 }
 
-# Нормализует URL API панели Remnawave: убирает хвостовые слэши и
-# гарантирует суффикс /api (https://host -> https://host/api).
-normalize_remna_url() {
-    local u="$1"
-    u="${u#"${u%%[![:space:]]*}"}"
-    u="${u%"${u##*[![:space:]]}"}"
-    if [ -z "$u" ]; then
-        printf '%s' ""
-        return 0
+# ------------------------------------------------------------------------------
+# Вызов CLI в образе
+# ------------------------------------------------------------------------------
+
+# Сведения о хосте, которых нет в контейнере: Docker-сети и занятые порты.
+# Передаются только если удалось их получить — иначе CLI не делает выводов.
+host_facts_args() {
+    local nets ports
+    if nets="$(docker network ls --format '{{.Name}}' </dev/null 2>/dev/null)"; then
+        printf '%s\n' "-e" "GRS_HOST_NETWORKS=$(printf '%s' "$nets" | paste -sd, -)"
     fi
-    while [ "${u%/}" != "$u" ]; do
-        u="${u%/}"
+    if command -v ss >/dev/null 2>&1; then
+        ports="$(ss -tlnH 2>/dev/null | awk '{print $4}' | sed -E 's/.*:([0-9]+)$/\1/' | sort -u | paste -sd, -)"
+        printf '%s\n' "-e" "GRS_HOST_PORTS=${ports}"
+    fi
+}
+
+# CLI в свежем образе, без стека (мастер первой установки: compose.yaml ещё нет)
+cli_image() {
+    local dir="$1"
+    shift
+    local -a args=(--rm -i)
+    if [ -t 0 ] && [ -t 1 ]; then args=(--rm -it); fi
+    local -a facts=()
+    mapfile -t facts < <(host_facts_args)
+    docker run "${args[@]}" -v "$dir:/host" ${facts[@]+"${facts[@]}"} \
+        --entrypoint python3 "$IMAGE" -m app.cli "$@"
+}
+
+# CLI в разовом контейнере стека: тот же образ, том данных, сети и свежий .env.
+# Работает и при остановленном или падающем основном контейнере.
+#
+# Важно: `docker compose run` и `docker run -i` пересылают в контейнер ВЕСЬ
+# stdin из пайпа, даже если команда его не читает. Вызовы без ввода поэтому
+# идут с `</dev/null`, иначе они «съедают» ответы, предназначенные следующему
+# интерактивному шагу (например, при `printf ... | geoserver config schedule`).
+cli_stack() {
+    local dir compose_cmd
+    dir="$(get_install_dir)"
+    compose_cmd="$(detect_compose)"
+    if [ -z "$compose_cmd" ]; then
+        echo -e "${C_RED}[!] Docker Compose не найден.${C_RESET}"
+        return 1
+    fi
+    local -a tty=()
+    if ! { [ -t 0 ] && [ -t 1 ]; }; then tty=(-T); fi
+    local -a facts=()
+    mapfile -t facts < <(host_facts_args)
+    (cd "$dir" && $compose_cmd run --rm --no-deps ${tty[@]+"${tty[@]}"} \
+        --entrypoint python3 -v "$dir:/host" ${facts[@]+"${facts[@]}"} \
+        "$SERVICE" -m app.cli "$@")
+}
+
+# Образ, установленный до v1.6.0, не знает подкоманд config/setup
+require_new_image() {
+    local api
+    api="$(cli_stack version </dev/null 2>/dev/null | sed -n 's/.*cli-api \([0-9][0-9]*\).*/\1/p' || true)"
+    if [ -z "$api" ] || [ "$api" -lt "$REQUIRED_CLI_API" ]; then
+        echo -e "${C_YELLOW}[!] Образ контейнера старее этой версии geoserver и не поддерживает настройку из меню.${C_RESET}"
+        echo -e "    Обновите образ: ${C_BOLD}geoserver update-image${C_RESET} (или пункт 9 → 2)."
+        return 1
+    fi
+}
+
+# ------------------------------------------------------------------------------
+# Docker Compose
+# ------------------------------------------------------------------------------
+
+compose_in() {
+    local dir compose_cmd
+    dir="$(get_install_dir)"
+    compose_cmd="$(detect_compose)"
+    if [ -z "$compose_cmd" ]; then
+        echo -e "${C_RED}[!] Docker Compose не найден.${C_RESET}"
+        return 1
+    fi
+    (cd "$dir" && $compose_cmd "$@")
+}
+
+# `up -d` возвращает 0, даже если контейнер сразу падает (например, из-за
+# невалидного токена), поэтому ждём реального состояния: running без рестартов.
+wait_for_container_ready() {
+    local tries=0 status="" restarts=""
+    while [ "$tries" -lt 25 ]; do
+        status="$(docker inspect -f '{{.State.Status}}' "$SERVICE" 2>/dev/null || true)"
+        restarts="$(docker inspect -f '{{.RestartCount}}' "$SERVICE" 2>/dev/null || echo 0)"
+        if [ "$status" = "running" ]; then
+            sleep 2
+            status="$(docker inspect -f '{{.State.Status}}' "$SERVICE" 2>/dev/null || true)"
+            restarts="$(docker inspect -f '{{.RestartCount}}' "$SERVICE" 2>/dev/null || echo 0)"
+            if [ "$status" = "running" ] && [ "${restarts:-0}" -lt 2 ] 2>/dev/null; then
+                return 0
+            fi
+        fi
+        if [ "${restarts:-0}" -ge 3 ] 2>/dev/null; then
+            return 1
+        fi
+        tries=$((tries + 1))
+        sleep 1
     done
-    case "$u" in
-        */api) ;;
-        *) u="${u}/api" ;;
-    esac
-    printf '%s' "$u"
+    return 1
 }
 
-# Валидация ввода в визарде (контракт токена повторяет docker-entrypoint.sh).
-# Заглушка из .env.example отдельно отклоняется: по формату она проходит
-# регулярку, но entrypoint считает её незаданным токеном и останавливает
-# контейнер (exit 1) для HAPP/INCY — нельзя давать визарду принять её как
-# «текущий валидный токен» при `cp .env.example .env` + Enter.
-is_valid_token() {
-    local value="${1:-}"
-    [ "$value" != "change_me_to_random_secret_token" ] && [[ "$value" =~ ^[A-Za-z0-9_-]{4,}$ ]]
+report_start_failure() {
+    echo -e "${C_RED}[!] Контейнер ${SERVICE} не запустился или падает с перезапуском.${C_RESET}"
+    echo -e "${C_YELLOW}Последние логи контейнера:${C_RESET}"
+    docker logs --tail 30 "$SERVICE" 2>&1 || true
 }
 
-is_valid_port() {
-    local p="${1:-}"
-    [[ "$p" =~ ^[0-9]{1,5}$ ]] || return 1
-    [ "$((10#$p))" -ge 1 ] && [ "$((10#$p))" -le 65535 ]
-}
-
-is_valid_domain() {
-    local d="${1:-}"
-    [ -n "$d" ] && [[ "$d" =~ ^[A-Za-z0-9][A-Za-z0-9._:-]*$ ]]
-}
-
-# Генерирует случайный hex-токен без зависимости от openssl.
-# Старый фолбэк "date +%s | md5sum" предсказуем: он зависит только от секунды
-# установки, которую легко сузить перебором (время запуска install.sh видно
-# в логах/истории), а это единственный секрет, защищающий доступ к файлам.
-# /dev/urandom есть практически везде, где есть Docker, и не требует openssl.
-generate_random_hex_token() {
-    local len="${1:-32}"
-    local out=""
-    out="$(openssl rand -hex 16 2>/dev/null)"
-    if [ -z "$out" ] && [ -r /dev/urandom ]; then
-        out="$(head -c "$len" /dev/urandom 2>/dev/null | od -An -tx1 | tr -d ' \n')"
+# Применяет .env и compose.yaml: compose пересоздаёт контейнер, если они изменились
+apply_changes() {
+    echo -e "${C_YELLOW}[*] Применение настроек...${C_RESET}"
+    if ! compose_in up -d </dev/null; then
+        echo -e "${C_RED}[!] Настройки сохранены, но Docker Compose завершился с ошибкой выше.${C_RESET}"
+        return 1
     fi
-    if [ -z "$out" ]; then
-        out="$(printf '%s' "$(date +%s%N)$$${RANDOM}${RANDOM}" | sha256sum | head -c "$len")"
+    if ! wait_for_container_ready; then
+        report_start_failure
+        return 1
     fi
-    printf '%s' "${out:0:$len}"
-}
-
-# Грубая проверка classic cron-выражения: ровно 5 полей через пробел, каждое
-# из разрешённого алфавита (цифры, '*', ',', '-', '/'). Не ловит все
-# семантически некорректные выражения (например, "70 * * * *"), но отсекает
-# частую ошибку ввода (время вида "12:00" или сокращённое на 4 поля) —
-# BusyBox crond в контейнере на такую строку не ругается, а просто молча
-# её не выполняет, и автосинхронизация перестаёт запускаться без единого
-# сообщения об ошибке.
-is_valid_cron_expr() {
-    local expr="${1:-}"
-    local -a fields
-    # read -ra, а не fields=($expr): неэкранированный "*" в присваивании-
-    # массиве раскрывается как glob-паттерн относительно cwd (подставляются
-    # имена файлов текущего каталога!); read делает только word-splitting.
-    read -ra fields <<< "$expr"
-    [ "${#fields[@]}" -eq 5 ] || return 1
-    local f
-    for f in "${fields[@]}"; do
-        [[ "$f" =~ ^[0-9*,/-]+$ ]] || return 1
-    done
-    return 0
-}
-
-# Контракт имён сетей Docker: [a-zA-Z0-9][a-zA-Z0-9_.-]*
-# Без этой проверки сеть, введённая с кавычкой/спецсимволом, подставлялась в
-# generate_compose_yaml() как есть и ломала YAML (например, `"` обрывает
-# значение name: "..." раньше времени).
-is_valid_docker_network_name() {
-    local n="${1:-}"
-    [[ "$n" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]]
-}
-
-generate_compose_yaml() {
-    local target_dir="$1"
-    local docker_net="${2:-}"
-
-    if [ -n "$docker_net" ]; then
-        cat > "$target_dir/compose.yaml" <<EOF
-name: geo-routing-server
-
-services:
-  geo-routing-server:
-    image: ${DOCKER_IMAGE}
-    container_name: geo-routing-server
-    restart: unless-stopped
-    env_file:
-      - .env
-    networks:
-      - default
-      - remnawave
-    ports:
-      - "\${HTTP_BIND:-127.0.0.1}:\${HTTP_PORT:-8080}:80"
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
-    cap_add:
-      - NET_BIND_SERVICE
-      - SETUID
-      - SETGID
-      - CHOWN
-      - DAC_OVERRIDE
-      - KILL
-    volumes:
-      - routing_data:/app/www
-      - ./.cache:/app/.cache
-    healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:80/health"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
-
-volumes:
-  routing_data:
-
-networks:
-  remnawave:
-    external: true
-    name: "$docker_net"
-EOF
-    else
-        cat > "$target_dir/compose.yaml" <<EOF
-name: geo-routing-server
-
-services:
-  geo-routing-server:
-    image: ${DOCKER_IMAGE}
-    container_name: geo-routing-server
-    restart: unless-stopped
-    env_file:
-      - .env
-    # networks:
-    #   - remnawave
-    ports:
-      - "\${HTTP_BIND:-127.0.0.1}:\${HTTP_PORT:-8080}:80"
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
-    cap_add:
-      - NET_BIND_SERVICE
-      - SETUID
-      - SETGID
-      - CHOWN
-      - DAC_OVERRIDE
-      - KILL
-    volumes:
-      - routing_data:/app/www
-      - ./.cache:/app/.cache
-    healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:80/health"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
-
-volumes:
-  routing_data:
-
-# networks:
-#   remnawave:
-#     external: true
-#     name: "\${DOCKER_NETWORK:-remnawave-network}"
-EOF
-    fi
+    echo -e "${C_GREEN}[✓] Настройки применены.${C_RESET}"
 }
 
 get_container_status() {
-    local install_dir="$1"
-    # Реальное состояние определяем через `docker inspect` (is_container_running) —
-    # он не зависит от версии Compose. `compose ps --format` ниже — только
-    # опциональная деталь для вывода: на docker-compose v1 (давно EOL, но ещё
-    # встречается) флаг --format не поддерживается, команда падает, и раньше
-    # это означало вечный "Остановлен" даже для реально работающего контейнера.
     if is_container_running; then
-        local compose_cmd state=""
-        compose_cmd="$(detect_compose)"
-        if [ -n "$compose_cmd" ] && { [ -f "$install_dir/compose.yaml" ] || [ -f "$install_dir/docker-compose.yml" ]; }; then
-            state=$( (cd "$install_dir" && $compose_cmd ps --format "{{.Status}}" 2>/dev/null | head -1) || true)
-        fi
-        if [ -n "$state" ]; then
-            echo -e "${C_GREEN}● Работает${C_RESET} ${C_GRAY}($state)${C_RESET}"
-        else
-            echo -e "${C_GREEN}● Работает${C_RESET}"
-        fi
-        return
+        local state=""
+        state="$(compose_in ps --format '{{.Status}}' </dev/null 2>/dev/null | head -1 || true)"
+        echo -e "${C_GREEN}● Работает${C_RESET}${state:+ ${C_GRAY}($state)${C_RESET}}"
+    else
+        echo -e "${C_RED}○ Остановлен${C_RESET}"
     fi
-    echo -e "${C_RED}○ Остановлен${C_RESET}"
 }
 
-# ==============================================================================
-# ПРЯМЫЕ КОМАНДЫ CLI (Subcommands)
-# ==============================================================================
+# ------------------------------------------------------------------------------
+# Команды
+# ------------------------------------------------------------------------------
 
-human_schedule() {
-    local cron="${1:-0 10 * * *}"
-    case "$cron" in
-        "0 10 * * *") echo "Ежедневно в 10:00 UTC (13:00 МСК)" ;;
-        "0 12 * * *") echo "Ежедневно в 12:00 UTC (15:00 МСК)" ;;
-        "0 */6 * * *") echo "Каждые 6 часов" ;;
-        "0 */12 * * *") echo "Каждые 12 часов" ;;
-        *)
-            local m h d mon dow
-            read -r m h d mon dow <<< "$cron"
-            if [ "${d:-}" = "*" ] && [ "${mon:-}" = "*" ] && [ "${dow:-}" = "*" ]; then
-                if [[ "${m:-}" =~ ^[0-9]+$ ]] && [[ "${h:-}" =~ ^[0-9]+$ ]]; then
-                    # "10#$h"/"10#$m" форсируют десятичную базу: без этого
-                    # printf "%d" на bash трактует "08"/"09" как восьмеричное
-                    # число (ведущий "0") и падает с "08: invalid octal number"
-                    # для расписаний вроде "0 08 * * *".
-                    printf "Ежедневно в %02d:%02d UTC\n" "$((10#$h))" "$((10#$m))"
-                    return
-                elif [ "${m:-}" = "0" ] && [[ "${h:-}" =~ ^\*/([0-9]+)$ ]]; then
-                    echo "Каждые ${BASH_REMATCH[1]} ч."
-                    return
-                fi
-            fi
-            echo "$cron"
-            ;;
-    esac
+config_section() {
+    local section="$1"
+    require_new_image || { pause; return 0; }
+    while true; do
+        local rc=0
+        cli_stack config "$section" --host-dir /host || rc=$?
+        if [ "$rc" -eq "$APPLY_RC" ]; then
+            apply_changes || { pause; return 0; }
+            continue
+        fi
+        return 0
+    done
 }
 
-# Имена файлов правил (без .JSON), которые реально публикует сервер для клиента.
-# Совпадает с Config.get_active_rules(): geogaga -> HAPP.JSON/INCY.JSON,
-# vahellame -> WHITELIST.JSON, иначе — список из ROUTING_RULES.
+# geoserver config set KEY VALUE / get KEY — без меню, для скриптов
+cmd_config_key() {
+    require_new_image || return 1
+    local rc=0
+    cli_stack config "$@" --host-dir /host </dev/null || rc=$?
+    if [ "$rc" -eq "$APPLY_RC" ]; then
+        apply_changes
+        return $?
+    fi
+    return "$rc"
+}
+
 cmd_status() {
-    local install_dir
-    install_dir="$(get_install_dir)"
-    local env_file="$install_dir/.env"
-
+    local dir
+    dir="$(get_install_dir)"
     print_banner
-    echo -e "  ${C_WHITE}Каталог:${C_RESET} $install_dir"
-    echo -e "  ${C_WHITE}Статус:${C_RESET}  $(get_container_status "$install_dir")"
+    echo -e "  ${C_WHITE}Каталог:${C_RESET} $dir"
+    echo -e "  ${C_WHITE}Статус:${C_RESET}  $(get_container_status)"
     echo ""
-
-    if [ ! -f "$env_file" ]; then
+    if [ ! -f "$dir/.env" ]; then
         echo -e "${C_YELLOW}Файл конфигурации (.env) не найден. Выполните установку: geoserver install${C_RESET}"
         return 0
     fi
-
-    if [ ! -r "$env_file" ]; then
-        echo -e "${C_YELLOW}Файл $env_file не читается без прав root (права 600).${C_RESET}"
-        echo -e "${C_YELLOW}Запустите: ${C_BOLD}sudo geoserver status${C_RESET}"
+    if [ ! -r "$dir/.env" ]; then
+        echo -e "${C_YELLOW}Файл $dir/.env доступен только root. Запустите: ${C_BOLD}sudo geoserver status${C_RESET}"
         return 0
     fi
-
-    local compose_cmd
-    compose_cmd="$(detect_compose)"
-    if is_container_running && [ -n "$compose_cmd" ]; then
-        local container_summary=""
-        container_summary=$( (cd "$install_dir" && $compose_cmd exec -T geo-routing-server cat /app/www/.sync-summary.txt 2>/dev/null) || true )
-        if [ -z "$container_summary" ]; then
-            container_summary=$( (cd "$install_dir" && $compose_cmd exec -T geo-routing-server python3 -m app.cli status 2>/dev/null) || true )
-        fi
-        if [ -n "$container_summary" ]; then
-            echo -e "$container_summary"
-            return 0
-        fi
-    fi
-
-    # Базовая сводка параметров, если контейнер остановлен
-    local domain token clients port preset_val
-    domain="$(get_env_val "DOMAIN" "$env_file" "geo.example.com")"
-    token="$(get_env_val "ROUTING_TOKEN" "$env_file" "")"
-    clients="$(get_env_val "ENABLED_CLIENTS" "$env_file" "HAPP,INCY")"
-    port="$(get_env_val "HTTP_PORT" "$env_file" "8080")"
-    preset_val="$(get_env_val "ROUTING_SOURCE_PRESET" "$env_file" "geogaga")"
-
-    echo -e "${C_WHITE}📋 Параметры сервера (.env):${C_RESET}"
-    printf "   ${C_LIGHT_GRAY}%-20s${C_RESET} ${C_WHITE}%s${C_RESET}\n" "Домен:" "https://${domain}"
-    printf "   ${C_LIGHT_GRAY}%-20s${C_RESET} ${C_WHITE}%s${C_RESET}\n" "Локальный порт:" "127.0.0.1:${port}"
-    if [ -n "$token" ]; then
-        if [ "${#token}" -ge 8 ]; then
-            printf "   ${C_LIGHT_GRAY}%-20s${C_RESET} ${C_WHITE}%s${C_RESET}\n" "Токен:" "${token:0:6}...${token: -4}"
-        else
-            printf "   ${C_LIGHT_GRAY}%-20s${C_RESET} ${C_WHITE}%s${C_RESET}\n" "Токен:" "$token"
-        fi
-    fi
-    printf "   ${C_LIGHT_GRAY}%-20s${C_RESET} ${C_WHITE}%s${C_RESET}\n" "Клиенты:" "$clients"
-    printf "   ${C_LIGHT_GRAY}%-20s${C_RESET} ${C_WHITE}%s${C_RESET}\n" "Пресет:" "$preset_val"
-    echo ""
-    if is_container_running; then
-        # Контейнер работает, но сводку получить не удалось: обычно первая
-        # синхронизация ещё не закончилась.
-        echo -e "${C_YELLOW}[!] Контейнер запущен, но сводка ссылок пока недоступна (возможно, идёт первая синхронизация).${C_RESET}"
-        echo -e "    Проверьте ход синхронизации: ${C_BOLD}geoserver logs${C_RESET}"
-    else
-        echo -e "${C_YELLOW}[!] Контейнер остановлен.${C_RESET}"
-        echo -e "    Для формирования ссылок и актуального статуса запустите: ${C_BOLD}geoserver start${C_RESET}"
-    fi
+    cli_stack status </dev/null || echo -e "${C_YELLOW}[!] Не удалось получить сводку. Проверьте: geoserver logs${C_RESET}"
 }
 
 cmd_sync() {
-    local install_dir
-    install_dir="$(get_install_dir)"
-    local compose_cmd
-    compose_cmd="$(detect_compose)"
-    if [ -z "$compose_cmd" ]; then
-        echo -e "\n${C_RED}[!] Docker Compose не найден.${C_RESET}\n"
-        return 1
-    fi
-
     if ! is_container_running; then
-        echo -e "\n${C_RED}[!] Контейнер geo-routing-server не запущен.${C_RESET}"
+        echo -e "\n${C_RED}[!] Контейнер ${SERVICE} не запущен.${C_RESET}"
         echo -e "${C_YELLOW}Запустите сервис перед синхронизацией: ${C_BOLD}geoserver start${C_RESET}\n"
         return 1
     fi
-    
-    echo -e "\n${C_YELLOW}[*] Запуск принудительной синхронизации баз и правил...${C_RESET}"
-    local sync_ok=false sync_output="" sync_rc=0
-    sync_output="$(cd "$install_dir" && $compose_cmd exec -T geo-routing-server python3 -m app.cli sync 2>&1)"
-    sync_rc=$?
-    [ -n "$sync_output" ] && echo "$sync_output"
-    if [ "$sync_rc" -eq 0 ]; then
-        sync_ok=true
-    elif [ "$sync_rc" -eq 127 ]; then
-        # 127 — "app.cli sync" отсутствует в образе (старая версия контейнера),
-        # пробуем легаси-путь запуска. Любой другой код — реальный сбой
-        # синхронизации: раньше stderr первой попытки отбрасывался в
-        # /dev/null и скрипт молча повторял ПОЛНЫЙ прогон синхронизации
-        # (лишний трафик к upstream-источникам и риск rate-limit), даже
-        # когда повтор не мог помочь и причина ошибки никак не показывалась.
-        if (cd "$install_dir" && $compose_cmd exec -T geo-routing-server /usr/local/bin/run-routing-sync); then
-            sync_ok=true
-        fi
-    fi
-
-    if [ "$sync_ok" = "true" ]; then
-        echo -e "\n${C_GREEN}[✓] Синхронизация успешно завершена!${C_RESET}\n"
+    echo -e "\n${C_YELLOW}[*] Запуск синхронизации баз и правил...${C_RESET}"
+    # В работающем контейнере, а не в разовом: там общая блокировка от
+    # параллельного запуска с синхронизацией по расписанию.
+    if compose_in exec -T "$SERVICE" python3 -m app.cli sync </dev/null; then
+        echo -e "\n${C_GREEN}[✓] Синхронизация завершена.${C_RESET}\n"
     else
         echo -e "\n${C_RED}[!] Синхронизация завершилась с ошибкой. Проверьте логи: geoserver logs${C_RESET}\n"
         return 1
@@ -691,51 +445,26 @@ cmd_sync() {
 }
 
 cmd_logs() {
-    local install_dir
-    install_dir="$(get_install_dir)"
-    local compose_cmd
-    compose_cmd="$(detect_compose)"
-    if [ -z "$compose_cmd" ]; then
-        echo -e "${C_RED}[!] Docker Compose не найден.${C_RESET}"
-        return 1
-    fi
-    echo -e "${C_CYAN}[i] Просмотр логов в реальном времени (Ctrl+C для выхода)...${C_RESET}\n"
-    (cd "$install_dir" && $compose_cmd logs -f --tail=100 geo-routing-server)
+    echo -e "${C_CYAN}[i] Логи в реальном времени (Ctrl+C для выхода)...${C_RESET}\n"
+    compose_in logs -f --tail=100 "$SERVICE" || true
 }
 
+# Пересоздаёт контейнер: в отличие от `compose restart`, подхватывает изменения .env
 cmd_restart() {
-    local install_dir
-    install_dir="$(get_install_dir)"
-    local compose_cmd
-    compose_cmd="$(detect_compose)"
-    if [ -z "$compose_cmd" ]; then
-        echo -e "${C_RED}[!] Docker Compose не найден.${C_RESET}"
-        return 1
-    fi
-    echo -e "${C_YELLOW}[*] Перезапуск контейнера...${C_RESET}"
-    # Явная проверка статуса обязательна: вызывающий код использует
-    # `cmd_restart || true` (чтобы ошибка не закрывала всё меню под set -e),
-    # а это отключает errexit и ВНУТРИ функции — без `if` здесь при сбое
-    # compose выполнение просто продолжилось бы на следующую строку и
-    # напечатало "успешно перезапущен", хотя команда реально упала.
-    if (cd "$install_dir" && $compose_cmd restart); then
-        echo -e "${C_GREEN}[✓] Контейнер успешно перезапущен.${C_RESET}"
-    else
+    echo -e "${C_YELLOW}[*] Перезапуск контейнера с текущими настройками...${C_RESET}"
+    if ! compose_in up -d --force-recreate </dev/null; then
         echo -e "${C_RED}[!] Не удалось перезапустить контейнер (см. ошибку Docker Compose выше).${C_RESET}"
         return 1
     fi
+    if ! wait_for_container_ready; then
+        report_start_failure
+        return 1
+    fi
+    echo -e "${C_GREEN}[✓] Контейнер перезапущен.${C_RESET}"
 }
 
 cmd_stop() {
-    local install_dir
-    install_dir="$(get_install_dir)"
-    local compose_cmd
-    compose_cmd="$(detect_compose)"
-    if [ -z "$compose_cmd" ]; then
-        echo -e "${C_RED}[!] Docker Compose не найден.${C_RESET}"
-        return 1
-    fi
-    if (cd "$install_dir" && $compose_cmd stop); then
+    if compose_in stop </dev/null; then
         echo -e "${C_YELLOW}[✓] Сервис остановлен.${C_RESET}"
     else
         echo -e "${C_RED}[!] Не удалось остановить сервис (см. ошибку Docker Compose выше).${C_RESET}"
@@ -744,81 +473,43 @@ cmd_stop() {
 }
 
 cmd_start() {
-    local install_dir
-    install_dir="$(get_install_dir)"
-    if apply_compose "$install_dir"; then
-        echo -e "${C_GREEN}[✓] Сервис запущен.${C_RESET}"
-    fi
+    apply_changes
 }
 
 cmd_update() {
-    local install_dir
-    install_dir="$(get_install_dir)"
     local compose_cmd
     compose_cmd="$(detect_compose)"
     if [ -z "$compose_cmd" ]; then
         echo -e "\n${C_RED}[!] Docker Compose не найден.${C_RESET}\n"
         return 1
     fi
-    # До v1.5.2 привязки сквадов лежали в /app/squads.json — в слое контейнера,
-    # а не в томе. `up --force-recreate` уничтожает этот слой раньше, чем новый
-    # образ успеет перенести файл сам, поэтому копируем его в том, пока старый
-    # контейнер ещё работает. Существующий .squads.json не перезаписывается.
+    # До v1.5.2 привязки сквадов лежали в /app/squads.json — в слое контейнера.
+    # `up --force-recreate` уничтожает этот слой, поэтому копируем файл в том,
+    # пока старый контейнер ещё работает. Существующий .squads.json не трогаем.
     if is_container_running; then
-        (cd "$install_dir" && $compose_cmd exec -T geo-routing-server sh -c \
+        compose_in exec -T "$SERVICE" sh -c \
             '[ -s /app/squads.json ] && [ ! -e /app/www/.squads.json ] && cp -p /app/squads.json /app/www/.squads.json && echo "[i] squads.json сохранён в томе данных"' \
-            2>/dev/null) || true
+            </dev/null 2>/dev/null || true
     fi
     echo -e "\n${C_YELLOW}[*] Загрузка свежего Docker-образа...${C_RESET}"
-    if (cd "$install_dir" && $compose_cmd pull && $compose_cmd up -d --force-recreate); then
-        echo -e "${C_GREEN}[✓] Сервис успешно обновлён до последней версии.${C_RESET}\n"
-    else
+    if [ -z "${GRS_SKIP_PULL:-}" ] && ! compose_in pull </dev/null; then
+        echo -e "${C_RED}[!] Не удалось загрузить образ (см. ошибку выше).${C_RESET}\n"
+        return 1
+    fi
+    if ! compose_in up -d --force-recreate </dev/null; then
         echo -e "${C_RED}[!] Обновление не применено: Docker Compose завершился с ошибкой выше.${C_RESET}\n"
         return 1
     fi
-}
-
-# Сохраняет install.sh в целевой каталог установки.
-#
-# $0 — не всегда обычный читаемый файл: при запуске одной командой из README
-# (`bash <(curl -fsSL ...)`) это сабституция процесса (/dev/fd/N — пайп),
-# который к моменту вызова этой функции уже полностью вычитан интерпретатором.
-# Простой `cp "$0" ...` в этом случае молча создаёт пустой файл: команда
-# geoserver после этого ничего не делает, а повторный запуск той же
-# однострочной командой затирает рабочий install.sh пустышкой.
-# Поэтому копируем $0 только если это непустой читаемый обычный файл,
-# а иначе скачиваем свежую копию скрипта с GitHub.
-persist_install_script() {
-    local target_dir="$1"
-    local target="${target_dir}/install.sh"
-
-    mkdir -p "$target_dir" 2>/dev/null || true
-
-    if [ -f "$0" ] && [ -r "$0" ] && [ -s "$0" ]; then
-        cp "$0" "$target" 2>/dev/null || true
+    if ! wait_for_container_ready; then
+        report_start_failure
+        return 1
     fi
-
-    if [ ! -s "$target" ]; then
-        curl -fsSL --connect-timeout 10 --max-time 30 "$INSTALL_SCRIPT_URL" -o "$target" 2>/dev/null || true
-    fi
-
-    if [ -s "$target" ]; then
-        # chmod 755 явно (не "+x"): cp/curl могут создать файл с рестриктивным
-        # umask, и символический "+x" на такой базе может оставить
-        # group/other без read (см. тот же нюанс в cmd_update_script).
-        chmod 755 "$target" 2>/dev/null || true
-        return 0
-    fi
-
-    echo -e "${C_YELLOW}[!] Не удалось сохранить install.sh в ${target_dir} (команда geoserver может не работать).${C_RESET}"
-    return 1
+    echo -e "${C_GREEN}[✓] Сервис обновлён до последней версии образа.${C_RESET}\n"
 }
 
 cmd_update_script() {
     local install_dir
     install_dir="$(get_install_dir)"
-
-    # Обновление пишет в $install_dir/install.sh и /usr/local/bin/geoserver
     if [ "$(id -u)" -ne 0 ]; then
         echo -e "${C_RED}[!] Обновление скрипта требует права root (запись в ${install_dir}/install.sh и /usr/local/bin/geoserver).${C_RESET}"
         echo -e "    Запустите: ${C_BOLD}sudo geoserver update-script${C_RESET}"
@@ -828,19 +519,16 @@ cmd_update_script() {
     echo -e "\n${C_YELLOW}[*] Проверка обновлений скрипта на GitHub...${C_RESET}"
     local tmp_script
     tmp_script=$(mktemp "${install_dir}/.install.sh.XXXXXX" 2>/dev/null || mktemp "/tmp/.install.sh.XXXXXX")
-    
     if ! curl -fsSL -H "Cache-Control: no-cache" --connect-timeout 10 --max-time 30 "${INSTALL_SCRIPT_URL}?t=$(date +%s)" -o "$tmp_script" 2>/dev/null; then
         rm -f "$tmp_script"
         echo -e "${C_RED}[!] Не удалось загрузить скрипт с GitHub. Проверьте интернет-соединение.${C_RESET}"
         return 1
     fi
-
     if ! bash -n "$tmp_script" 2>/dev/null; then
         rm -f "$tmp_script"
         echo -e "${C_RED}[!] Загруженный файл повреждён или содержит синтаксические ошибки.${C_RESET}"
         return 1
     fi
-
     local remote_ver
     remote_ver=$(grep -E '^SCRIPT_VERSION=' "$tmp_script" 2>/dev/null | head -1 | cut -d'"' -f2 || true)
     if [ -z "$remote_ver" ]; then
@@ -848,168 +536,86 @@ cmd_update_script() {
         echo -e "${C_RED}[!] Не удалось определить версию в загруженном файле.${C_RESET}"
         return 1
     fi
-
     echo -e "  Текущая версия:   ${C_WHITE}v${SCRIPT_VERSION}${C_RESET}"
     echo -e "  Версия на GitHub: ${C_GREEN}v${remote_ver}${C_RESET}"
-
-    # Если локальный файл существует и полностью идентичен версии с GitHub
     if [ -f "$install_dir/install.sh" ] && cmp -s "$install_dir/install.sh" "$tmp_script" 2>/dev/null; then
         rm -f "$tmp_script"
-        echo -e "\n${C_GREEN}[✓] Скрипт уже актуален и содержит последние изменения (v${remote_ver}).${C_RESET}\n"
+        echo -e "\n${C_GREEN}[✓] Скрипт уже актуален (v${remote_ver}).${C_RESET}\n"
         return 0
     fi
-
-    echo -e "\n${C_YELLOW}[*] Установка обновлений...${C_RESET}"
-    # chmod 755, не "+x": tmp_script создан mktemp'ом с правами 0600, и
-    # символический "+x" на такой базе добавляет execute только там, где уже
-    # есть хоть один бит — результат 0711 (group/other получают только x,
-    # БЕЗ read). Непривилегированный пользователь после этого не может даже
-    # прочитать install.sh (`bash install.sh` сначала читает файл), и
-    # `geoserver status` падает с "Permission denied".
+    # 755 явно: mktemp создаёт 0600, и "+x" дал бы 0711 — файл не читался бы без root
     chmod 755 "$tmp_script"
     mkdir -p "$install_dir"
     mv -f "$tmp_script" "$install_dir/install.sh"
     create_cli_shortcut "$install_dir"
-
-    if [ -f "$0" ] && [ "$(realpath "$0" 2>/dev/null || true)" != "$(realpath "$install_dir/install.sh" 2>/dev/null || true)" ]; then
-        cp -f "$install_dir/install.sh" "$0" 2>/dev/null || true
-    fi
-
-    echo -e "${C_GREEN}[✓] Скрипт управления успешно обновлён!${C_RESET}\n"
-    sleep 1
-
-    if [ -t 0 ] && [ -f "$install_dir/install.sh" ]; then
-        exec bash "$install_dir/install.sh"
-    fi
+    echo -e "${C_GREEN}[✓] Скрипт управления обновлён.${C_RESET}\n"
 }
 
 menu_updates() {
-    local install_dir
-    install_dir="$(get_install_dir)"
-
     while true; do
         print_banner
-        echo -e "  ${C_WHITE}Раздел:${C_RESET} 🚀 Центр обновлений"
+        echo -e "  ${C_WHITE}Раздел:${C_RESET} Центр обновлений"
         hr 50
         echo ""
-        echo "   1) 📦 Обновить всё (Docker-образ + скрипт управления)"
-        echo "   2) 🚀 Обновить только Docker-образ (pull & up)"
-        echo "   3) 📥 Обновить только скрипт управления (install.sh)"
-        echo "   0) ⬅️ Назад"
+        echo "   1) Обновить всё (скрипт управления, затем Docker-образ)"
+        echo "   2) Обновить только Docker-образ"
+        echo "   3) Обновить только скрипт управления"
+        echo "   0) Назад"
         echo ""
-        read -r -p "Выберите действие [0-3]: " choice
-
+        read -r -p "Выберите действие [0-3]: " choice || return 0
         case "$choice" in
             1)
-                echo -e "\n${C_CYAN}${C_BOLD}=== [1/2] Обновление Docker-образа ===${C_RESET}"
-                cmd_update || true
-                echo -e "\n${C_CYAN}${C_BOLD}=== [2/2] Обновление скрипта управления ===${C_RESET}"
+                # Сначала скрипт: новый скрипт знает, как сохранить данные
+                # старого контейнера перед пересозданием.
                 cmd_update_script || true
-                echo ""
-                read -r -p "Нажмите Enter для возврата в меню..."
+                bash "$(get_install_dir)/install.sh" update-image || true
+                pause
                 ;;
-            2)
-                cmd_update || true
-                echo ""
-                read -r -p "Нажмите Enter для возврата в меню..."
-                ;;
-            3)
-                cmd_update_script || true
-                echo ""
-                read -r -p "Нажмите Enter для возврата в меню..."
-                ;;
-            0|q|exit)
-                return 0
-                ;;
-            *)
-                sleep 0.5
-                ;;
+            2) cmd_update || true; pause ;;
+            3) cmd_update_script || true; pause ;;
+            0|q|exit) return 0 ;;
         esac
     done
 }
 
 cmd_edit() {
-    local install_dir
-    install_dir="$(get_install_dir)"
-    local env_file="$install_dir/.env"
+    local env_file
+    env_file="$(get_install_dir)/.env"
     local editor="${EDITOR:-}"
     if [ -z "$editor" ]; then
         if command -v nano >/dev/null 2>&1; then
             editor="nano"
         elif command -v vi >/dev/null 2>&1; then
             editor="vi"
+        else
+            echo -e "${C_RED}[!] Редактор nano или vi не найден.${C_RESET}"
+            return 1
         fi
     fi
-
-    if [ -z "$editor" ]; then
-        echo -e "${C_RED}[!] Редактор nano или vi не найден.${C_RESET}"
-        return 1
-    fi
-
     "$editor" "$env_file"
-    echo -e "\n${C_YELLOW}Применить изменения и перезапустить контейнер? [Y/n]: ${C_RESET}"
-    read -r ans
-    ans="${ans:-y}"
-    if [[ "$ans" =~ ^[Yy]$ ]]; then
-        if apply_compose "$install_dir"; then
-            echo -e "${C_GREEN}[✓] Контейнер успешно обновлён и перезапущен.${C_RESET}"
-        fi
+    local ans=""
+    read -r -p "Применить изменения и перезапустить контейнер? [Y/n]: " ans || ans="n"
+    if [[ "${ans:-y}" =~ ^[Yy]$ ]]; then
+        apply_changes
     fi
-}
-
-cmd_proxy() {
-    local install_dir
-    install_dir="$(get_install_dir)"
-    local compose_cmd
-    compose_cmd="$(detect_compose)"
-
-    if is_container_running && [ -n "$compose_cmd" ]; then
-        # `|| true`: под `set -e` ненулевой код exec (например, контейнер ещё
-        # не успел подняться сразу после `up -d`) закрыл бы вызывающее меню
-        # целиком, хотя эта функция и так рассчитана на return 0 ниже.
-        (cd "$install_dir" && $compose_cmd exec -T geo-routing-server python3 -m app.cli proxy) || true
-        return 0
-    fi
-
-    local env_file="$install_dir/.env"
-    local domain port token
-    domain="$(get_env_val "DOMAIN" "$env_file" "geo.example.com")"
-    port="$(get_env_val "HTTP_PORT" "$env_file" "8080")"
-    token="$(get_env_val "ROUTING_TOKEN" "$env_file" "")"
-
-    print_banner
-    echo -e "${C_WHITE}📋 Reverse Proxy для домена ${C_CYAN}${domain}${C_RESET} (порт: ${C_GREEN}127.0.0.1:${port}${C_RESET})\n"
-    echo -e "${C_YELLOW}Nginx (выделенный поддомен):${C_RESET}"
-    echo -e "  location / { proxy_pass http://127.0.0.1:${port}; }"
-    if [ -n "$token" ]; then
-        echo -e "${C_YELLOW}Nginx (общий домен по токену):${C_RESET}"
-        echo -e "  location /${token}/ { proxy_pass http://127.0.0.1:${port}; }"
-    fi
-    echo ""
-    echo -e "${C_GRAY}Для полных интерактивных сниппетов Caddy/Nginx запустите сервис: geoserver start && geoserver proxy${C_RESET}\n"
 }
 
 cmd_uninstall() {
     local install_dir
     install_dir="$(get_install_dir)"
-    local compose_cmd
-    compose_cmd="$(detect_compose)"
 
     if [ -z "$install_dir" ] || is_protected_dir "$install_dir"; then
         echo -e "${C_RED}[!] Недопустимый или защищённый системный каталог: '${install_dir}' — удаление отменено.${C_RESET}"
         return 1
     fi
-
     local target
     target="$(realpath -m -- "$install_dir" 2>/dev/null || true)"
     [ -n "$target" ] || target="$install_dir"
     [ "$target" != "/" ] && target="${target%/}"
-
     if is_protected_dir "$target"; then
-        echo -e "${C_RED}[!] Ошибка: '$target' является защищённым системным каталогом (/, /root, /opt, \$HOME) — удаление запрещено!${C_RESET}"
+        echo -e "${C_RED}[!] '$target' — защищённый системный каталог, удаление запрещено.${C_RESET}"
         return 1
     fi
-
     if ! is_project_dir "$target"; then
         echo -e "${C_RED}[!] Каталог $target не содержит маркеров установки Geo Routing Server${C_RESET}"
         echo -e "${C_RED}    (нет compose.yaml с сервисом или .env с нашими ключами) — удаление отменено.${C_RESET}"
@@ -1017,1073 +623,172 @@ cmd_uninstall() {
     fi
 
     print_banner
-    echo -e "${C_RED}${C_BOLD}[!] ВНИМАНИЕ: Полное удаление Geo Routing Server${C_RESET}"
-    echo -e "${C_GRAY}Будут остановлены контейнеры, удалены тома Docker и все конфигурационные файлы.${C_RESET}"
-    echo -e "${C_WHITE}Подтвердите реальный путь каталога, который будет удалён: ${C_BOLD}${target}${C_RESET}\n"
+    echo -e "${C_RED}${C_BOLD}[!] ВНИМАНИЕ: полное удаление Geo Routing Server${C_RESET}"
+    echo -e "${C_GRAY}Будут остановлены контейнеры, удалены тома Docker и конфигурация.${C_RESET}"
+    echo -e "${C_WHITE}Каталог, который будет удалён: ${C_BOLD}${target}${C_RESET}\n"
     local confirm=""
-    read -r -p "Вы абсолютно уверены, что хотите удалить сервис? [y/N, Enter = отмена]: " confirm || confirm=""
+    read -r -p "Вы уверены, что хотите удалить сервис? [y/N, Enter = отмена]: " confirm || confirm=""
     if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
         echo -e "${C_GRAY}Отмена удаления.${C_RESET}"
-        sleep 1
         return 1
     fi
 
     echo -e "\n${C_YELLOW}[*] Остановка сервиса и очистка томов Docker...${C_RESET}"
+    local compose_cmd
+    compose_cmd="$(detect_compose)"
     if [ -d "$target" ] && [ -n "$compose_cmd" ]; then
         (cd "$target" && $compose_cmd down -v 2>/dev/null || true)
     fi
-
     if [ -d "$target/.git" ]; then
-        # Визард может сохранить каталог git-клона (README предлагает его для
-        # локальной сборки: `build: .`) как install_dir — compose.yaml там уже
-        # содержит "geo-routing-server" до нашего участия, is_project_dir это
-        # не отличает от штатной установки. rm -rf в таком каталоге удалил бы
-        # исходники и всю git-историю/незакоммиченные правки, а не только
-        # сгенерированные install.sh файлы — поэтому здесь удаляем только их.
-        echo -e "${C_YELLOW}[!] В '$target' обнаружен git-репозиторий (.git) — похоже, это клон исходников.${C_RESET}"
-        echo -e "${C_YELLOW}    Каталог целиком НЕ удаляется, чтобы не потерять историю/незакоммиченные правки.${C_RESET}"
-        echo -e "${C_YELLOW}    Удаляются только файлы, созданные установщиком: .env*, compose.yaml*, .cache/${C_RESET}"
+        # Каталог git-клона (README предлагает его для локальной сборки):
+        # удаляем только файлы, созданные установщиком, а не исходники и историю.
+        echo -e "${C_YELLOW}[!] В '$target' обнаружен git-репозиторий — удаляются только файлы установщика: .env*, compose.yaml*, .cache/${C_RESET}"
         rm -f -- "$target/.env" "$target"/.env.bak* "$target/compose.yaml" "$target"/compose.yaml.bak*
         rm -rf -- "$target/.cache"
     else
         rm -rf -- "$target"
     fi
-    rm -f "$CONFIG_RECORD"
-    rm -f "/usr/local/bin/geoserver"
-
-    echo -e "${C_GREEN}[✓] Geo Routing Server полностью удалён с сервера (${target}).${C_RESET}\n"
-    return 0
+    rm -f "$CONFIG_RECORD" "/usr/local/bin/geoserver"
+    echo -e "${C_GREEN}[✓] Geo Routing Server удалён (${target}).${C_RESET}\n"
 }
 
 cmd_help() {
     echo -e "${C_BOLD}Использование:${C_RESET} geoserver [команда]"
     echo ""
-    echo "Доступные команды:"
-    echo "  status       Статус сервиса и ссылки на базы/диплинки"
-    echo "  sync         Принудительная синхронизация баз прямо сейчас"
-    echo "  logs         Просмотр логов контейнера (Ctrl+C для выхода)"
-    echo "  squads       Управление сквадами Remnawave (CLI TUI)"
-    echo "  proxy        Сниппеты для настройки Caddy и Nginx"
-    echo "  restart      Перезапуск Docker-контейнера"
-    echo "  stop / start Остановка и запуск контейнера"
-    echo "  update       Меню обновлений (образ, скрипт, всё)"
-    echo "  config       Редактирование файла .env в редакторе"
-    echo "  cli          Прямой вызов встроенных Python CLI утилит"
-    echo "  uninstall    Полное удаление сервиса с сервера"
+    echo "  status                 Статус сервиса и ссылки для клиентов"
+    echo "  sync                   Синхронизировать базы и правила сейчас"
+    echo "  logs                   Логи контейнера (Ctrl+C для выхода)"
+    echo "  config                 Открыть .env в редакторе и применить"
+    echo "  config <раздел>        Раздел настроек: clients, schedule, telegram, remnawave"
+    echo "  config set KEY VALUE   Изменить один параметр (с проверкой) и применить"
+    echo "  config get KEY         Показать значение параметра"
+    echo "  squads [...]           Сквады Remnawave (list, add, remove, sync, migrate)"
+    echo "  proxy                  Готовые конфиги Caddy и Nginx"
+    echo "  restart                Пересоздать контейнер с текущими настройками"
+    echo "  start / stop           Запуск / остановка"
+    echo "  update                 Центр обновлений"
+    echo "  update-image           Обновить Docker-образ"
+    echo "  update-script          Обновить этот скрипт"
+    echo "  update-all             Обновить скрипт, затем образ"
+    echo "  cli [...]              Прямой вызов python -m app.cli"
+    echo "  install                Повторно запустить мастер установки"
+    echo "  uninstall              Удалить сервис"
     echo ""
-    echo "Вызов ${C_BOLD}geoserver${C_RESET} без аргументов открывает интерактивную панель управления."
+    echo -e "Без аргументов ${C_BOLD}geoserver${C_RESET} открывает интерактивное меню."
 }
 
-# ==============================================================================
-# МОДУЛЬНЫЕ НАСТРОЙКИ (В СТИЛЕ DIGNENZZZ)
-# ==============================================================================
-
-cmd_squads() {
-    local install_dir
-    install_dir="$(get_install_dir)"
-    local compose_cmd
-    compose_cmd="$(detect_compose)"
-
-    local tty_flag="-T"
-    [ -t 0 ] && tty_flag="-it"
-
-    if is_container_running && [ -n "$compose_cmd" ]; then
-        (cd "$install_dir" && $compose_cmd exec $tty_flag geo-routing-server python3 -m app.cli squads "$@")
-    else
-        echo -e "${C_YELLOW}[!] Контейнер остановлен.${C_RESET}"
-        echo -e "    Для управления сквадами запустите контейнер: ${C_BOLD}geoserver start${C_RESET}"
-        return 1
-    fi
-}
-
-
-menu_remnawave() {
-    local install_dir
-    install_dir="$(get_install_dir)"
-    local env_file="$install_dir/.env"
-
-    while true; do
-        local remna_url remna_token
-        remna_url="$(get_env_val "REMNAWAVE_BASE_URL" "$env_file" "")"
-        remna_token="$(get_env_val "REMNAWAVE_TOKEN" "$env_file" "")"
-
-        print_banner
-        echo -e "  ${C_WHITE}Раздел:${C_RESET} ⚡ Интеграция с Remnawave API"
-        hr 50
-        echo ""
-
-        if [ -z "$remna_url" ] || [ -z "$remna_token" ]; then
-            echo -e "${C_YELLOW}Интеграция с Remnawave пока не настроена.${C_RESET}"
-            echo -e "Сервер может автоматически обновлять правила маршрутизации в сквадах Remnawave.\n"
-            echo "  1) 🔗 Подключить панель Remnawave (URL и токен API)"
-            echo "  0) ⬅️ Назад"
-            echo ""
-            read -r -p "Выберите действие [0-1]: " choice
-            case "$choice" in
-                1)
-                    read -r -p "URL API панели [Enter = http://remnawave:3000/api, 0 = отмена]: " input_url
-                    if [ "$input_url" = "0" ]; then continue; fi
-                    remna_url="$(normalize_remna_url "${input_url:-http://remnawave:3000/api}")"
-                    read -r -p "JWT токен администратора [0 = отмена]: " remna_token
-                    if [ -z "$remna_token" ] || [ "$remna_token" = "0" ]; then
-                        echo -e "${C_GRAY}Отмена.${C_RESET}"
-                        sleep 1
-                        continue
-                    fi
-                    # Дефолтный URL (http://remnawave:3000/api) резолвится
-                    # ТОЛЬКО если этот контейнер подключён к той же Docker-сети,
-                    # что и панель Remnawave. Без этого шага ключи сохранялись,
-                    # меню писало "✓ подключено", но API оставался недоступен —
-                    # compose.yaml из визарда сеть не добавлял, здесь не спрашивали вовсе.
-                    local menu_prev_net menu_remna_net=""
-                    menu_prev_net="$(get_env_val "DOCKER_NETWORK" "$env_file" "")"
-                    read -r -p "Имя внешней Docker-сети панели Remnawave [Enter = оставить${menu_prev_net:+ $menu_prev_net}]: " menu_remna_net
-                    menu_remna_net="${menu_remna_net:-$menu_prev_net}"
-                    if [ -n "$menu_remna_net" ]; then
-                        if ! is_valid_docker_network_name "$menu_remna_net"; then
-                            echo -e "${C_RED}[!] Недопустимое имя сети '$menu_remna_net' — сеть не будет подключена.${C_RESET}"
-                            menu_remna_net=""
-                        elif ! docker network inspect "$menu_remna_net" >/dev/null 2>&1; then
-                            echo -e "${C_YELLOW}[!] Внимание: сеть '$menu_remna_net' не найдена в Docker (docker network create $menu_remna_net).${C_RESET}"
-                        fi
-                    fi
-                    set_env_val "REMNAWAVE_BASE_URL" "$remna_url" "$env_file"
-                    set_env_val "REMNAWAVE_TOKEN" "$remna_token" "$env_file"
-                    if [ -n "$menu_remna_net" ]; then
-                        set_env_val "DOCKER_NETWORK" "$menu_remna_net" "$env_file"
-                    fi
-                    generate_compose_yaml "$install_dir" "$menu_remna_net"
-                    chmod 644 "$install_dir/compose.yaml" 2>/dev/null || true
-                    apply_compose "$install_dir" || continue
-                    echo -e "${C_GREEN}[✓] Remnawave успешно подключен!${C_RESET}"
-                    sleep 1
-                    cmd_squads || true
-                    ;;
-                0) return 0 ;;
-                *) continue ;;
-            esac
-        else
-            echo -e "  ${C_WHITE}Статус:${C_RESET}     ${C_GREEN}● Подключено${C_RESET}"
-            echo -e "  ${C_WHITE}URL API:${C_RESET}    $remna_url"
-            echo -e "  ${C_WHITE}Токен:${C_RESET}      ${remna_token:0:6}...${remna_token: -4}"
-            echo ""
-            echo "  1) ⚡ Управление сквадами (интерактивный TUI: список, добавление, синк)"
-            echo "  2) 🔄 Запустить синхронизацию сквадов прямо сейчас"
-            echo "  3) ✏️ Изменить URL API или токен"
-            echo "  4) ❌ Отключить интеграцию с Remnawave"
-            echo "  0) ⬅️ Назад"
-            echo ""
-            read -r -p "Выберите действие [0-4]: " choice
-            case "$choice" in
-                1)
-                    # Под `set -e` непойманный ненулевой код (контейнер
-                    # остановлен, Ctrl+C внутри exec, ошибка API) закрыл бы
-                    # всё интерактивное меню, а не только этот пункт.
-                    cmd_squads || true
-                    ;;
-                2)
-                    cmd_squads sync || true
-                    echo ""
-                    read -r -p "Нажмите Enter для возврата в меню..."
-                    ;;
-                3)
-                    read -r -p "Новый URL API [Enter = оставить $remna_url, 0 = отмена]: " new_url
-                    if [ "$new_url" != "0" ] && [ -n "$new_url" ]; then
-                        set_env_val "REMNAWAVE_BASE_URL" "$(normalize_remna_url "$new_url")" "$env_file"
-                    fi
-                    read -r -p "Новый токен [Enter = оставить текущий, 0 = отмена]: " new_token
-                    if [ "$new_token" != "0" ] && [ -n "$new_token" ]; then
-                        set_env_val "REMNAWAVE_TOKEN" "$new_token" "$env_file"
-                    fi
-                    apply_compose "$install_dir" || continue
-                    echo -e "${C_GREEN}[✓] Параметры API обновлены.${C_RESET}"
-                    sleep 1
-                    ;;
-                4)
-                    read -r -p "Вы уверены, что хотите отключить Remnawave? [y/N]: " conf_dis
-                    if [[ "$conf_dis" =~ ^[Yy]$ ]]; then
-                        delete_env_val "REMNAWAVE_BASE_URL" "$env_file"
-                        delete_env_val "REMNAWAVE_TOKEN" "$env_file"
-                        apply_compose "$install_dir" || continue
-                        echo -e "${C_YELLOW}[✓] Интеграция с Remnawave отключена.${C_RESET}"
-                        sleep 1
-                    fi
-                    ;;
-                0) return 0 ;;
-                *) continue ;;
-            esac
-        fi
-    done
-}
-
-menu_schedule() {
-    local install_dir
-    install_dir="$(get_install_dir)"
-    local env_file="$install_dir/.env"
-    local cur_schedule
-    cur_schedule="$(get_env_val "SCHEDULE" "$env_file" "0 10 * * *")"
-
-    while true; do
-        print_banner
-        echo -e "  ${C_WHITE}Раздел:${C_RESET} ⏰ Расписание автоматической синхронизации"
-        hr 50
-        echo ""
-        echo -e "  ${C_WHITE}Текущее расписание:${C_RESET} ${C_GREEN}$(human_schedule "$cur_schedule")${C_RESET} ${C_GRAY}($cur_schedule)${C_RESET}"
-        echo ""
-        echo "  1) 🕐 Задать точное время суток (например: 12:00, 15:30 или 04:00)"
-        echo "  2) ⏳ Задать интервал в часах (например: каждые 4 часа)"
-        echo "  3) ☀️ Раз в сутки в 10:00 UTC (13:00 МСК) — по умолчанию"
-        echo "  4) ⛅ Раз в сутки в 12:00 UTC (15:00 МСК)"
-        echo "  5) 🔄 Каждые 6 часов (4 раза в день)"
-        echo "  6) 🔄 Каждые 12 часов (2 раза в день)"
-        echo "  7) ⚙️ Ввести классическое cron-выражение вручную"
-        echo "  0) ⬅️ Назад"
-        echo ""
-        read -r -p "Выберите опцию [0-7]: " choice
-
-        local new_sched=""
-        case "$choice" in
-            1)
-                echo ""
-                echo -e "  ${C_GRAY}Введите время суток в формате ЧЧ:ММ (сервер использует UTC).${C_RESET}"
-                echo -e "  ${C_GRAY}Примеры: 12:00, 15:30, 04:15, 9:00${C_RESET}"
-                read -r -p "  Время суток [ЧЧ:ММ, Enter = отмена]: " input_time
-                if [ -z "$input_time" ] || [ "$input_time" = "0" ]; then
-                    continue
-                fi
-                if [[ "$input_time" =~ ^([0-1]?[0-9]|2[0-3]):([0-5][0-9])$ ]]; then
-                    local h=$((10#${BASH_REMATCH[1]}))
-                    local m=$((10#${BASH_REMATCH[2]}))
-                    new_sched="$m $h * * *"
-                elif [[ "$input_time" =~ ^([0-1]?[0-9]|2[0-3])$ ]]; then
-                    local h=$((10#${BASH_REMATCH[1]}))
-                    new_sched="0 $h * * *"
-                else
-                    echo -e "\n${C_RED}[!] Неверный формат времени. Используйте ЧЧ:ММ (например: 14:30).${C_RESET}"
-                    sleep 2
-                    continue
-                fi
-                ;;
-            2)
-                echo ""
-                read -r -p "  Каждые сколько часов обновлять базы? [1-24, Enter = отмена]: " input_hours
-                if [ -z "$input_hours" ] || [ "$input_hours" = "0" ]; then
-                    continue
-                fi
-                if [[ "$input_hours" =~ ^[0-9]+$ ]] && [ "$input_hours" -ge 1 ] && [ "$input_hours" -le 24 ]; then
-                    if [ "$input_hours" -eq 1 ]; then
-                        new_sched="0 * * * *"
-                    elif [ "$input_hours" -eq 24 ]; then
-                        new_sched="0 0 * * *"
-                    else
-                        new_sched="0 */${input_hours} * * *"
-                    fi
-                else
-                    echo -e "\n${C_RED}[!] Введите число от 1 до 24.${C_RESET}"
-                    sleep 2
-                    continue
-                fi
-                ;;
-            3) new_sched="0 10 * * *" ;;
-            4) new_sched="0 12 * * *" ;;
-            5) new_sched="0 */6 * * *" ;;
-            6) new_sched="0 */12 * * *" ;;
-            7)
-                read -r -p "Введите cron-выражение [например: 0 12 * * *, Enter = отмена]: " input_sched
-                if [ -z "$input_sched" ] || [ "$input_sched" = "0" ]; then
-                    continue
-                fi
-                if ! is_valid_cron_expr "$input_sched"; then
-                    echo -e "\n${C_RED}[!] Нужно ровно 5 полей через пробел (минута час день месяц день-недели), например: 0 12 * * *${C_RESET}"
-                    sleep 2
-                    continue
-                fi
-                new_sched="$input_sched"
-                ;;
-            0) return 0 ;;
-            *) continue ;;
-        esac
-
-        if [ -n "$new_sched" ]; then
-            set_env_val "SCHEDULE" "$new_sched" "$env_file"
-            echo -e "\n${C_GREEN}[✓] Расписание сохранено: $(human_schedule "$new_sched") ($new_sched)${C_RESET}"
-            apply_compose "$install_dir" || continue
-            sleep 1.5
-            return 0
-        fi
-    done
-}
-
-menu_telegram() {
-    local install_dir
-    install_dir="$(get_install_dir)"
-    local env_file="$install_dir/.env"
-
-    while true; do
-        print_banner
-        echo -e "  ${C_WHITE}Раздел:${C_RESET} 🤖 Telegram-уведомления"
-        hr 50
-        echo ""
-
-        local tg_token tg_chat tg_thread tg_notify
-        tg_token="$(get_env_val "TELEGRAM_BOT_TOKEN" "$env_file" "")"
-        tg_chat="$(get_env_val "TELEGRAM_CHAT_ID" "$env_file" "")"
-        tg_thread="$(get_env_val "TELEGRAM_THREAD_ID" "$env_file" "")"
-        tg_notify="$(get_env_val "TELEGRAM_NOTIFY_SUCCESS" "$env_file" "false")"
-
-        if [ -n "$tg_token" ] && [ -n "$tg_chat" ]; then
-            echo -e "  ${C_WHITE}Статус:${C_RESET}    ${C_GREEN}● Включены${C_RESET}"
-            echo -e "  ${C_WHITE}Chat ID:${C_RESET}   $tg_chat"
-            [ -n "$tg_thread" ] && echo -e "  ${C_WHITE}Топик ID:${C_RESET}  $tg_thread"
-            echo -e "  ${C_WHITE}Отчёты:${C_RESET}    $([ "$tg_notify" = "true" ] && echo "Все (включая успешные)" || echo "Только при ошибках")"
-            echo ""
-            echo "  1) 🔔 Отправить тестовое сообщение в Telegram"
-            echo "  2) ✏️ Изменить Bot Token / Chat ID"
-            echo "  3) 🔕 Переключить отчёты об успешных синхронизациях"
-            echo "  4) ❌ Отключить Telegram-уведомления"
-            echo "  0) ⬅️ Назад"
-        else
-            echo -e "  ${C_WHITE}Статус:${C_RESET}    ${C_GRAY}○ Отключены${C_RESET}\n"
-            echo "  1) 🔔 Настроить Telegram-уведомления"
-            echo "  0) ⬅️ Назад"
-        fi
-        echo ""
-        read -r -p "Выберите опцию: " choice
-
-        case "$choice" in
-            1)
-                # Раньше здесь проверялся только tg_token: при настроенном
-                # токене, но пустом Chat ID, верхнее меню (строка выше) уже
-                # показывает "○ Отключены" / пункт "Настроить", но этот
-                # обработчик всё равно уходил в ветку отправки с chat_id="" —
-                # то, что видно в меню, не совпадало с тем, что происходит.
-                if [ -n "$tg_token" ] && [ -n "$tg_chat" ]; then
-                    echo -e "\n${C_YELLOW}[*] Отправка тестового сообщения в Telegram...${C_RESET}"
-                    local text="🔔 Тестовое уведомление от Geo Routing Server (${HOSTNAME:-VPS})"
-                    local url="https://api.telegram.org/bot${tg_token}/sendMessage"
-                    local data="chat_id=${tg_chat}&text=${text}"
-                    [ -n "$tg_thread" ] && data="${data}&message_thread_id=${tg_thread}"
-                    # Bot Token передаём curl через -K файл конфигурации, а не
-                    # прямым аргументом URL: иначе на время запроса токен виден
-                    # в `ps aux`/`/proc/<pid>/cmdline` любому локальному пользователю.
-                    local curl_cfg
-                    curl_cfg="$(mktemp)"
-                    chmod 600 "$curl_cfg" 2>/dev/null || true
-                    {
-                        printf 'url = "%s"\n' "$url"
-                        printf 'data = "%s"\n' "$data"
-                    } > "$curl_cfg"
-                    local resp
-                    resp=$(curl -s -X POST -K "$curl_cfg" || true)
-                    rm -f "$curl_cfg"
-                    if echo "$resp" | grep -q '"ok":true'; then
-                        echo -e "${C_GREEN}[✓] Сообщение успешно доставлено в Telegram!${C_RESET}"
-                    else
-                        echo -e "${C_RED}[!] Ошибка отправки: $resp${C_RESET}"
-                    fi
-                    read -r -p "Нажмите Enter для продолжения..."
-                else
-                    read -r -p "Bot Token (от @BotFather, Enter = отмена): " input_token
-                    if [ -z "$input_token" ] || [ "$input_token" = "0" ]; then
-                        continue
-                    fi
-                    read -r -p "Chat ID [Enter = отмена]: " input_chat
-                    if [ -z "$input_chat" ] || [ "$input_chat" = "0" ]; then
-                        continue
-                    fi
-                    read -r -p "Thread ID (ID темы/топика, если есть, Enter = пропустить): " input_thread
-                    set_env_val "TELEGRAM_BOT_TOKEN" "$input_token" "$env_file"
-                    set_env_val "TELEGRAM_CHAT_ID" "$input_chat" "$env_file"
-                    [ -n "$input_thread" ] && set_env_val "TELEGRAM_THREAD_ID" "$input_thread" "$env_file"
-                    echo -e "${C_GREEN}[✓] Telegram настроен!${C_RESET}"
-                    apply_compose "$install_dir" || continue
-                    sleep 1
-                fi
-                ;;
-            2)
-                read -r -p "Новый Bot Token [Enter = оставить, 0 = отмена]: " new_tok
-                if [ "$new_tok" = "0" ]; then continue; fi
-                read -r -p "Новый Chat ID [Enter = оставить, 0 = отмена]: " new_c
-                if [ "$new_c" = "0" ]; then continue; fi
-                read -r -p "Новый Thread ID [Enter = оставить, 0 = отмена]: " new_th
-                if [ "$new_th" = "0" ]; then continue; fi
-                [ -n "$new_tok" ] && set_env_val "TELEGRAM_BOT_TOKEN" "$new_tok" "$env_file"
-                [ -n "$new_c" ] && set_env_val "TELEGRAM_CHAT_ID" "$new_c" "$env_file"
-                [ -n "$new_th" ] && set_env_val "TELEGRAM_THREAD_ID" "$new_th" "$env_file"
-                echo -e "${C_GREEN}[✓] Настройки обновлены.${C_RESET}"
-                apply_compose "$install_dir" || continue
-                sleep 1
-                ;;
-            3)
-                local toggled="true"
-                [ "$tg_notify" = "true" ] && toggled="false"
-                set_env_val "TELEGRAM_NOTIFY_SUCCESS" "$toggled" "$env_file"
-                echo -e "${C_GREEN}[✓] Уведомления об успехе: $toggled${C_RESET}"
-                apply_compose "$install_dir" || continue
-                sleep 1
-                ;;
-            4)
-                read -r -p "Отключить Telegram-уведомления? [y/N, Enter = отмена]: " conf_tg
-                if [[ "$conf_tg" =~ ^[Yy]$ ]]; then
-                    delete_env_val "TELEGRAM_BOT_TOKEN" "$env_file"
-                    delete_env_val "TELEGRAM_CHAT_ID" "$env_file"
-                    delete_env_val "TELEGRAM_THREAD_ID" "$env_file"
-                    echo -e "${C_YELLOW}[✓] Telegram-уведомления отключены.${C_RESET}"
-                    apply_compose "$install_dir" || continue
-                    sleep 1
-                else
-                    echo -e "${C_GRAY}Отмена.${C_RESET}"
-                    sleep 1
-                fi
-                ;;
-            0) return 0 ;;
-        esac
-    done
-}
-
-menu_clients_bases() {
-    local install_dir
-    install_dir="$(get_install_dir)"
-    local env_file="$install_dir/.env"
-
-    while true; do
-        print_banner
-        echo -e "  ${C_WHITE}Раздел:${C_RESET} 🌐 Клиенты, форматы и Geo-базы"
-        hr 50
-        echo ""
-
-        local cur_clients cur_geoip cur_geosite cur_rules ext_geo cur_preset
-        cur_clients="$(get_env_val "ENABLED_CLIENTS" "$env_file" "HAPP,INCY")"
-        cur_geoip="$(get_env_val "SERVE_GEOIP" "$env_file" "true")"
-        cur_geosite="$(get_env_val "SERVE_GEOSITE" "$env_file" "true")"
-        cur_rules="$(get_env_val "ROUTING_RULES" "$env_file" "JSONSUB,WHITELIST")"
-        ext_geo="$(get_env_val "PUBLIC_GEO_BASE_URL" "$env_file" "")"
-        cur_preset="$(get_env_val "ROUTING_SOURCE_PRESET" "$env_file" "geogaga")"
-
-        local preset_label="GeoGaga (Рекомендуется)"
-        if [[ "$cur_preset" == *","* ]]; then
-            preset_label="$cur_preset (Мульти-пресет)"
-        elif [ "$cur_preset" = "hydraponique" ] ; then
-            preset_label="hydraponique (Legacy)"
-        elif [ "$cur_preset" = "vahellame" ] ; then
-            preset_label="vahellame (Strict Whitelist)"
-        fi
-
-        echo -e "  ${C_WHITE}Клиенты:${C_RESET}         ${C_GREEN}$cur_clients${C_RESET}"
-        echo -e "  ${C_WHITE}Источник правил:${C_RESET} ${C_CYAN}$preset_label${C_RESET}"
-        echo -e "  ${C_WHITE}Раздача GeoIP:${C_RESET}   $cur_geoip"
-        echo -e "  ${C_WHITE}Раздача GeoSite:${C_RESET} $cur_geosite"
-        echo -e "  ${C_WHITE}Список правил:${C_RESET}   $cur_rules"
-        echo -e "  ${C_WHITE}Внешние базы:${C_RESET}    ${ext_geo:-локальная раздача (с этого сервера)}"
-        echo ""
-
-        echo "  1) Выбрать клиентов (HAPP и INCY / Только HAPP / Только INCY)"
-        echo "  2) Включить / выключить отдачу geoip.dat"
-        echo "  3) Включить / выключить отдачу geosite.dat"
-        echo "  4) Настроить внешний URL баз (PUBLIC_GEO_BASE_URL)"
-        echo "  5) 📦 Выбрать источник правил и баз (GeoGaga / hydraponique / vahellame)"
-        echo "  0) ⬅️ Назад"
-        echo ""
-        read -r -p "Выберите опцию [0-5]: " choice
-
-        case "$choice" in
-            1)
-                echo ""
-                echo "  1) HAPP и INCY (Оба клиента)"
-                echo "  2) Только HAPP"
-                echo "  3) Только INCY"
-                echo "  4) HAPP_DEEPLINK (только апдейтер сквадов Remnawave, базы внешние)"
-                echo "  0) ⬅️ Назад"
-                read -r -p "Номер [1-4, Enter = отмена]: " c_opt
-                if [ -z "$c_opt" ] || [ "$c_opt" = "0" ]; then
-                    continue
-                fi
-                case "$c_opt" in
-                    1) set_env_val "ENABLED_CLIENTS" "HAPP,INCY" "$env_file" ;;
-                    2) set_env_val "ENABLED_CLIENTS" "HAPP" "$env_file" ;;
-                    3) set_env_val "ENABLED_CLIENTS" "INCY" "$env_file" ;;
-                    4) set_env_val "ENABLED_CLIENTS" "HAPP_DEEPLINK" "$env_file" ;;
-                    *) continue ;;
-                esac
-                apply_compose "$install_dir" || continue
-                echo -e "${C_GREEN}[✓] Сохранено и применено.${C_RESET}"
-                sleep 1
-                ;;
-            2)
-                local tog_g="true"
-                [ "$cur_geoip" = "true" ] && tog_g="false"
-                set_env_val "SERVE_GEOIP" "$tog_g" "$env_file"
-                apply_compose "$install_dir" || continue
-                echo -e "${C_GREEN}[✓] SERVE_GEOIP=$tog_g (применено)${C_RESET}"
-                sleep 1
-                ;;
-            3)
-                local tog_s="true"
-                [ "$cur_geosite" = "true" ] && tog_s="false"
-                set_env_val "SERVE_GEOSITE" "$tog_s" "$env_file"
-                apply_compose "$install_dir" || continue
-                echo -e "${C_GREEN}[✓] SERVE_GEOSITE=$tog_s (применено)${C_RESET}"
-                sleep 1
-                ;;
-            4)
-                echo -e "${C_GRAY}Текущее значение: ${ext_geo:-локальные базы (не задано)}${C_RESET}"
-                echo -e "${C_GRAY}Укажите базовый URL (или 'none' для сброса на локальные базы):${C_RESET}"
-                read -r -p "URL [Enter = оставить без изменений, 0 = отмена]: " in_ext
-                if [ -z "$in_ext" ] || [ "$in_ext" = "0" ]; then
-                    continue
-                fi
-                if [ "$in_ext" = "none" ] || [ "$in_ext" = "clear" ]; then
-                    delete_env_val "PUBLIC_GEO_BASE_URL" "$env_file"
-                    apply_compose "$install_dir" || continue
-                    echo -e "${C_GREEN}[✓] Сброшено на локальные базы (применено).${C_RESET}"
-                else
-                    [[ ! "$in_ext" =~ ^https?:// ]] && in_ext="https://${in_ext}"
-                    set_env_val "PUBLIC_GEO_BASE_URL" "$in_ext" "$env_file"
-                    apply_compose "$install_dir" || continue
-                    echo -e "${C_GREEN}[✓] Сохранено: $in_ext (применено)${C_RESET}"
-                fi
-                sleep 1
-                ;;
-            5)
-                echo ""
-                echo -e "  ${C_WHITE}Выберите источник правил маршрутизации и Geo-баз:${C_RESET}"
-                echo ""
-                echo -e "  ${C_GREEN}1) 🟢 GeoGaga (Client Flavor) [Рекомендуется]${C_RESET}"
-                echo "     • Сбалансированный split-tunneling для РФ"
-                echo "     • Регулярные обновления, легкие базы, рабочие CDN"
-                echo "     • Полная совместимость с Happ и Incy"
-                echo ""
-                echo -e "  ${C_YELLOW}2) 📦 hydraponique (Legacy / roscomvpn-routing)${C_RESET}"
-                echo "     • Классический источник roscomvpn-routing"
-                echo "     • Базы roscomvpn-geoip / roscomvpn-geosite"
-                echo ""
-                echo -e "  ${C_CYAN}3) 🛡️ vahellame (Strict Whitelist)${C_RESET}"
-                echo "     • Строгий белый список для жестких ограничений ТСПУ"
-                echo "     • Базы russia-whitelist-geoip / geosite"
-                echo ""
-                echo -e "  ${C_MAGENTA}4) ⚡ Мульти-пресет: hydraponique + geogaga (Одновременная раздача)${C_RESET}"
-                echo "     • Основные базы и правила: hydraponique (JSONSUB, WHITELIST)"
-                echo "     • Вторичные базы и правила: geogaga (/GEOGAGA/HAPP/)"
-                echo "     • Безопасное A/B тестирование без отключения клиентов"
-                echo "  0) ⬅️ Назад"
-                echo ""
-                read -r -p "Номер [1-4, Enter = отмена]: " s_opt
-                if [ -z "$s_opt" ] || [ "$s_opt" = "0" ]; then
-                    continue
-                fi
-                case "$s_opt" in
-                    1)
-                        set_env_val "ROUTING_SOURCE_PRESET" "geogaga" "$env_file"
-                        set_env_val "ROUTING_RULES" "HAPP" "$env_file"
-                        ;;
-                    2)
-                        set_env_val "ROUTING_SOURCE_PRESET" "hydraponique" "$env_file"
-                        set_env_val "ROUTING_RULES" "JSONSUB,WHITELIST" "$env_file"
-                        ;;
-                    3)
-                        set_env_val "ROUTING_SOURCE_PRESET" "vahellame" "$env_file"
-                        set_env_val "ROUTING_RULES" "WHITELIST" "$env_file"
-                        ;;
-                    4)
-                        set_env_val "ROUTING_SOURCE_PRESET" "hydraponique,geogaga" "$env_file"
-                        set_env_val "ROUTING_RULES" "JSONSUB,WHITELIST" "$env_file"
-                        ;;
-                    *) continue ;;
-                esac
-                apply_compose "$install_dir" || continue
-                echo -e "${C_GREEN}[✓] Источник успешно изменен и применен.${C_RESET}"
-                sleep 1
-                ;;
-            0) return 0 ;;
-        esac
-    done
-}
-
-# ==============================================================================
-# ПЕРВИЧНАЯ УСТАНОВКА (Быстрый опрос в 6 шагов)
-# ==============================================================================
-
-# docker compose up -d возвращает 0 и тогда, когда контейнер сразу падает
-# (например, при невалидном токене). Ждём и проверяем РЕАЛЬНОЕ состояние:
-# running без цикла рестартов. 0 — запущен, 1 — не поднялся/падает.
-wait_for_container_ready() {
-    local tries=0
-    local status="" restarts=""
-    while [ "$tries" -lt 25 ]; do
-        status="$(docker inspect -f '{{.State.Status}}' geo-routing-server 2>/dev/null || true)"
-        restarts="$(docker inspect -f '{{.RestartCount}}' geo-routing-server 2>/dev/null || echo 0)"
-        if [ "$status" = "running" ]; then
-            # между рестартами контейнер может выглядеть "running" — даём 2 секунды
-            sleep 2
-            status="$(docker inspect -f '{{.State.Status}}' geo-routing-server 2>/dev/null || true)"
-            restarts="$(docker inspect -f '{{.RestartCount}}' geo-routing-server 2>/dev/null || echo 0)"
-            if [ "$status" = "running" ] && [ "${restarts:-0}" -lt 2 ] 2>/dev/null; then
-                return 0
-            fi
-        fi
-        if [ "${restarts:-0}" -ge 3 ] 2>/dev/null; then
-            # контейнер падает и перезапускается — ждать смысла нет
-            return 1
-        fi
-        tries=$((tries + 1))
-        sleep 1
-    done
-    return 1
-}
+# ------------------------------------------------------------------------------
+# Установка
+# ------------------------------------------------------------------------------
 
 wizard_install() {
     print_banner
     check_root
     check_dependencies
 
-    echo -e "${C_WHITE}${C_BOLD}Первоначальная быстрая настройка${C_RESET}\n"
-
-    local default_dir
-    default_dir="$(get_install_dir)"
-    echo -e "${C_CYAN}[1/6] Каталог установки${C_RESET}"
-    local install_dir=""
-    while true; do
-        local input_dir=""
-        read -r -p "      Путь [Enter = ${default_dir}]: " input_dir || input_dir=""
-        install_dir="${input_dir:-$default_dir}"
-
-        # Без этой нормализации относительный путь ("geo") или буквальный "~/geo"
-        # (read не раскрывает '~') сохранялись в CONFIG_RECORD как есть: при
-        # следующем запуске geoserver из другого cwd get_install_dir не находил
-        # каталог ([ -d "$saved_dir" ] резолвится от текущего cwd) и тихо
-        # съезжал на дефолт /opt/geo-routing-server, хотя файлы лежат в другом месте.
-        case "$install_dir" in
-            \~) install_dir="$HOME" ;;
-            \~/*) install_dir="${HOME}/${install_dir#\~/}" ;;
-        esac
-        if [[ "$install_dir" != /* ]]; then
-            install_dir="$(pwd)/$install_dir"
-        fi
-        install_dir="$(realpath -m -- "$install_dir" 2>/dev/null || echo "$install_dir")"
-
-        if is_protected_dir "$install_dir"; then
-            echo -e "      ${C_RED}[!] '${install_dir}' — системный или домашний каталог, установка туда запрещена.${C_RESET}"
-            continue
-        fi
-        break
-    done
+    echo -e "${C_WHITE}${C_BOLD}Первоначальная настройка${C_RESET}\n"
+    echo -e "${C_CYAN}Каталог установки${C_RESET}"
+    local install_dir
+    install_dir="$(ask_install_dir "$(get_install_dir)")"
     mkdir -p "$install_dir"
     save_install_dir "$install_dir"
 
-    # Значения прошлой установки: при повторном запуске визарда они становятся
-    # дефолтами, а прежний .env уходит в бэкап .env.bak.<ts> (не перезаписывается
-    # без следа — как и обещано в README).
-    local env_file="$install_dir/.env"
-    local backup_file=""
-    local prev_domain="" prev_token="" prev_clients="" prev_preset="" prev_rules=""
-    local prev_formats="" prev_geoip="" prev_geosite="" prev_bind="" prev_port=""
-    local prev_schedule="" prev_sync="" prev_ext_geo=""
-    local prev_remna_url="" prev_remna_token="" prev_remna_net=""
-    if [ -f "$env_file" ]; then
-        backup_file="${env_file}.bak.$(date +%Y%m%d-%H%M%S)"
-        cp -p "$env_file" "$backup_file"
-        echo -e "      ${C_GRAY}[i] Найден существующий .env — сохранена резервная копия: $(basename "$backup_file")${C_RESET}"
-        prev_domain="$(get_env_val "DOMAIN" "$env_file" "")"
-        prev_token="$(get_env_val "ROUTING_TOKEN" "$env_file" "")"
-        prev_clients="$(get_env_val "ENABLED_CLIENTS" "$env_file" "")"
-        prev_preset="$(get_env_val "ROUTING_SOURCE_PRESET" "$env_file" "")"
-        prev_rules="$(get_env_val "ROUTING_RULES" "$env_file" "")"
-        prev_formats="$(get_env_val "SERVE_FORMATS" "$env_file" "")"
-        prev_geoip="$(get_env_val "SERVE_GEOIP" "$env_file" "")"
-        prev_geosite="$(get_env_val "SERVE_GEOSITE" "$env_file" "")"
-        prev_bind="$(get_env_val "HTTP_BIND" "$env_file" "")"
-        prev_port="$(get_env_val "HTTP_PORT" "$env_file" "")"
-        prev_schedule="$(get_env_val "SCHEDULE" "$env_file" "")"
-        prev_sync="$(get_env_val "SYNC_ON_START" "$env_file" "")"
-        prev_ext_geo="$(get_env_val "PUBLIC_GEO_BASE_URL" "$env_file" "")"
-        prev_remna_url="$(get_env_val "REMNAWAVE_BASE_URL" "$env_file" "")"
-        prev_remna_token="$(get_env_val "REMNAWAVE_TOKEN" "$env_file" "")"
-        prev_remna_net="$(get_env_val "DOCKER_NETWORK" "$env_file" "")"
-    fi
-
-    local def_domain="${prev_domain:-geo.example.com}"
-    def_domain="${def_domain#http://}"
-    def_domain="${def_domain#https://}"
-    def_domain="${def_domain%%/*}"
-    is_valid_domain "$def_domain" || def_domain="geo.example.com"
-
-    local domain="" input_domain=""
-    echo -e "\n${C_CYAN}[2/6] Публичный домен сервера${C_RESET}"
-    echo -e "      ${C_GRAY}Домен с настроенным HTTPS или внешний IP-адрес${C_RESET}"
-    while true; do
-        read -r -p "      Домен [Enter = ${def_domain}]: " input_domain || input_domain=""
-        domain="${input_domain:-$def_domain}"
-        domain="${domain#http://}"
-        domain="${domain#https://}"
-        domain="${domain%%/*}"
-        if is_valid_domain "$domain"; then
-            break
-        fi
-        echo -e "      ${C_RED}[!] Некорректный домен '${domain}'. Пример: geo.example.com${C_RESET}"
-    done
-
-    # Токен валидируется сразу по контракту из docker-entrypoint.sh:
-    # [A-Za-z0-9_-]{4,}, иначе контейнер завершится с ошибкой после запуска.
-    local gen_token
-    gen_token="$(generate_random_hex_token 32)"
-    local def_token="$gen_token"
-    local token_prompt="      Токен [Enter = сгенерировать ${gen_token}]: "
-    if is_valid_token "$prev_token"; then
-        def_token="$prev_token"
-        token_prompt="      Токен [Enter = оставить текущий токен]: "
-    fi
-    local token="" input_token=""
-    echo -e "\n${C_CYAN}[3/6] Секретный URL-токен доступа${C_RESET}"
-    while true; do
-        read -r -p "$token_prompt" input_token || input_token=""
-        token="${input_token:-$def_token}"
-        if is_valid_token "$token"; then
-            break
-        fi
-        echo -e "      ${C_RED}[!] Токен: минимум 4 символа из A-Z, a-z, 0-9, '_' или '-' (иначе контейнер откажется стартовать).${C_RESET}"
-    done
-
-    echo -e "\n${C_CYAN}[4/6] Поддерживаемые клиенты${C_RESET}"
-    echo "      1) Happ и Incy (Рекомендуется)"
-    echo "      2) Только Happ"
-    echo "      3) Только Incy"
-    echo "      4) HAPP_DEEPLINK (только апдейтер сквадов Remnawave, базы внешние)"
-    local def_client_opt="1"
-    # Эти 4 опции описывают только самые частые комбинации. Нестандартное
-    # значение (HAPP_GEO, HAPP_LOCAL, INCY_GEO, несколько клиентов в другом
-    # порядке и т.п.) — например, настроенное через меню "Клиенты, форматы
-    # и Geo-базы" или вручную в .env — не совпадает ни с одной из них. Раньше
-    # Enter в таком случае тихо заменял его на дефолт "HAPP,INCY"; теперь
-    # вместо этого предлагается отдельный пункт "оставить как есть".
-    local keep_prev_clients=0
-    case "$prev_clients" in
-        HAPP)                   def_client_opt="2" ;;
-        INCY)                   def_client_opt="3" ;;
-        HAPP_DEEPLINK)          def_client_opt="4" ;;
-        ""|HAPP,INCY|INCY,HAPP) def_client_opt="1" ;;
-        *)
-            keep_prev_clients=1
-            def_client_opt="5"
-            ;;
-    esac
-    local max_opt=4
-    if [ "$keep_prev_clients" = "1" ]; then
-        echo "      5) Оставить текущее значение без изменений: ${prev_clients}"
-        max_opt=5
-    fi
-    local client_ans=""
-    read -r -p "      Выберите вариант [1-${max_opt}, Enter = ${def_client_opt}]: " client_ans || client_ans=""
-    case "$client_ans" in
-        1|2|3|4) ;;
-        5) [ "$keep_prev_clients" = "1" ] || client_ans="$def_client_opt" ;;
-        "") client_ans="$def_client_opt" ;;
-        *) client_ans="$def_client_opt" ;;
-    esac
-    local clients="HAPP,INCY"
-    case "$client_ans" in
-        2) clients="HAPP" ;;
-        3) clients="INCY" ;;
-        4) clients="HAPP_DEEPLINK" ;;
-        5) clients="$prev_clients" ;;
-        *) clients="HAPP,INCY" ;;
-    esac
-
-    echo -e "\n${C_CYAN}[5/6] Источник правил и Geo-баз${C_RESET}"
-    echo "      1) GeoGaga (Client Flavor) [Рекомендуется — легкие базы, умный Split-tunneling]"
-    echo "      2) hydraponique (Legacy — классический roscomvpn-routing)"
-    echo "      3) vahellame (Strict Whitelist — строгий белый список)"
-    echo "      4) Мульти-пресет (hydraponique + geogaga — одновременная раздача)"
-    local def_src_opt="1"
-    case "$prev_preset" in
-        hydraponique)                 def_src_opt="2" ;;
-        vahellame)                    def_src_opt="3" ;;
-        "hydraponique,geogaga"|*","*) def_src_opt="4" ;;
-    esac
-    local src_list="1-4"
-    local src_ans=""
-    read -r -p "      Выберите вариант [${src_list}, Enter = ${def_src_opt}]: " src_ans || src_ans=""
-    case "$src_ans" in
-        1|2|3|4) ;;
-        *) src_ans="$def_src_opt" ;;
-    esac
-    local source_preset="geogaga"
-    local def_rules="HAPP"
-    case "$src_ans" in
-        2) source_preset="hydraponique"; def_rules="JSONSUB,WHITELIST" ;;
-        3) source_preset="vahellame"; def_rules="WHITELIST" ;;
-        4) source_preset="hydraponique,geogaga"; def_rules="JSONSUB,WHITELIST" ;;
-        1) source_preset="geogaga"; def_rules="HAPP" ;;
-    esac
-    # Пресет не менялся — сохраняем прежний список правил, если он был задан
-    if [ "$source_preset" = "$prev_preset" ] && [ -n "$prev_rules" ]; then
-        def_rules="$prev_rules"
-    fi
-
-    echo -e "\n${C_CYAN}[6/6] Локальный HTTP-порт${C_RESET}"
-    local def_port="8080"
-    if is_valid_port "$prev_port"; then
-        def_port="$prev_port"
-    fi
-    local port="" input_port=""
-    while true; do
-        read -r -p "      Порт для реверс-прокси [Enter = ${def_port}]: " input_port || input_port=""
-        port="${input_port:-$def_port}"
-        if is_valid_port "$port"; then
-            port="$((10#$port))"
-            break
-        fi
-        echo -e "      ${C_RED}[!] Порт должен быть числом от 1 до 65535.${C_RESET}"
-    done
-    if is_port_in_use "$port"; then
-        echo -e "      ${C_YELLOW}[!] Внимание: порт $port уже занят на сервере.${C_RESET}"
-    fi
-
-    # Опциональный опрос Remnawave (прежняя интеграция сохраняется по Enter)
-    local remna_url="" remna_token="" remna_net=""
-    local r_ans="" input_r_url=""
-    local has_prev_remna=false
-    if [ -n "$prev_remna_url" ] && [ -n "$prev_remna_token" ]; then
-        has_prev_remna=true
-    fi
-    echo ""
-    if [ "$has_prev_remna" = "true" ]; then
-        read -r -p "Перенастроить интеграцию с Remnawave? [y/N, Enter = оставить текущую]: " r_ans || r_ans=""
+    if [ -n "${GRS_IMAGE:-}" ] && docker image inspect "$IMAGE" >/dev/null 2>&1; then
+        echo -e "${C_GRAY}[i] Используется локальный образ ${IMAGE}${C_RESET}"
     else
-        read -r -p "Настроить интеграцию с Remnawave прямо сейчас? [y/N]: " r_ans || r_ans=""
-    fi
-    if [[ "${r_ans:-n}" =~ ^[Yy]$ ]]; then
-        read -r -p "  ▸ URL API панели [Enter = ${prev_remna_url:-http://remnawave:3000/api}]: " input_r_url || input_r_url=""
-        remna_url="$(normalize_remna_url "${input_r_url:-${prev_remna_url:-http://remnawave:3000/api}}")"
-        if [ "$has_prev_remna" = "true" ]; then
-            read -r -p "  ▸ JWT токен администратора Remnawave [Enter = оставить текущий]: " remna_token || remna_token=""
-        else
-            read -r -p "  ▸ JWT токен администратора Remnawave: " remna_token || remna_token=""
-        fi
-        remna_token="${remna_token:-$prev_remna_token}"
-        read -r -p "  ▸ Имя внешней Docker-сети [Enter = оставить${prev_remna_net:+ $prev_remna_net}, если задана]: " remna_net || remna_net=""
-        remna_net="${remna_net:-$prev_remna_net}"
-        if [ -z "$remna_token" ]; then
-            echo -e "      ${C_YELLOW}[!] Токен Remnawave не указан — интеграция не будет сохранена.${C_RESET}"
-            remna_url=""
-        fi
-        if [ -n "$remna_net" ]; then
-            if ! is_valid_docker_network_name "$remna_net"; then
-                echo -e "      ${C_RED}[!] Недопустимое имя сети '$remna_net' (разрешены буквы, цифры, '_', '.', '-'). Сеть не будет подключена.${C_RESET}"
-                remna_net=""
-            elif ! docker network inspect "$remna_net" >/dev/null 2>&1; then
-                echo -e "      ${C_YELLOW}[!] Внимание: сеть '$remna_net' не найдена в Docker. Убедитесь, что создали её перед запуском: docker network create $remna_net${C_RESET}"
-            fi
-        fi
-    elif [ "$has_prev_remna" = "true" ]; then
-        # Пользователь отказался перенастраивать — оставляем прежнюю интеграцию
-        remna_url="$(normalize_remna_url "$prev_remna_url")"
-        remna_token="$prev_remna_token"
-        remna_net="$prev_remna_net"
-    fi
-
-    # Генерация .env (прежний файл уже сохранён в backup_file)
-    echo -e "\n${C_YELLOW}[*] Сохранение конфигурации в $env_file...${C_RESET}"
-    local serve_formats="${prev_formats:-CLIENT_OPTIMIZED}"
-    local serve_geoip="${prev_geoip:-true}"
-    local serve_geosite="${prev_geosite:-true}"
-    local http_bind="${prev_bind:-127.0.0.1}"
-    local schedule="${prev_schedule:-0 10 * * *}"
-    local sync_on_start="${prev_sync:-true}"
-    local public_geo_line=""
-    if [ -n "$prev_ext_geo" ]; then
-        public_geo_line="PUBLIC_GEO_BASE_URL=${prev_ext_geo}"
-    fi
-    local tmp_env
-    tmp_env="$(mktemp "${env_file}.tmp.XXXXXX" 2>/dev/null || mktemp "/tmp/.env.tmp.XXXXXX")"
-    cat > "$tmp_env" <<EOF
-# ==============================================================================
-# GEO ROUTING SERVER CONFIGURATION
-# ==============================================================================
-DOMAIN=${domain}
-ROUTING_TOKEN=${token}
-ENABLED_CLIENTS=${clients}
-ROUTING_SOURCE_PRESET=${source_preset}
-ROUTING_RULES=${def_rules}
-SERVE_FORMATS=${serve_formats}
-SERVE_GEOIP=${serve_geoip}
-SERVE_GEOSITE=${serve_geosite}
-
-${public_geo_line}
-HTTP_BIND=${http_bind}
-HTTP_PORT=${port}
-SCHEDULE=${schedule}
-SYNC_ON_START=${sync_on_start}
-EOF
-
-    if [ -n "$remna_url" ] && [ -n "$remna_token" ]; then
-        cat >> "$tmp_env" <<EOF
-
-# Remnawave API Integration
-REMNAWAVE_BASE_URL=${remna_url}
-REMNAWAVE_TOKEN=${remna_token}
-EOF
-        if [ -n "$remna_net" ]; then
-            echo "DOCKER_NETWORK=${remna_net}" >> "$tmp_env"
+        echo -e "\n${C_YELLOW}[*] Загрузка образа ${IMAGE}...${C_RESET}"
+        if ! docker pull "$IMAGE"; then
+            echo -e "${C_RED}[!] Не удалось загрузить образ (см. ошибку выше).${C_RESET}"
+            return 1
         fi
     fi
 
-    # Переносим из прежнего .env ключи, которые визард не спрашивает
-    # (TELEGRAM_* и прочие) — повторная установка их не теряет.
-    if [ -n "$backup_file" ] && [ -f "$backup_file" ]; then
-        local line key
-        while IFS= read -r line || [ -n "$line" ]; do
-            case "$line" in
-                [A-Za-z_]*=*)
-                    key="${line%%=*}"
-                    case "$key" in
-                        DOMAIN|ROUTING_TOKEN|ENABLED_CLIENTS|ROUTING_SOURCE_PRESET|ROUTING_RULES|SERVE_FORMATS|SERVE_GEOIP|SERVE_GEOSITE|PUBLIC_GEO_BASE_URL|HTTP_BIND|HTTP_PORT|SCHEDULE|SYNC_ON_START|REMNAWAVE_BASE_URL|REMNAWAVE_TOKEN|DOCKER_NETWORK)
-                            continue ;;
-
-                    esac
-                    if ! grep -q "^${key}=" "$tmp_env"; then
-                        printf '%s\n' "$line" >> "$tmp_env"
-                    fi
-                    ;;
-            esac
-        done < "$backup_file"
+    # Вопросы мастера, проверка ответов, .env и compose.yaml — в CLI образа
+    if ! cli_image "$install_dir" setup --host-dir /host --image "$IMAGE"; then
+        echo -e "${C_RED}[!] Установка прервана: настройки не сохранены.${C_RESET}"
+        return 1
     fi
 
-    [ -f "$env_file" ] && cp -p "$env_file" "${env_file}.bak" 2>/dev/null || true
-    chmod 600 "$tmp_env" 2>/dev/null || true
-    mv -f "$tmp_env" "$env_file"
-
-    # Создание compose.yaml
-    echo -e "${C_YELLOW}[*] Создание compose.yaml...${C_RESET}"
-    # В отличие от .env, compose.yaml раньше перезаписывался без резервной
-    # копии. Если визард запускали из каталога клона репозитория (get_install_dir
-    # может вернуть текущий cwd), это заменяло отслеживаемый в git файл с
-    # возможными ручными правками (build:, labels, доп. сети, лимиты) без
-    # следа — тот же принцип защиты, что уже применяется к .env выше.
-    if [ -f "$install_dir/compose.yaml" ]; then
-        local compose_backup
-        compose_backup="$install_dir/compose.yaml.bak.$(date +%Y%m%d-%H%M%S)"
-        cp -p "$install_dir/compose.yaml" "$compose_backup" 2>/dev/null \
-            && echo -e "      ${C_GRAY}[i] Найден существующий compose.yaml — сохранена резервная копия: $(basename "$compose_backup")${C_RESET}"
-    fi
-    generate_compose_yaml "$install_dir" "$remna_net"
-    chmod 644 "$install_dir/compose.yaml" 2>/dev/null || true
-
-    # Сохранение скрипта и CLI ссылки
-    persist_install_script "$install_dir"
+    persist_install_script "$install_dir" || true
     if ! create_cli_shortcut "$install_dir"; then
-        echo -e "      ${C_YELLOW}[!] CLI-команда geoserver не создана (нет прав на /usr/local/bin).${C_RESET}"
+        echo -e "      ${C_YELLOW}[!] Команда geoserver не создана.${C_RESET}"
     fi
 
-    # Запуск
-    local compose_cmd
-    compose_cmd="$(detect_compose)"
-    echo -e "${C_YELLOW}[*] Запуск сервиса через $compose_cmd...${C_RESET}"
-    if ! (cd "$install_dir" && $compose_cmd pull && $compose_cmd up -d); then
-        echo -e "${C_RED}[!] Установка не завершена: Docker Compose завершился с ошибкой выше.${C_RESET}"
+    echo -e "\n${C_YELLOW}[*] Запуск сервиса...${C_RESET}"
+    if ! apply_changes; then
+        echo -e "${C_YELLOW}Проверьте настройки (geoserver config) и запустите установку заново.${C_RESET}"
         return 1
     fi
 
-    # up -d возвращает 0 даже когда контейнер сразу завершается (exit 1) —
-    # проверяем реальное состояние и честно отчитываемся.
-    echo -e "${C_YELLOW}[*] Проверка состояния контейнера...${C_RESET}"
-    if ! wait_for_container_ready; then
-        echo -e "${C_RED}[!] Контейнер geo-routing-server не запустился или падает с перезапуском.${C_RESET}"
-        echo -e "${C_YELLOW}Состояние:${C_RESET}"
-        (cd "$install_dir" && $compose_cmd ps) || true
-        echo -e "${C_YELLOW}Последние логи контейнера:${C_RESET}"
-        docker logs --tail 30 geo-routing-server 2>&1 || true
-        echo -e "${C_YELLOW}Проверьте .env (токен: [A-Za-z0-9_-], минимум 4 символов) и запустите установку заново.${C_RESET}"
-        return 1
-    fi
-
-    echo -e "\n${C_GREEN}${C_BOLD}══════════════════════════════════════════════════════${C_RESET}"
-    echo -e "${C_GREEN}${C_BOLD}  Geo Routing Server успешно установлен и запущен!   ${C_RESET}"
-    echo -e "${C_GREEN}${C_BOLD}══════════════════════════════════════════════════════${C_RESET}\n"
-
-    cmd_status
-    cmd_proxy
-
-    echo -e "${C_CYAN}💡 Для управления сервером используйте команду: ${C_BOLD}geoserver${C_RESET}\n"
+    echo -e "\n${C_GREEN}${C_BOLD}  Geo Routing Server установлен и запущен.${C_RESET}\n"
+    cli_stack status </dev/null || true
+    echo ""
+    cli_stack proxy </dev/null || true
+    echo -e "${C_CYAN}Для управления сервером используйте команду: ${C_BOLD}geoserver${C_RESET}\n"
 }
 
-# ==============================================================================
-# ГЛАВНОЕ МЕНЮ
-# ==============================================================================
+# ------------------------------------------------------------------------------
+# Главное меню
+# ------------------------------------------------------------------------------
 
 main_menu() {
     while true; do
-        local install_dir
-        install_dir="$(get_install_dir)"
-        local env_file="$install_dir/.env"
-
         print_banner
-        echo -e "  ${C_WHITE}Каталог:${C_RESET} $install_dir"
-        echo -e "  ${C_WHITE}Статус:${C_RESET}  $(get_container_status "$install_dir")"
+        echo -e "  ${C_WHITE}Каталог:${C_RESET} $(get_install_dir)"
+        echo -e "  ${C_WHITE}Статус:${C_RESET}  $(get_container_status)"
         hr 54
         echo ""
-        echo "  1) 📊 Статус сервиса и ссылки для клиентов"
-        echo "  2) 🔄 Запустить синхронизацию баз прямо сейчас"
-        echo "  3) 📜 Логи контейнера (docker logs)"
-        echo "  4) ⚡ Настройка сквадов Remnawave"
-        echo "  5) ⏰ Расписание автообновления (Cron / Время)"
-        echo "  6) 🤖 Telegram-уведомления"
-        echo "  7) 🌐 Клиенты, форматы и Geo-базы"
-        echo "  8) 📋 Сниппеты Caddy / Nginx"
-        echo "  9) 🚀 Центр обновлений (образ, скрипт, всё)"
-        echo " 10) 🔄 Перезапустить контейнер"
+        echo "  1) Статус и ссылки для клиентов"
+        echo "  2) Синхронизировать сейчас"
+        echo "  3) Логи контейнера"
+        echo "  4) Remnawave и сквады"
+        echo "  5) Расписание синхронизации"
+        echo "  6) Telegram-уведомления"
+        echo "  7) Клиенты, источник правил, гео-базы"
+        echo "  8) Конфиги Caddy / Nginx"
+        echo "  9) Центр обновлений"
+        echo " 10) Перезапустить контейнер"
         if is_container_running; then
-            echo " 11) ⏹️  Остановить контейнер"
+            echo " 11) Остановить контейнер"
         else
-            echo " 11) 🟢 Запустить контейнер"
+            echo " 11) Запустить контейнер"
         fi
-        echo " 12) 📝 Редактировать .env напрямую"
-        echo " 13) ❌ Удалить сервис (Uninstall)"
-        echo "  0) 🚪 Выход"
+        echo " 12) Редактировать .env"
+        echo " 13) Удалить сервис"
+        echo "  0) Выход"
         echo ""
-        read -r -p "  Выберите действие [0-13]: " choice
+        local choice=""
+        read -r -p "  Выберите действие [0-13]: " choice || exit 0
 
         case "$choice" in
-            1) cmd_status; echo ""; read -r -p "Нажмите Enter для возврата в меню..." ;;
-            2) cmd_sync || true; echo ""; read -r -p "Нажмите Enter для возврата в меню..." ;;
-            3) cmd_logs || true ;;
-            4) menu_remnawave ;;
-            5) menu_schedule ;;
-            6) menu_telegram ;;
-            7) menu_clients_bases ;;
-            8) cmd_proxy; echo ""; read -r -p "Нажмите Enter для возврата в меню..." ;;
+            1) cmd_status || true; pause ;;
+            2) cmd_sync || true; pause ;;
+            3) cmd_logs ;;
+            4) config_section remnawave ;;
+            5) config_section schedule ;;
+            6) config_section telegram ;;
+            7) config_section clients ;;
+            8) cli_stack proxy </dev/null || true; pause ;;
             9) menu_updates ;;
-            10|restart) cmd_restart || true; echo ""; read -r -p "Нажмите Enter для возврата в меню..." ;;
+            10) cmd_restart || true; pause ;;
             11)
-                if is_container_running; then
-                    cmd_stop || true
-                else
-                    cmd_start || true
-                fi
-                echo ""
-                read -r -p "Нажмите Enter для возврата в меню..."
+                if is_container_running; then cmd_stop || true; else cmd_start || true; fi
+                pause
                 ;;
-            stop) cmd_stop || true; echo ""; read -r -p "Нажмите Enter для возврата в меню..." ;;
-            start) cmd_start || true; echo ""; read -r -p "Нажмите Enter для возврата в меню..." ;;
-            12|edit|config) cmd_edit || true ;;
-            13|uninstall)
-                # cmd_uninstall возвращает 0 только после реально выполненного
-                # удаления; при отмене/отказе (1) возвращаемся в меню, а не выходим
-                if cmd_uninstall; then
-                    exit 0
-                fi
+            12) cmd_edit || true ;;
+            13)
+                # 0 — удалено, выходим; 1 — отмена, остаёмся в меню
+                if cmd_uninstall; then exit 0; fi
+                pause
                 ;;
             0|q|exit) clear 2>/dev/null || true; exit 0 ;;
-            *) sleep 0.5 ;;
         esac
     done
 }
 
-# ==============================================================================
-# ТОЧКА ВХОДА
-# ==============================================================================
-
 main() {
     local cmd="${1:-}"
+    [ $# -gt 0 ] && shift
     case "$cmd" in
         status|info)                 cmd_status ;;
         sync)                        cmd_sync ;;
@@ -2094,24 +799,18 @@ main() {
         update)                      menu_updates ;;
         update-image)                cmd_update ;;
         update-script|self-update)   cmd_update_script ;;
-        update-all)                  cmd_update && cmd_update_script ;;
-        proxy)                       cmd_proxy ;;
-        edit|config)                 cmd_edit ;;
-        squads)
-            shift
-            cmd_squads "$@"
+        update-all)                  cmd_update_script && bash "$(get_install_dir)/install.sh" update-image ;;
+        proxy)                       cli_stack proxy </dev/null ;;
+        squads)                      cli_stack squads "$@" ;;
+        cli)                         cli_stack "$@" ;;
+        config|edit)
+            case "${1:-}" in
+                "")                                cmd_edit ;;
+                set|get)                           cmd_config_key "$@" ;;
+                clients|schedule|telegram|remnawave) config_section "$1" ;;
+                *) echo -e "${C_RED}Неизвестный раздел: $1${C_RESET}"; cmd_help; return 1 ;;
+            esac
             ;;
-        cli)
-            shift
-            local install_dir compose_cmd tty_flag="-T"
-            [ -t 0 ] && tty_flag="-it"
-            install_dir="$(get_install_dir)"
-            compose_cmd="$(detect_compose)"
-            (cd "$install_dir" && $compose_cmd exec $tty_flag geo-routing-server python3 -m app.cli "$@")
-            ;;
-        # Без "|| true": `geoserver uninstall`, вызванный не из интерактивного
-        # меню (например, из скрипта/CI), должен возвращать реальный код
-        # выхода — 1 при отмене/отказе/защищённом каталоге, а не всегда 0.
         uninstall)                   cmd_uninstall ;;
         install|setup)               wizard_install ;;
         help|-h|--help)              cmd_help ;;
@@ -2127,7 +826,7 @@ main() {
         *)
             echo -e "${C_RED}Неизвестная команда: $cmd${C_RESET}\n"
             cmd_help
-            exit 1
+            return 1
             ;;
     esac
 }

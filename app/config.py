@@ -5,6 +5,8 @@ from pathlib import Path
 from typing import List, Optional
 from urllib.parse import quote, urlparse
 
+from app.validators import TOKEN_PLACEHOLDER, TOKEN_RE
+
 def _calc_preset_fn(env_preset: str, presets: dict) -> str:
     p = env_preset.strip().lower()
     if p in presets:
@@ -256,7 +258,7 @@ class Config:
         # Если включен только локальный генератор диплинков HAPP, токен может быть пустым или дефолтным
         is_only_local = bool(cls.ENABLED_CLIENTS) and set(cls.ENABLED_CLIENTS).issubset({"HAPP_DEEPLINK", "HAPP_LOCAL"})
         
-        if not token or token == "change_me_to_random_secret_token":
+        if not token or token == TOKEN_PLACEHOLDER:
             if is_only_local:
                 return "local"
             print("ERROR: ROUTING_TOKEN is not configured! Please set a valid secret token in .env or token.txt", file=sys.stderr)
@@ -264,7 +266,7 @@ class Config:
             
         # Строгая валидация токена: только безопасные URL-символы (буквы, цифры, дефис, подчёркивание)
         # Точки исключены для защиты от path traversal (. и ..) и скрытых файлов
-        if len(token) < 4 or not re.match(r"^[A-Za-z0-9_-]+$", token):
+        if not TOKEN_RE.match(token):
             print("ERROR: ROUTING_TOKEN must be at least 4 characters and contain only A-Z, a-z, 0-9, '_', '-'", file=sys.stderr)
             sys.exit(1)
             

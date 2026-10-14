@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Поддельный curl: сеть в тестах недоступна
+echo "curl $*" >> "$STUB_LOG"
+exit 1

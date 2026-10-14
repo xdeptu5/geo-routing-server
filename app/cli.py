@@ -11,6 +11,7 @@ from typing import Any, Dict, Optional
 from app.config import Config
 from app.remnawave import RemnawaveSync
 from app.squads import SquadManager
+from app.ui import Colors, supports_color
 
 # Fix Windows console encoding if needed
 for stream in (sys.stdout, sys.stderr):
@@ -21,31 +22,6 @@ for stream in (sys.stdout, sys.stderr):
             pass
 
 logger = logging.getLogger("geo-routing-server")
-
-
-def supports_color() -> bool:
-    """Проверяет, поддерживает ли текущий терминал ANSI цвета."""
-    if os.getenv("NO_COLOR"):
-        return False
-    if not hasattr(sys.stdout, "isatty"):
-        return False
-    return sys.stdout.isatty()
-
-
-class Colors:
-    """Управление ANSI-цветами для терминала."""
-
-    def __init__(self, enabled: bool):
-        self.RESET = "\033[0m" if enabled else ""
-        self.BOLD = "\033[1m" if enabled else ""
-        self.RED = "\033[31m" if enabled else ""
-        self.GREEN = "\033[32m" if enabled else ""
-        self.YELLOW = "\033[33m" if enabled else ""
-        self.BLUE = "\033[34m" if enabled else ""
-        self.MAGENTA = "\033[35m" if enabled else ""
-        self.CYAN = "\033[36m" if enabled else ""
-        self.WHITE = "\033[37m" if enabled else ""
-        self.GRAY = "\033[90m" if enabled else ""
 
 
 def get_safe_token() -> str:
@@ -691,7 +667,52 @@ def build_parser() -> argparse.ArgumentParser:
     # menu
     subparsers.add_parser("menu", help="Интерактивное TUI-меню")
 
+    # version: версия приложения и контракта с install.sh
+    subparsers.add_parser("version", help="Версия приложения и CLI API")
+
+    # setup / config: правка .env на хосте (каталог установки смонтирован в --host-dir)
+    p_setup = subparsers.add_parser("setup", help="Мастер установки (пишет .env и compose.yaml)")
+    p_setup.add_argument("--host-dir", default="/host", help="Каталог установки на хосте")
+    p_setup.add_argument("--image", help="Образ для compose.yaml")
+
+    p_config = subparsers.add_parser("config", help="Разделы настроек .env")
+    p_config.add_argument(
+        "section",
+        choices=["clients", "schedule", "telegram", "remnawave", "set", "get"],
+        help="Раздел настроек или set/get для отдельного ключа",
+    )
+    p_config.add_argument("key", nargs="?", help="Ключ для set/get")
+    p_config.add_argument("value", nargs="?", help="Значение для set")
+    p_config.add_argument("--host-dir", default="/host", help="Каталог установки на хосте")
+    p_config.add_argument("--image", help="Образ для compose.yaml")
+
     return parser
+
+
+def cmd_version() -> int:
+    from app import CLI_API, __version__
+
+    print(f"geo-routing-server {__version__} cli-api {CLI_API}")
+    return 0
+
+
+def cmd_config(parsed_args: argparse.Namespace) -> int:
+    from app import hostconfig
+    from app.envfile import EnvFile
+
+    host_dir = Path(parsed_args.host_dir)
+    if parsed_args.section == "get":
+        if not parsed_args.key:
+            print("Укажите ключ: config get KEY", file=sys.stderr)
+            return 2
+        print(EnvFile(host_dir / ".env").get(parsed_args.key.upper()))
+        return 0
+    if parsed_args.section == "set":
+        if not parsed_args.key or parsed_args.value is None:
+            print("Укажите ключ и значение: config set KEY VALUE", file=sys.stderr)
+            return 2
+        return hostconfig.config_set(host_dir, parsed_args.key, parsed_args.value, parsed_args.image)
+    return hostconfig.run_section(parsed_args.section, host_dir, parsed_args.image)
 
 
 def main(args: Optional[list[str]] = None) -> int:
@@ -713,6 +734,17 @@ def main(args: Optional[list[str]] = None) -> int:
 
     if parsed_args.command == "proxy":
         return cmd_proxy()
+
+    if parsed_args.command == "version":
+        return cmd_version()
+
+    if parsed_args.command == "setup":
+        from app.hostconfig import run_setup
+
+        return run_setup(Path(parsed_args.host_dir), parsed_args.image)
+
+    if parsed_args.command == "config":
+        return cmd_config(parsed_args)
 
     if parsed_args.command == "menu":
         return cmd_menu()

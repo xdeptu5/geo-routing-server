@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+# Поддельный docker для tests/shell/run.sh.
+# Записывает каждый вызов в $STUB_LOG и имитирует ответы, которые нужны
+# install.sh. Вызовы CLI в образе (`docker run ... --entrypoint python3 IMAGE
+# -m app.cli ...` и `docker compose run ...`) выполняются настоящим
+# `python3 -m app.cli` из репозитория, а смонтированный каталог `DIR:/host`
+# подменяется на DIR.
+set -u
+echo "docker $*" >> "$STUB_LOG"
+STATE="$STUB_STATE"
+
+# Настоящие `docker run -i` и `docker compose run` пересылают в контейнер ВЕСЬ
+# stdin из пайпа, даже если команда внутри его не читает. Повторяем это:
+# забираем stdin целиком, отдаём его команде, остаток пропадает.
+drain_stdin() {
+    if [ ! -t 0 ]; then
+        local buf
+        buf="$(mktemp)"
+        cat > "$buf"
+        exec < "$buf"
+    fi
+}
+
+run_cli() {
+    drain_stdin
+    # $@ — аргументы после "run"/"compose run": разбираем -v и -e, остальное — команда
+    local host_dir="" ; local -a envs=() ; local -a rest=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -v) host_dir="${2%%:/host}"; shift 2 ;;
+            -e) envs+=("$2"); shift 2 ;;
+            --entrypoint) shift 2 ;;
+            --rm|-i|-it|-T|--no-deps) shift ;;
+            -m) shift; break ;;
+            *) shift ;;
+        esac
+    done
+    for arg in "$@"; do
+        if [ "$arg" = "/host" ]; then rest+=("$host_dir"); else rest+=("$arg"); fi
+    done
+    if [ -n "${STUB_OLD_IMAGE:-}" ] && [ "${rest[1]:-}" = "version" ]; then
+        echo "usage: geo-routing-server [-h] {status,sync,proxy,squads,menu} ..." >&2
+        return 2
+    fi
+    env ${envs[@]+"${envs[@]}"} BASE_DIR="$STATE/app" STORAGE_DIR="$STATE/app/www" \
+        PYTHONPATH="$REPO" python3 -m "${rest[@]}"
+}
+
+case "${1:-}" in
+    info|pull|logs|tag) exit 0 ;;
+    image) exit 0 ;;
+    network) printf 'bridge\nhost\nnone\nremnawave-network\n'; exit 0 ;;
+    inspect)
+        running=false; [ -f "$STATE/running" ] && running=true
+        case "$3" in
+            *State.Running*) echo "$running" ;;
+            *State.Status*) $running && echo running || echo exited ;;
+            *RestartCount*) echo 0 ;;
+        esac
+        exit 0 ;;
+    run) shift; run_cli "$@"; exit $? ;;
+    compose)
+        shift
+        case "${1:-}" in
+            version) echo "Docker Compose version v2-stub"; exit 0 ;;
+            run) shift; run_cli "$@"; exit $? ;;
+            up) touch "$STATE/running"; exit 0 ;;
+            stop|down) rm -f "$STATE/running"; exit 0 ;;
+            ps) echo "Up 5 seconds (healthy)"; exit 0 ;;
+            exec)
+                drain_stdin
+                # `exec ... sh -c CMD` выполняется локально: /app подменяется
+                # на каталог состояния, чтобы тест видел результат команды
+                last="${!#}"
+                if [ "${*: -3:1}" = "sh" ] && [ "${*: -2:1}" = "-c" ]; then
+                    sh -c "${last//\/app\//$STATE/app/}"
+                    exit $?
+                fi
+                exit 0 ;;
+            pull|logs) exit 0 ;;
+        esac
+        exit 0 ;;
+esac
+exit 0

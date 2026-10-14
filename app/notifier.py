@@ -4,7 +4,7 @@ import logging
 import re
 import urllib.request
 from datetime import datetime, timezone
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 from app.config import Config
 from app.publisher import PublishedFileInfo
 
@@ -14,10 +14,17 @@ class TelegramNotifier:
     """Умные, информативные Telegram-уведомления без спама с поддержкой топиков (Thread ID)."""
     
     @staticmethod
-    def _send_message(text: str) -> bool:
-        bot_token = Config.TELEGRAM_BOT_TOKEN
-        chat_id = Config.TELEGRAM_CHAT_ID
-        thread_id = Config.TELEGRAM_THREAD_ID
+    def _send_message(
+        text: str,
+        bot_token: Optional[str] = None,
+        chat_id: Optional[str] = None,
+        thread_id: Optional[str] = None,
+    ) -> bool:
+        # Явные значения передаёт меню настроек: оно проверяет только что
+        # введённые данные, которых ещё нет в окружении процесса.
+        bot_token = Config.TELEGRAM_BOT_TOKEN if bot_token is None else bot_token
+        chat_id = Config.TELEGRAM_CHAT_ID if chat_id is None else chat_id
+        thread_id = Config.TELEGRAM_THREAD_ID if thread_id is None else thread_id
         
         if not bot_token or not chat_id:
             return False
@@ -142,7 +149,12 @@ class TelegramNotifier:
         cls._send_message(text)
 
     @classmethod
-    def send_test_message(cls) -> bool:
+    def send_test_message(
+        cls,
+        bot_token: Optional[str] = None,
+        chat_id: Optional[str] = None,
+        thread_id: Optional[str] = None,
+    ) -> bool:
         """Отправляет тестовое уведомление для проверки настроек бота."""
         safe_domain = html.escape(Config.DOMAIN)
         text = (
@@ -151,5 +163,5 @@ class TelegramNotifier:
             f"✅ Связь с Telegram Bot API успешно установлена!\n"
             f"Бот готов присылать отчёты об обновлениях баз и предупреждения об ошибках."
         )
-        return cls._send_message(text)
+        return cls._send_message(text, bot_token=bot_token, chat_id=chat_id, thread_id=thread_id)
 

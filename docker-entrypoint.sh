@@ -4,38 +4,11 @@ set -eu
 SCHEDULE="${SCHEDULE:-0 10 * * *}"
 SYNC_ON_START="${SYNC_ON_START:-true}"
 
-resolve_routing_token() {
-    routing_value="${ROUTING_TOKEN:-}"
-    # Разделители нормализуемся: "HAPP_LOCAL," и ",HAPP_LOCAL" должны читаться
-    # как "HAPP_LOCAL", иначе local-only режим из-за лишней запятой потребует
-    # токен и упадёт с неверным сообщением.
-    clients="$(printf '%s' "${ENABLED_CLIENTS:-HAPP,INCY}" \
-        | tr -d '[:space:]' | tr '[:lower:]' '[:upper:]' \
-        | sed -e 's/^,*//' -e 's/,*$//' -e 's/,,\+/,/g')"
-
-    if [ -z "$routing_value" ] || [ "$routing_value" = "change_me_to_random_secret_token" ]; then
-        case ",$clients," in
-            ,HAPP_DEEPLINK,|,HAPP_LOCAL,|,HAPP_DEEPLINK,HAPP_LOCAL,|,HAPP_LOCAL,HAPP_DEEPLINK,)
-                routing_value="local"
-                ;;
-            *)
-                echo "[geo-routing-server] ROUTING_TOKEN must be configured for public file serving" >&2
-                exit 1
-                ;;
-        esac
-    fi
-
-    case "$routing_value" in
-        *[!A-Za-z0-9_-]*|???|??|?)
-            echo "[geo-routing-server] ROUTING_TOKEN must contain at least four characters from A-Z, a-z, 0-9, '_' or '-'" >&2
-            exit 1
-            ;;
-    esac
-
-    printf '%s' "$routing_value"
-}
-
-ROUTING_TOKEN_EFFECTIVE="$(resolve_routing_token)"
+# Правила токена (формат, заглушка из .env.example, режим без раздачи файлов
+# HAPP_DEEPLINK) живут в одном месте — Config.get_token(). При ошибке он
+# печатает причину в stderr и завершает процесс с кодом 1, а `set -e`
+# останавливает контейнер.
+ROUTING_TOKEN_EFFECTIVE="$(cd /app && python3 -c 'from app.config import Config; print(Config.get_token())')"
 export ROUTING_TOKEN="$ROUTING_TOKEN_EFFECTIVE"
 
 # Nginx may serve only the current token tree. Old trees remain in the volume

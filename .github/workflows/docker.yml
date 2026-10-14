@@ -26,6 +26,7 @@ env:
   PYTHON_VERSION: '3.12'      # Dockerfile: alpine:3.21 -> python3 = 3.12.x
   RUFF_VERSION: '0.16.9'
   PYTEST_VERSION: '9.1.1'
+  PYYAML_VERSION: '6.0.3'   # только для тестов (проверка генерации compose.yaml)
 
 jobs:
   python-lint-and-tests:
@@ -44,10 +45,10 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Install pinned lint/test tools
-        run: python -m pip install --disable-pip-version-check "ruff==${{ env.RUFF_VERSION }}" "pytest==${{ env.PYTEST_VERSION }}"
+        run: python -m pip install --disable-pip-version-check "ruff==${{ env.RUFF_VERSION }}" "pytest==${{ env.PYTEST_VERSION }}" "PyYAML==${{ env.PYYAML_VERSION }}"
 
-      - name: Ruff lint (app/)
-        run: ruff check app
+      - name: Ruff lint (app/, tests/)
+        run: ruff check app tests
 
       - name: Compile check (app/)
         run: python -m compileall -q app
@@ -71,13 +72,27 @@ jobs:
           sudo apt-get install -y shellcheck
 
       - name: Run shellcheck (severity >= warning)
-        run: shellcheck -S warning install.sh docker-entrypoint.sh
+        run: shellcheck -S warning install.sh docker-entrypoint.sh tests/shell/run.sh tests/shell/docker tests/shell/curl
+
+  installer-tests:
+    name: "install.sh: integration tests (stub docker, real CLI)"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      # Тесты пишут в /etc и /usr/local/bin, поэтому идут в одноразовом контейнере
+      - name: Run tests/shell/run.sh in a clean container
+        run: docker run --rm -v "$PWD:/repo:ro" -w /repo python:${{ env.PYTHON_VERSION }}-slim bash tests/shell/run.sh
 
   build:
     name: Build and publish Docker image
     # Сборка и публикация образа — только для push/dispatch, не для pull request.
     if: github.event_name != 'pull_request'
-    needs: [ python-lint-and-tests, shellcheck ]
+    needs: [ python-lint-and-tests, shellcheck, installer-tests ]
     runs-on: ubuntu-latest
     permissions:
       contents: read

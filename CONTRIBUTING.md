@@ -11,7 +11,10 @@
 | `app/processors/` | Обработка правил и гео-баз для Happ и Incy |
 | `app/remnawave.py`, `app/squads.py` | Интеграция с Remnawave API и хранение привязок сквадов |
 | `app/cli.py` | CLI внутри контейнера (`python -m app.cli`) |
-| `install.sh` | Установщик и меню `geoserver` на хосте |
+| `app/hostconfig.py` | Мастер установки и разделы настроек `.env` (`setup`, `config ...`) |
+| `app/validators.py` | Единые правила проверки ввода: токен, домен, порт, cron, сеть |
+| `app/envfile.py`, `app/composefile.py` | Правка `.env` и генерация `compose.yaml` |
+| `install.sh` | Тонкая обёртка на хосте: каталог, запуск, обновление, удаление |
 | `docker-entrypoint.sh`, `nginx-internal.conf` | Запуск контейнера и внутренний веб-сервер |
 
 Приложение использует только стандартную библиотеку Python.
@@ -26,7 +29,21 @@ python -m pytest -q                                     # юнит-тесты
 python -m compileall app                                # синтаксис модулей
 bash -n install.sh docker-entrypoint.sh                 # синтаксис shell-скриптов
 shellcheck -S warning install.sh docker-entrypoint.sh   # статический анализ
+
+# Интеграционные тесты install.sh (поддельный docker, настоящий CLI).
+# Пишут в /etc и /usr/local/bin — только в одноразовом контейнере:
+docker run --rm -v "$PWD:/repo:ro" -w /repo python:3.12-slim bash tests/shell/run.sh
 ```
+
+Тестам `compose.yaml` нужен PyYAML (`pip install PyYAML==6.0.3`); самому приложению внешние зависимости не нужны.
+
+### Как install.sh вызывает CLI
+
+`install.sh` не задаёт вопросов и не проверяет ввод сам: он запускает `python -m app.cli setup` или `config <раздел>` в разовом контейнере (`docker compose run --rm`), смонтировав каталог установки в `/host`. Код возврата `100` значит «изменения сохранены»: скрипт выполняет `docker compose up -d` и открывает раздел снова.
+
+Два правила, которые легко нарушить:
+- `docker compose run` и `docker run -i` забирают **весь** stdin из пайпа, даже если команда его не читает. Вызовы, которым ввод не нужен, должны идти с `</dev/null`. Иначе они «съедят» ответы следующего интерактивного шага. Поддельный `tests/shell/docker` ведёт себя так же, поэтому тесты это ловят.
+- Если `install.sh` начинает вызывать новую подкоманду, повысьте `CLI_API` в `app/__init__.py` и `REQUIRED_CLI_API` в `install.sh`. Тогда скрипт попросит обновить образ, а не упадёт на неизвестной команде.
 
 Тесты не ходят в сеть, не запускают Docker и не читают `.env`: переменные окружения в них изолированы.
 
@@ -36,10 +53,11 @@ shellcheck -S warning install.sh docker-entrypoint.sh   # статический
 
 | Задача | Что делает |
 | :--- | :--- |
-| Python: ruff + pytest | `ruff check app`, `python -m compileall app`, `python -m pytest -q` |
-| Shellcheck | `shellcheck -S warning` для `install.sh` и `docker-entrypoint.sh` |
+| Python: ruff + pytest | `ruff check app tests`, `python -m compileall app`, `python -m pytest -q` |
+| Shellcheck | `shellcheck -S warning` для `install.sh`, `docker-entrypoint.sh` и `tests/shell/*` |
+| install.sh: integration tests | `tests/shell/run.sh` в чистом контейнере `python:3.12-slim` |
 | Build and publish | Сборка и публикация образа. Только для push, тегов и ручного запуска, после успешных проверок |
 
 ## Версия установщика
 
-Любое изменение `install.sh` должно повышать `SCRIPT_VERSION`, иначе CI упадёт. Для мелких правок без новой версии добавьте в сообщение коммита `[no-bump]`. При выпуске версии обновите `CHANGELOG.md` и строку версии в `README.md`.
+Скрипт и образ выпускаются одной версией: `SCRIPT_VERSION` в `install.sh` и `__version__` в `app/__init__.py` должны совпадать (это проверяет тест). Любое изменение `install.sh` должно повышать версию, иначе CI упадёт. Для мелких правок без новой версии добавьте в сообщение коммита `[no-bump]`. При выпуске обновите `CHANGELOG.md` и строку версии в `README.md`.
