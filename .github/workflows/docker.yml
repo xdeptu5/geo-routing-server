@@ -95,7 +95,7 @@ jobs:
     needs: [ python-lint-and-tests, shellcheck, installer-tests ]
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write   # git-тег vX.Y.Z для нового релиза
       packages: write
 
     steps:
@@ -143,6 +143,22 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Тег версии образа неизменяем: публикуется только первым коммитом в main
+      # с новой версией из app/__init__.py. Последующие правки той же версии
+      # обновляют лишь :latest и :sha-<коммит>, а :X.Y.Z остаётся тем, что
+      # было выпущено, — на него можно закрепиться или откатиться.
+      - name: Resolve release version
+        id: version
+        run: |
+          version=$(sed -n 's/^__version__ = "\([0-9][0-9.]*\)"/\1/p' app/__init__.py)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [ "$GITHUB_REF" = "refs/heads/main" ] && ! docker manifest inspect "$REGISTRY/$IMAGE_NAME:$version" >/dev/null 2>&1; then
+            echo "new_release=true" >> "$GITHUB_OUTPUT"
+            echo "New release: $version"
+          else
+            echo "new_release=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Extract metadata (tags, labels) for Docker
         id: meta
         uses: docker/metadata-action@v6
@@ -150,6 +166,8 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+            type=raw,value=${{ steps.version.outputs.version }},enable=${{ steps.version.outputs.new_release == 'true' }}
+            type=sha,format=short,prefix=sha-
             type=semver,pattern={{version}}
 
       - name: Build and push Docker image
@@ -164,3 +182,15 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # GITHUB_TOKEN не запускает workflow заново, поэтому тег не вызывает повторную сборку
+      - name: Tag the release in git
+        if: steps.version.outputs.new_release == 'true'
+        run: |
+          tag="v${{ steps.version.outputs.version }}"
+          if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+            echo "Tag $tag already exists"
+            exit 0
+          fi
+          git tag "$tag" "$GITHUB_SHA"
+          git push origin "$tag"

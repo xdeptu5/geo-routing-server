@@ -17,10 +17,11 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="1.6.0"
+SCRIPT_VERSION="1.7.0"
 CONFIG_RECORD="/etc/geo-routing-server.conf"
 DEFAULT_INSTALL_DIR="/opt/geo-routing-server"
-DOCKER_IMAGE="ghcr.io/xdeptu5/geo-routing-server:latest"
+IMAGE_REPO="ghcr.io/xdeptu5/geo-routing-server"
+DOCKER_IMAGE="${IMAGE_REPO}:latest"
 INSTALL_SCRIPT_URL="https://raw.githubusercontent.com/xdeptu5/geo-routing-server/main/install.sh"
 SERVICE="geo-routing-server"
 # Минимальная версия контракта CLI в образе, которая нужна этому скрипту
@@ -476,12 +477,49 @@ cmd_start() {
     apply_changes
 }
 
+# Тег образа в compose.yaml: "latest" или версия вида 1.7.0
+current_image_tag() {
+    local compose_file
+    compose_file="$(get_install_dir)/compose.yaml"
+    sed -n "s#^[[:space:]]*image:[[:space:]]*${IMAGE_REPO}:\([^[:space:]]*\).*#\1#p" "$compose_file" 2>/dev/null | head -1
+}
+
+# Меняет тег нашего образа в compose.yaml. Правка в bash, а не через CLI
+# образа: откат должен работать и тогда, когда текущий образ её не умеет.
+set_image_tag() {
+    local tag="$1" compose_file
+    compose_file="$(get_install_dir)/compose.yaml"
+    if ! grep -qE "^[[:space:]]*image:[[:space:]]*${IMAGE_REPO}:" "$compose_file" 2>/dev/null; then
+        echo -e "${C_RED}[!] В compose.yaml не найден образ ${IMAGE_REPO} — укажите версию вручную (geoserver config).${C_RESET}"
+        return 1
+    fi
+    sed -i "s#^\([[:space:]]*image:[[:space:]]*\)${IMAGE_REPO}:[^[:space:]]*#\1${IMAGE_REPO}:${tag}#" "$compose_file"
+}
+
+# geoserver update-image [ВЕРСИЯ]
+#   без версии  — свежий образ текущего тега (обычно latest);
+#   1.7.0       — закрепиться на версии или откатиться к ней;
+#   latest      — снять закрепление.
 cmd_update() {
+    local target="${1:-}"
     local compose_cmd
     compose_cmd="$(detect_compose)"
     if [ -z "$compose_cmd" ]; then
         echo -e "\n${C_RED}[!] Docker Compose не найден.${C_RESET}\n"
         return 1
+    fi
+    if [ -n "$target" ] && ! [[ "$target" =~ ^([0-9]+\.[0-9]+\.[0-9]+|latest)$ ]]; then
+        echo -e "${C_RED}[!] Версия должна быть вида 1.7.0 или latest, получено: '${target}'.${C_RESET}"
+        return 2
+    fi
+    local compose_file previous_tag backup=""
+    compose_file="$(get_install_dir)/compose.yaml"
+    previous_tag="$(current_image_tag)"
+    if [ -n "$target" ] && [ "$target" != "$previous_tag" ]; then
+        backup="${compose_file}.bak.$(date +%Y%m%d-%H%M%S)"
+        cp -p "$compose_file" "$backup"
+        set_image_tag "$target" || return 1
+        echo -e "${C_GRAY}[i] Образ: ${previous_tag:-?} → ${target}${C_RESET}"
     fi
     # До v1.5.2 привязки сквадов лежали в /app/squads.json — в слое контейнера.
     # `up --force-recreate` уничтожает этот слой, поэтому копируем файл в том,
@@ -491,9 +529,16 @@ cmd_update() {
             '[ -s /app/squads.json ] && [ ! -e /app/www/.squads.json ] && cp -p /app/squads.json /app/www/.squads.json && echo "[i] squads.json сохранён в томе данных"' \
             </dev/null 2>/dev/null || true
     fi
-    echo -e "\n${C_YELLOW}[*] Загрузка свежего Docker-образа...${C_RESET}"
+    echo -e "\n${C_YELLOW}[*] Загрузка образа...${C_RESET}"
     if [ -z "${GRS_SKIP_PULL:-}" ] && ! compose_in pull </dev/null; then
-        echo -e "${C_RED}[!] Не удалось загрузить образ (см. ошибку выше).${C_RESET}\n"
+        echo -e "${C_RED}[!] Не удалось загрузить образ (см. ошибку выше).${C_RESET}"
+        if [ -n "$backup" ]; then
+            # Версии нет в реестре или сеть недоступна — возвращаем прежний тег,
+            # чтобы следующий `up` не пытался запустить несуществующий образ
+            mv -f "$backup" "$compose_file"
+            echo -e "${C_YELLOW}    compose.yaml возвращён к прежней версии (${previous_tag:-?}). Доступные версии: https://github.com/xdeptu5/geo-routing-server/pkgs/container/geo-routing-server${C_RESET}"
+        fi
+        echo ""
         return 1
     fi
     if ! compose_in up -d --force-recreate </dev/null; then
@@ -504,7 +549,9 @@ cmd_update() {
         report_start_failure
         return 1
     fi
-    echo -e "${C_GREEN}[✓] Сервис обновлён до последней версии образа.${C_RESET}\n"
+    local running_version
+    running_version="$(compose_in exec -T "$SERVICE" python3 -m app.cli version </dev/null 2>/dev/null | awk '{print $2}' || true)"
+    echo -e "${C_GREEN}[✓] Образ обновлён: $(current_image_tag)${running_version:+ (версия ${running_version})}.${C_RESET}\n"
 }
 
 cmd_update_script() {
@@ -556,13 +603,20 @@ menu_updates() {
         print_banner
         echo -e "  ${C_WHITE}Раздел:${C_RESET} Центр обновлений"
         hr 50
+        local running_version=""
+        if is_container_running; then
+            running_version="$(compose_in exec -T "$SERVICE" python3 -m app.cli version </dev/null 2>/dev/null | awk '{print $2}' || true)"
+        fi
+        echo -e "  Скрипт:  v${SCRIPT_VERSION}"
+        echo -e "  Образ:   $(current_image_tag)${running_version:+ (работает версия ${running_version})}"
         echo ""
         echo "   1) Обновить всё (скрипт управления, затем Docker-образ)"
         echo "   2) Обновить только Docker-образ"
         echo "   3) Обновить только скрипт управления"
+        echo "   4) Закрепить или откатить версию образа"
         echo "   0) Назад"
         echo ""
-        read -r -p "Выберите действие [0-3]: " choice || return 0
+        read -r -p "Выберите действие [0-4]: " choice || return 0
         case "$choice" in
             1)
                 # Сначала скрипт: новый скрипт знает, как сохранить данные
@@ -573,6 +627,11 @@ menu_updates() {
                 ;;
             2) cmd_update || true; pause ;;
             3) cmd_update_script || true; pause ;;
+            4)
+                local version=""
+                read -r -p "Версия (например 1.7.0; latest — снять закрепление) [Enter = отмена]: " version || version=""
+                if [ -n "$version" ]; then cmd_update "$version" || true; pause; fi
+                ;;
             0|q|exit) return 0 ;;
         esac
     done
@@ -667,7 +726,7 @@ cmd_help() {
     echo "  restart                Пересоздать контейнер с текущими настройками"
     echo "  start / stop           Запуск / остановка"
     echo "  update                 Центр обновлений"
-    echo "  update-image           Обновить Docker-образ"
+    echo "  update-image [ВЕРСИЯ]  Обновить образ; ВЕРСИЯ (1.7.0) — закрепить или откатить, latest — снять"
     echo "  update-script          Обновить этот скрипт"
     echo "  update-all             Обновить скрипт, затем образ"
     echo "  cli [...]              Прямой вызов python -m app.cli"
@@ -797,7 +856,7 @@ main() {
         stop)                        cmd_stop ;;
         start)                       cmd_start ;;
         update)                      menu_updates ;;
-        update-image)                cmd_update ;;
+        update-image)                cmd_update "$@" ;;
         update-script|self-update)   cmd_update_script ;;
         update-all)                  cmd_update_script && bash "$(get_install_dir)/install.sh" update-image ;;
         proxy)                       cli_stack proxy </dev/null ;;

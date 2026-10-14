@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -59,11 +60,51 @@ def find_status_files(token: str) -> tuple[Optional[Path], Optional[Path]]:
     return status_file, summary_file
 
 
+def sync_warnings(sync_status: Dict[str, Any], schedule: str, now: Optional[datetime] = None) -> list[str]:
+    """Предупреждения о состоянии синхронизации для `status`.
+
+    Контейнер остаётся healthy, даже если синхронизация днями падает, поэтому
+    давность последнего успешного прогона проверяется здесь.
+    """
+    from app.validators import schedule_interval_hours
+
+    if not sync_status:
+        return []
+    now = now or datetime.now(timezone.utc)
+    state = sync_status.get("state", "")
+
+    def parse(value: Any) -> Optional[datetime]:
+        try:
+            return datetime.fromisoformat(str(value)) if value else None
+        except ValueError:
+            return None
+
+    def ago(moment: datetime) -> str:
+        hours = int((now - moment).total_seconds() // 3600)
+        return f"{hours // 24} дн. назад" if hours >= 48 else f"{max(hours, 0)} ч. назад"
+
+    warnings = []
+    recorded = parse(sync_status.get("recorded_at"))
+    if state == "running" and recorded and now - recorded > timedelta(hours=2):
+        warnings.append(f"Синхронизация, начатая {ago(recorded)}, не завершилась — вероятно, прервалась.")
+    if state in ("failed", "partial"):
+        details = "; ".join(sync_status.get("errors") or [])[:300]
+        label = "с ошибкой" if state == "failed" else "частично"
+        warnings.append(f"Последняя синхронизация завершилась {label}" + (f": {details}" if details else "."))
+
+    last_success = parse(sync_status.get("last_success_at")) or (recorded if state == "success" else None)
+    limit = timedelta(hours=2 * schedule_interval_hours(schedule) + 1)
+    if last_success is None and state not in ("success", "running", ""):
+        warnings.append("Ни одной успешной синхронизации ещё не было.")
+    elif last_success and now - last_success > limit:
+        warnings.append(f"Последняя успешная синхронизация была {ago(last_success)} — клиенты получают устаревшие файлы.")
+    return warnings
+
+
 def get_status_info(manager: Optional[SquadManager] = None) -> Dict[str, Any]:
     """Формирует полную сводку о текущем состоянии сервера и ссылках."""
     token = get_safe_token()
     base_url = Config.get_base_url(token)
-    clients_set = set(Config.ENABLED_CLIENTS)
     status_file, summary_file = find_status_files(token)
 
     sync_status = {}
@@ -93,7 +134,7 @@ def get_status_info(manager: Optional[SquadManager] = None) -> Dict[str, Any]:
     links: Dict[str, Any] = {"happ": {}, "incy": {}}
 
     # HAPP ссылки
-    if any(c in clients_set for c in ("HAPP", "HAPP_DEEPLINK", "HAPP_LOCAL", "HAPP_GEO")):
+    if Config.client_enabled("HAPP"):
         if Config.should_serve_deeplink("HAPP"):
             links["happ"]["deeplinks"] = [
                 {"rule": r, "url": f"{base_url}/HAPP/{r}.DEEPLINK"} for r in happ_rules
@@ -117,7 +158,7 @@ def get_status_info(manager: Optional[SquadManager] = None) -> Dict[str, Any]:
             }
 
     # INCY ссылки
-    if any(c in clients_set for c in ("INCY", "INCY_GEO")):
+    if Config.client_enabled("INCY"):
         if Config.should_serve_json("INCY"):
             links["incy"]["autorouting_headers"] = [
                 {
@@ -159,7 +200,7 @@ def get_status_info(manager: Optional[SquadManager] = None) -> Dict[str, Any]:
                 r.removesuffix(".JSON") for r in Config.get_display_rules(client="INCY", preset=sec_preset)
             ]
             sec_entry: Dict[str, Any] = {"happ": {}, "incy": {}}
-            if any(c in clients_set for c in ("HAPP", "HAPP_DEEPLINK", "HAPP_LOCAL", "HAPP_GEO")):
+            if Config.client_enabled("HAPP"):
                 if Config.should_serve_deeplink("HAPP"):
                     sec_entry["happ"]["deeplinks"] = [
                         {"rule": r, "url": f"{sec_base_url}/HAPP/{r}.DEEPLINK"} for r in sec_happ_rules
@@ -173,7 +214,7 @@ def get_status_info(manager: Optional[SquadManager] = None) -> Dict[str, Any]:
                     "geosite": f"{sec_base_url}/HAPP/geosite.dat" if Config.SERVE_GEOSITE else None,
                     "external": False,
                 }
-            if any(c in clients_set for c in ("INCY", "INCY_GEO")):
+            if Config.client_enabled("INCY"):
                 if Config.should_serve_json("INCY"):
                     sec_entry["incy"]["autorouting_headers"] = [
                         {
@@ -192,6 +233,9 @@ def get_status_info(manager: Optional[SquadManager] = None) -> Dict[str, Any]:
     return {
         "status": sync_status.get("state", "not_run"),
         "last_sync": sync_status.get("recorded_at"),
+        "last_success": sync_status.get("last_success_at")
+        or (sync_status.get("recorded_at") if sync_status.get("state") == "success" else None),
+        "warnings": sync_warnings(sync_status, Config.SCHEDULE),
         "failed_processors": sync_status.get("failed_processors", 0),
         "remnawave_ok": sync_status.get("remnawave_ok", True),
         "domain": Config.DOMAIN,
@@ -221,6 +265,19 @@ def cmd_status(json_mode: bool = False, manager: Optional[SquadManager] = None) 
         info = get_status_info(manager)
         print(json.dumps(info, indent=2, ensure_ascii=False))
         return 0
+
+    if _status_file:
+        try:
+            current = json.loads(_status_file.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            current = {}
+        warnings = sync_warnings(current, Config.SCHEDULE)
+        if warnings:
+            c = Colors(supports_color())
+            for warning in warnings:
+                print(f"{c.YELLOW}[!] {warning}{c.RESET}")
+            print(f"{c.GRAY}    Подробности: geoserver logs{c.RESET}")
+            print()
 
     # 1. Если есть файл .sync-summary.txt, выводим его
     if summary_file and summary_file.is_file():

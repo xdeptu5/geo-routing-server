@@ -265,17 +265,15 @@ class RemnawaveSync:
         - Явные префиксы пресетов: GEOGAGA/HAPP.JSON или GEOGAGA:HAPP.JSON -> ищет в happ_dir.parent / GEOGAGA / HAPP
         - Автопоиск по вторичным пресетам, если в основном happ_dir файл не найден.
         """
-        clean_rule = rule_name.strip()
-        if "/" in clean_rule or ":" in clean_rule:
-            sep = "/" if "/" in clean_rule else ":"
-            pfx, r_part = clean_rule.split(sep, 1)
-            pfx = pfx.strip().upper()
-            r_part = r_part.strip()
+        from app.squads import split_squad_rule
+
+        pfx, clean_rule = split_squad_rule(rule_name)
+        if pfx:
             if pfx == Config.PRIMARY_PRESET.upper():
                 target_dir = happ_dir
             else:
                 target_dir = happ_dir.parent / pfx / "HAPP"
-            return cls._read_deeplink_from_dir(target_dir, r_part)
+            return cls._read_deeplink_from_dir(target_dir, clean_rule)
 
         # 1. Сначала ищем в основном каталоге HAPP
         content = cls._read_deeplink_from_dir(happ_dir, clean_rule)

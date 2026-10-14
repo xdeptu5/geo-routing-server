@@ -20,6 +20,19 @@ export ROUTING_TOKEN="$ROUTING_TOKEN_EFFECTIVE"
 printf 'location ~ ^/(?!health(?:/|$)|HAPP(?:/|$)|INCY(?:/|$)|GEOGAGA(?:/|$)|VAHELLAME(?:/|$)|HYDRAPONIQUE(?:/|$)|%s(?:/|$))[^/]+(?:/|$) { return 404; }\n' \
     "$ROUTING_TOKEN_EFFECTIVE" > /etc/nginx/token-access.conf
 
+# Пути без токена на публичном порту 80 закрыты (доступны на внутреннем 81).
+# Потребители из Docker-сети, которые до v1.7.0 ходили на них по
+# порту 80, могут временно вернуть прежнее поведение этим флагом.
+case "$(printf '%s' "${INTERNAL_ACCESS_ON_PORT_80:-false}" | tr '[:upper:]' '[:lower:]')" in
+    true|1|yes)
+        echo "[geo-routing-server] WARNING: INTERNAL_ACCESS_ON_PORT_80=true — пути без токена открыты на порту 80 (переходный режим)" >&2
+        echo 'include /etc/nginx/snippets/grs-internal-paths.conf;' > /etc/nginx/grs-public-internal-paths.conf
+        ;;
+    *)
+        echo 'return 404;' > /etc/nginx/grs-public-internal-paths.conf
+        ;;
+esac
+
 cleanup() {
     status="${1:-0}"
     echo "[geo-routing-server] Shutting down cleanly..."

@@ -38,7 +38,7 @@ class Config:
     SCHEDULE = os.getenv("SCHEDULE", "0 10 * * *").strip()
     SYNC_ON_START = os.getenv("SYNC_ON_START", "true").lower() in ("true", "1", "yes")
     
-    # Список активных модулей: HAPP, HAPP_DEEPLINK, HAPP_GEO, INCY, INCY_GEO
+    # Список активных модулей ENABLED_CLIENTS; что включает каждый — в CLIENT_MODULES
     ENABLED_CLIENTS: List[str] = [
         c.strip().upper() 
         for c in os.getenv("ENABLED_CLIENTS", "HAPP,INCY").split(",") 
@@ -59,6 +59,31 @@ class Config:
 
     # Форматы правил: CLIENT_OPTIMIZED (Happ -> .DEEPLINK, Incy -> .JSON), ALL, JSON, DEEPLINK
     SERVE_FORMATS = os.getenv("SERVE_FORMATS", "CLIENT_OPTIMIZED").strip().upper()
+
+    # Модуль ENABLED_CLIENTS -> (клиент, возможность). "geo" — раздача гео-баз,
+    # "rules" — генерация правил (JSON/диплинков). Единственное место, где
+    # описано, что означает каждое значение; остальной код спрашивает
+    # client_enabled(), а не сравнивает строки сам.
+    CLIENT_MODULES = {
+        "HAPP": {("HAPP", "geo"), ("HAPP", "rules")},
+        "HAPP_GEO": {("HAPP", "geo")},
+        "HAPP_DEEPLINK": {("HAPP", "rules")},
+        "HAPP_LOCAL": {("HAPP", "rules")},  # устаревший синоним HAPP_DEEPLINK
+        "INCY": {("INCY", "geo"), ("INCY", "rules")},
+        "INCY_GEO": {("INCY", "geo")},
+    }
+    # Модули, которым не нужна публичная раздача файлов (и, значит, токен)
+    RULES_ONLY_MODULES = {"HAPP_DEEPLINK", "HAPP_LOCAL"}
+
+    @classmethod
+    def client_enabled(cls, client: str, feature: Optional[str] = None) -> bool:
+        """Включён ли клиент (любая возможность) или конкретная возможность: 'geo' / 'rules'."""
+        client = client.upper()
+        for module in cls.ENABLED_CLIENTS:
+            for mod_client, mod_feature in cls.CLIENT_MODULES.get(module, ()):
+                if mod_client == client and (feature is None or mod_feature == feature):
+                    return True
+        return False
 
     @classmethod
     def should_serve_json(cls, client: str) -> bool:
@@ -256,7 +281,7 @@ class Config:
                 sys.exit(1)
         
         # Если включен только локальный генератор диплинков HAPP, токен может быть пустым или дефолтным
-        is_only_local = bool(cls.ENABLED_CLIENTS) and set(cls.ENABLED_CLIENTS).issubset({"HAPP_DEEPLINK", "HAPP_LOCAL"})
+        is_only_local = bool(cls.ENABLED_CLIENTS) and set(cls.ENABLED_CLIENTS).issubset(cls.RULES_ONLY_MODULES)
         
         if not token or token == TOKEN_PLACEHOLDER:
             if is_only_local:

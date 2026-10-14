@@ -126,13 +126,13 @@ class TelegramNotifier:
         from app.remnawave import RemnawaveSync
         if RemnawaveSync.is_configured():
             info_lines.append("⚡ <b>Remnawave API:</b> сквады маршрутизации синхронизированы")
-        elif "HAPP" in Config.ENABLED_CLIENTS:
+        elif Config.client_enabled("HAPP", "rules"):
             happ_links = [f"• <b>{r}:</b> <code>{base_url}/HAPP/{r}.DEEPLINK</code>" for r in happ_rules]
             happ_block = "\n".join(happ_links)
             info_lines.append(f"📱 <b>Happ (диплинки правил):</b>\n{happ_block}")
 
         # 2. Ссылки на заголовок autorouting для Incy
-        if "INCY" in Config.ENABLED_CLIENTS:
+        if Config.client_enabled("INCY", "rules"):
             incy_links = [f"• <b>{r}:</b> <code>incy://autorouting/onadd/{base_url}/INCY/{r}.JSON</code>" for r in incy_rules]
             incy_block = "\n".join(incy_links)
             info_lines.append(f"🔗 <b>Autorouting Header (Incy):</b>\n{incy_block}")

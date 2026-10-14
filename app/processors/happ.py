@@ -1,178 +1,34 @@
-import hashlib
-import json
-import logging
 import os
 from typing import Set
-from app.processors.base import BaseProcessor, deeplink_filename_for
-from app.processors.geo import GeoManager
-from app.config import Config
-from app.publisher import Publisher
-from app.remnawave import RemnawaveSync
 
-logger = logging.getLogger("geo-routing-server")
+from app.config import Config
+from app.processors.base import BaseProcessor
+from app.remnawave import RemnawaveSync
+from app.squads import split_squad_rule
+
 
 class HappProcessor(BaseProcessor):
-    """Модульный обработчик файлов HAPP: гео-базы, модификация JSON и генерация DEEPLINK."""
-    
+    """Happ: гео-базы, правила .JSON и диплинки .DEEPLINK (в том числе для сквадов Remnawave)."""
+
     CLIENT_NAME = "HAPP"
-    
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.geo_manager = GeoManager(self.downloader)
 
-    def process(self) -> bool:
-        client = self.CLIENT_NAME
-        target_dir = self.target_base_dir / client
-        success = True
-        
-        # Определяем, какие подмодули активны для HAPP
-        clients_set = set(Config.ENABLED_CLIENTS)
-        # Модуль geo-баз включен для клиента (независимо от места публикации баз)
-        geo_enabled = "HAPP" in clients_set or "HAPP_GEO" in clients_set
-        # Локальная раздача geo-баз нужна только если внешнее хранилище баз не задано
-        needs_geo = geo_enabled and not bool(Config.PUBLIC_GEO_BASE_URL)
-        needs_deeplink = "HAPP" in clients_set or "HAPP_DEEPLINK" in clients_set or "HAPP_LOCAL" in clients_set
-        
-        default_json_data = None
-        url = Config.get_default_rule_url(client, preset=self.preset_name)
-        preset_tag = self.preset_name.lower()
-        default_key = f"{client}_{client}_{preset_tag}" if preset_tag == "geogaga" else f"{client}_DEFAULT_orig_{preset_tag}"
-        try:
-            raw_bytes = self.downloader.fetch(url, default_key, kind="rule")
-            default_json_data = self.parse_rule_payload(raw_bytes, client)
-        except Exception as e:
-            logger.warning(f"Could not load default rule for {client} ({self.preset_name}) from {url}: {e}")
+    def _extra_rule_files(self) -> Set[str]:
+        """Правила из привязок сквадов и глобального правила Remnawave.
 
-        # 1. Синхронизируем geo-базы (или удаляем локальные, если они не требуются)
-        serve_geo = geo_enabled and not bool(Config.PUBLIC_GEO_BASE_URL) and (Config.SERVE_GEOIP or Config.SERVE_GEOSITE)
-        if not serve_geo or Config.PUBLIC_GEO_BASE_URL:
-            # Базы публикуются во внешнем хранилище либо локальная раздача выключена:
-            # убираем локальные geoip.dat/geosite.dat
-            self._remove_local_geo_databases(target_dir)
-        else:
-            if not self.geo_manager.sync_client_geo(
-                client,
-                target_dir,
-                default_json_data,
-                preset=self.preset_name,
-                key_prefix=self.preset_prefix,
-            ):
-                success = False
+        GITHUB_RAW_URL — старое имя REMNAWAVE_GLOBAL_RULE (его же учитывает
+        RemnawaveSync.sync()). Правило с префиксом другого пресета этому
+        процессору не нужно.
+        """
+        my_prefix = self.preset_prefix or Config.PRIMARY_PRESET.upper()
+        wanted = [sq.get("rule", "") for sq in RemnawaveSync.load_squad_configs()]
+        wanted.append(os.getenv("REMNAWAVE_GLOBAL_RULE", "").strip() or os.getenv("GITHUB_RAW_URL", "").strip())
+        rules = set()
+        for raw_rule in wanted:
+            prefix, rule_name = split_squad_rule(raw_rule)
+            if rule_name and (prefix is None or prefix == my_prefix):
+                rules.add(rule_name)
+        return rules
 
-        # 2. Генерируем JSON и DEEPLINK для Remnawave / клиентов (только если включен deeplink модуль)
-        if needs_deeplink:
-            logger.info(f"Processing HAPP configuration and DEEPLINK files ({self.preset_name})...")
-            config_files = self._discover_config_files()
-            config_files = Config.get_active_rules(config_files, client="HAPP", preset=self.preset_name)
-            
-            # Если настроены конкретные сквады Remnawave, генерируем ТОЛЬКО запрошенные правила
-            squads = RemnawaveSync.load_squad_configs()
-            configured_rules = set()
-            for sq in squads:
-                r = sq.get("rule", "").strip().upper()
-                if r:
-                    if "/" in r or ":" in r:
-                        sep = "/" if "/" in r else ":"
-                        pfx, r_name = r.split(sep, 1)
-                        if pfx.strip().upper() == (self.preset_prefix or Config.PRIMARY_PRESET.upper()):
-                            configured_rules.add(r_name if r_name.endswith(".JSON") else f"{r_name}.JSON")
-                    else:
-                        r_name = r
-                        configured_rules.add(r_name if r_name.endswith(".JSON") else f"{r_name}.JSON")
-            # GITHUB_RAW_URL — старое имя той же настройки (ещё учитывается в
-            # RemnawaveSync.sync()); без фолбэка здесь правило, заданное
-            # только через него, не попадало бы в configured_rules и могло
-            # не сгенерироваться. normalize_squad_rule() также умеет извлечь
-            # имя правила из полного URL (как исторически записывали
-            # GITHUB_RAW_URL), а не только из короткого "ИМЯ" / "ПРЕФИКС/ИМЯ".
-            global_rule_raw = os.getenv("REMNAWAVE_GLOBAL_RULE", "").strip() or os.getenv("GITHUB_RAW_URL", "").strip()
-            if global_rule_raw:
-                from app.squads import normalize_squad_rule
-
-                global_rule = normalize_squad_rule(global_rule_raw)
-                if "/" in global_rule:
-                    pfx, g_name = global_rule.split("/", 1)
-                    if pfx.strip().upper() == (self.preset_prefix or Config.PRIMARY_PRESET.upper()):
-                        configured_rules.add(g_name)
-                elif global_rule:
-                    configured_rules.add(global_rule)
-
-            if configured_rules and self.preset_name not in ("geogaga", "vahellame"):
-                discovered_by_rule = {file_name.upper(): file_name for file_name in config_files}
-                for rule_name in configured_rules:
-                    discovered_by_rule.setdefault(rule_name, rule_name)
-                config_files = sorted(discovered_by_rule.values(), key=str.upper)
-            
-            # Определяем ссылки на geo-базы, которые нужно зашить в правила
-            base_public_url = Config.get_base_url(self.token, preset=self.preset_name)
-            ext_geo_url = Config.get_external_geo_url(client, preset=self.preset_name)
-            if ext_geo_url:
-                # Внешний сервер уже раздаёт базы. Его URL должны попадать в
-                # диплинк независимо от флагов локальной раздачи SERVE_GEO*.
-                geoip_url = f"{ext_geo_url}/geoip.dat"
-                geosite_url = f"{ext_geo_url}/geosite.dat"
-            elif needs_geo:
-                # Базы раздаются с этого же локального сервера
-                geoip_url = f"{base_public_url}/{client}/geoip.dat" if Config.SERVE_GEOIP else ""
-                geosite_url = f"{base_public_url}/{client}/geosite.dat" if Config.SERVE_GEOSITE else ""
-            else:
-                # Базы не раздаются локально — берем исходные upstream URL
-                geoip_url = (default_json_data or {}).get("Geoipurl") or Config.get_preset_geoip_url(self.preset_name) or ""
-                geosite_url = (default_json_data or {}).get("Geositeurl") or Config.get_preset_geosite_url(self.preset_name) or ""
-            
-            published_files: Set[str] = set()
-            
-            for file_name in config_files:
-                if not self.is_safe_config_filename(file_name):
-                    logger.error(f"Skipping unsafe filename: {file_name}")
-                    continue
-                    
-                logger.info(f"  Processing {file_name} for HAPP ({self.preset_name})...")
-                file_key = file_name.rsplit(".", 1)[0].upper()
-                url = Config.get_rule_url(client, file_name, preset=self.preset_name)
-                
-                try:
-                    raw_bytes = self.downloader.fetch(url, f"{client}_{file_key}_{self.preset_name}", kind="rule")
-                    data = self.parse_rule_payload(raw_bytes, client)
-                    if not isinstance(data, dict):
-                        logger.error(f"Invalid JSON format for {file_name} (expected object): {type(data)}")
-                        success = False
-                        continue
-                    
-                    if geoip_url:
-                        data["Geoipurl"] = geoip_url
-                    if geosite_url:
-                        data["Geositeurl"] = geosite_url
-                    
-                    if not data.get("LastUpdated"):
-                        content_hash = int(hashlib.md5(raw_bytes).hexdigest()[:8], 16)
-                        data["LastUpdated"] = str(content_hash)
-                        
-                    # Форматированный JSON для отдачи по HTTP (если включена отдача JSON)
-                    if Config.should_serve_json(client):
-                        json_content = json.dumps(data, indent=2, ensure_ascii=False)
-                        if not Publisher.publish_file(target_dir, file_name, json_content, key_prefix=self.preset_prefix):
-                            success = False
-                            continue
-                        published_files.add(file_name)
-                        
-                    # Генерируем компактный DEEPLINK (happ://routing/onadd/<base64>) без пробелов
-                    deeplink_content = self.build_deeplink(client, data)
-                    # Единый контракт именования: <БАЗА В ВЕРХНЕМ РЕГИСТРЕ>.DEEPLINK
-                    deeplink_filename = deeplink_filename_for(file_name)
-                    
-                    if Config.should_serve_deeplink(client) or RemnawaveSync.is_configured():
-                        if Publisher.publish_file(target_dir, deeplink_filename, deeplink_content, key_prefix=self.preset_prefix):
-                            published_files.add(deeplink_filename)
-                        else:
-                            success = False
-                        
-                except Exception as e:
-                    logger.error(f"Failed to process {file_name} for HAPP ({self.preset_name}): {e}")
-                    success = False
-                    
-            # Очистка выполняется только при полном успехе прогона: при частичном
-            # провале загрузки/публикации удалять устаревшие файлы небезопасно
-            self._cleanup_obsolete_files(target_dir, published_files, published_ok=success)
-                
-        return success
+    def _should_publish_deeplink(self) -> bool:
+        # Remnawave читает диплинки из файлов, даже если клиентам раздаётся только JSON
+        return Config.should_serve_deeplink(self.CLIENT_NAME) or RemnawaveSync.is_configured()

@@ -101,6 +101,19 @@ echo '[]' > "$STUB_STATE/app/www/.squads.json"
 GRS_SKIP_PULL=1 bash "$INSTALL" update-image >/dev/null 2>&1
 check "существующий .squads.json не перезаписан" [ "$(cat "$STUB_STATE/app/www/.squads.json")" = "[]" ]
 
+echo "== Закрепление и откат версии образа"
+img() { sed -n 's#^ *image: *##p' "$HOME/geo/compose.yaml"; }
+bash "$INSTALL" update-image 1.7.0 >/dev/null 2>&1; rc=$?
+check "закрепление на 1.7.0" [ "$rc" -eq 0 ]
+check "compose.yaml указывает на :1.7.0" [ "$(img)" = "ghcr.io/xdeptu5/geo-routing-server:1.7.0" ]
+bash "$INSTALL" update-image 1.0 >/dev/null 2>&1; rc=$?
+check "неверная версия отклонена (rc=2)" [ "$rc" -eq 2 ]
+STUB_PULL_FAIL=1 bash "$INSTALL" update-image 9.9.9 >/dev/null 2>&1; rc=$?
+check "несуществующая версия — ошибка" [ "$rc" -eq 1 ]
+check "compose.yaml возвращён к :1.7.0" [ "$(img)" = "ghcr.io/xdeptu5/geo-routing-server:1.7.0" ]
+bash "$INSTALL" update-image latest >/dev/null 2>&1
+check "снятие закрепления (latest)" [ "$(img)" = "ghcr.io/xdeptu5/geo-routing-server:latest" ]
+
 echo "== Повторный запуск мастера сохраняет ответы"
 { echo; blank; } | bash "$INSTALL" install >/dev/null 2>&1
 check "токен не изменился" [ "$(env_get ROUTING_TOKEN)" = "$TOKEN" ]

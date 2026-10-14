@@ -85,6 +85,22 @@ def schedule_every_hours(value: str) -> Optional[str]:
     return None
 
 
+def schedule_interval_hours(cron: str) -> int:
+    """Примерный интервал между запусками по cron, в часах (по умолчанию сутки)."""
+    fields = (cron or DEFAULT_SCHEDULE).split()
+    if len(fields) != 5:
+        return 24
+    hour = fields[1]
+    if hour == "*":
+        return 1
+    step = re.fullmatch(r"\*/(\d+)", hour)
+    if step:
+        return max(1, int(step.group(1)))
+    if "," in hour:
+        return max(1, 24 // len(hour.split(",")))
+    return 24
+
+
 def human_schedule(cron: str) -> str:
     cron = (cron or DEFAULT_SCHEDULE).strip()
     known = {

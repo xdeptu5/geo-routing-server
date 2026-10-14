@@ -118,11 +118,21 @@ def write_sync_status(
     if generated_files is None:
         generated_files = sorted(list(Publisher.published_registry.keys()))
 
+    # Время последнего успешного прогона переживает неудачные: по нему
+    # `status` понимает, что синхронизация давно не проходит.
+    last_success = now_iso if state == "success" else None
+    if last_success is None and status_file.is_file():
+        try:
+            last_success = json.loads(status_file.read_text(encoding="utf-8")).get("last_success_at")
+        except (OSError, ValueError, AttributeError):
+            last_success = None
+
     payload = {
         "timestamp": now_iso,
         "status": state,
         "state": state,
         "recorded_at": now_iso,
+        "last_success_at": last_success,
         "generated_files": generated_files,
         "errors": errors,
         "rules": rules,
@@ -152,7 +162,6 @@ def _build_preset_sections(token: str, storage_dir: Optional[Path], preset: Opti
     p_title = p_info.get("name", p_name)
 
     base_url = Config.get_base_url(token, preset=None if is_primary else p_name)
-    clients_set = set(Config.ENABLED_CLIENTS)
     target_base = storage_dir or Config.STORAGE_DIR
     p_dir_prefix = "" if is_primary else p_name.upper()
     
@@ -186,8 +195,8 @@ def _build_preset_sections(token: str, storage_dir: Optional[Path], preset: Opti
     sections = []
 
     # HAPP блок
-    happ_geo = "HAPP" in clients_set or "HAPP_GEO" in clients_set
-    happ_deeplink = "HAPP" in clients_set or "HAPP_DEEPLINK" in clients_set or "HAPP_LOCAL" in clients_set
+    happ_geo = Config.client_enabled("HAPP", "geo")
+    happ_deeplink = Config.client_enabled("HAPP", "rules")
 
     if happ_geo or happ_deeplink:
         if len(Config.ACTIVE_PRESETS) > 1 and is_primary:
@@ -262,7 +271,7 @@ def _build_preset_sections(token: str, storage_dir: Optional[Path], preset: Opti
         sections.append("\n".join(happ_lines))
 
     # INCY блок
-    if "INCY" in clients_set or "INCY_GEO" in clients_set:
+    if Config.client_enabled("INCY"):
         if len(Config.ACTIVE_PRESETS) > 1 and is_primary:
             header_title = f"[INCY ({p_title} — Основной пресет)]"
         else:
@@ -285,7 +294,7 @@ def _build_preset_sections(token: str, storage_dir: Optional[Path], preset: Opti
                 geo_lines.append(f"      GeoSite:   {base_url}/INCY/geosite.dat")
             incy_lines.append("\n".join(geo_lines))
 
-        if "INCY" in clients_set and Config.should_serve_json("INCY"):
+        if Config.client_enabled("INCY", "rules") and Config.should_serve_json("INCY"):
             rule_examples = "\n".join([f"      • {r}:   incy://autorouting/onadd/{base_url}/INCY/{r}.JSON" for r in incy_rules])
             incy_lines.append(f"""  - Заголовок подписки (Remnawave / Marzban Autorouting):
       Header Name:  autorouting
@@ -294,7 +303,7 @@ def _build_preset_sections(token: str, storage_dir: Optional[Path], preset: Opti
       Примеры:
 {rule_examples}""")
 
-        if "INCY" in clients_set and Config.should_serve_deeplink("INCY"):
+        if Config.client_enabled("INCY", "rules") and Config.should_serve_deeplink("INCY"):
             dl_examples = "\n".join([f"      • {r}:   {base_url}/INCY/{r}.DEEPLINK" for r in incy_rules])
             incy_lines.append(f"""  - Deep-link файлы для Incy:
 {dl_examples}""")
@@ -377,13 +386,12 @@ def main():
     downloader = Downloader(Config.CACHE_DIR)
     
     # 5. Инициализируем активные процессоры для всех активных пресетов
-    clients_set = set(Config.ENABLED_CLIENTS)
     active_processors = []
     failures = 0
 
     for preset in Config.ACTIVE_PRESETS:
         p_name = None if preset.lower() == Config.PRIMARY_PRESET.lower() else preset
-        if any(k in clients_set for k in ("HAPP", "HAPP_DEEPLINK", "HAPP_LOCAL", "HAPP_GEO")):
+        if Config.client_enabled("HAPP"):
             try:
                 active_processors.append(HappProcessor(downloader, Config.STORAGE_DIR, token, Config.DOMAIN, preset_name=p_name))
             except Exception as e:
@@ -394,7 +402,7 @@ def main():
                 logger.error(f"Failed to initialize HappProcessor ({preset}): {e}")
                 failures += 1
 
-        if any(k in clients_set for k in ("INCY", "INCY_GEO")):
+        if Config.client_enabled("INCY"):
             try:
                 active_processors.append(IncyProcessor(downloader, Config.STORAGE_DIR, token, Config.DOMAIN, preset_name=p_name))
             except Exception as e:

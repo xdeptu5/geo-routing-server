@@ -6,7 +6,7 @@ import os
 import re
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from app.config import Config
 
@@ -159,6 +159,21 @@ def normalize_squad_rule(rule: str) -> str:
         elif not r_name.endswith(".JSON"):
             r_name = f"{r_name}.JSON"
         return r_name
+
+
+def split_squad_rule(rule: str) -> Tuple[Optional[str], str]:
+    """Разбирает правило сквада на префикс пресета и имя файла правила.
+
+    'GEOGAGA/HAPP.JSON' -> ('GEOGAGA', 'HAPP.JSON'), 'geogaga:happ' -> ('GEOGAGA', 'HAPP.JSON'),
+    'whitelist' -> (None, 'WHITELIST.JSON'), '' -> (None, '').
+    Единая точка разбора: раньше та же логика была написана в трёх местах
+    и расходилась (например, одно из них не понимало правило в виде URL).
+    """
+    normalized = normalize_squad_rule(rule)
+    if "/" in normalized:
+        prefix, name = normalized.split("/", 1)
+        return (prefix or None), name
+    return None, normalized
 
 
 class SquadManager:

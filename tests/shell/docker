@@ -77,7 +77,8 @@ case "${1:-}" in
                     exit $?
                 fi
                 exit 0 ;;
-            pull|logs) exit 0 ;;
+            pull) [ -n "${STUB_PULL_FAIL:-}" ] && { echo "manifest unknown" >&2; exit 1; }; exit 0 ;;
+            logs) exit 0 ;;
         esac
         exit 0 ;;
 esac

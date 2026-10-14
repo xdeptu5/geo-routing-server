@@ -1,11 +1,12 @@
 import base64
+import hashlib
 import json
 import logging
 import re
 import urllib.request
-from abc import ABC, abstractmethod
+from abc import ABC
 from pathlib import Path
-from typing import List, Optional, Set
+from typing import List, Optional, Set, Tuple
 from app.downloader import Downloader
 
 logger = logging.getLogger("geo-routing-server")
@@ -50,6 +51,9 @@ class BaseProcessor(ABC):
         else:
             self.preset_prefix = ""
             self.target_base_dir = self.client_dir
+
+        from app.processors.geo import GeoManager
+        self.geo_manager = GeoManager(downloader)
 
     @staticmethod
     def is_safe_config_filename(name: str) -> bool:
@@ -104,10 +108,152 @@ class BaseProcessor(ABC):
 
         raise ValueError(f"Could not parse {client} rule payload as JSON or deeplink")
         
-    @abstractmethod
+    # ------------------------------------------------------------------
+    # Конвейер обработки клиента. Общий для Happ и Incy; различия — в двух
+    # точках расширения ниже, которые переопределяет подкласс.
+    # ------------------------------------------------------------------
+
+    def _extra_rule_files(self) -> Set[str]:
+        """Правила, которые нужно сгенерировать сверх списка пресета."""
+        return set()
+
+    def _should_publish_deeplink(self) -> bool:
+        from app.config import Config
+
+        return Config.should_serve_deeplink(self.CLIENT_NAME)
+
     def process(self) -> bool:
-        """Основной метод обработки. Возвращает True в случае успеха."""
-        pass
+        """Гео-базы и правила клиента. Возвращает True, если всё опубликовано."""
+        from app.config import Config
+
+        client = self.CLIENT_NAME
+        target_dir = self.target_base_dir / client
+        rules_enabled = Config.client_enabled(client, "rules")
+        # Базы раздаются с этого сервера, только если модуль баз включён и
+        # они не вынесены на внешний узел (PUBLIC_GEO_BASE_URL)
+        geo_local = Config.client_enabled(client, "geo") and not Config.PUBLIC_GEO_BASE_URL
+        success = True
+
+        default_rule = self._load_default_rule() if (geo_local or rules_enabled) else None
+
+        if geo_local and (Config.SERVE_GEOIP or Config.SERVE_GEOSITE):
+            if not self.geo_manager.sync_client_geo(
+                client, target_dir, default_rule,
+                preset=self.preset_name, key_prefix=self.preset_prefix,
+            ):
+                success = False
+        else:
+            self._remove_local_geo_databases(target_dir)
+
+        if rules_enabled:
+            published, rules_ok = self._publish_rules(target_dir, default_rule, geo_local)
+            success = success and rules_ok
+            # Устаревшие файлы удаляются только при полном успехе прогона:
+            # при частичном сбое можно потерять ещё актуальные правила
+            self._cleanup_obsolete_files(target_dir, published, published_ok=success)
+
+        return success
+
+    def _load_default_rule(self) -> Optional[dict]:
+        """Основное правило пресета: из него берутся upstream-ссылки на гео-базы."""
+        from app.config import Config
+
+        client = self.CLIENT_NAME
+        url = Config.get_default_rule_url(client, preset=self.preset_name)
+        # Ключи кэша не менять: иначе после обновления всё скачается заново
+        if self.preset_name == "geogaga":
+            cache_key = f"{client}_{client}_{self.preset_name}"
+        else:
+            cache_key = f"{client}_DEFAULT_orig_{self.preset_name}"
+        try:
+            return self.parse_rule_payload(self.downloader.fetch(url, cache_key, kind="rule"), client)
+        except Exception as e:
+            logger.warning(f"Could not load default rule for {client} ({self.preset_name}) from {url}: {e}")
+            return None
+
+    def _geo_urls(self, default_rule: Optional[dict], geo_local: bool) -> Tuple[str, str]:
+        """Ссылки на гео-базы, которые записываются в правила. '' — не менять."""
+        from app.config import Config
+
+        client = self.CLIENT_NAME
+        external = Config.get_external_geo_url(client, preset=self.preset_name)
+        if external:
+            # Внешний узел уже раздаёт базы — ссылка на него нужна независимо от SERVE_GEO*
+            return f"{external}/geoip.dat", f"{external}/geosite.dat"
+        if geo_local:
+            base = f"{Config.get_base_url(self.token, preset=self.preset_name)}/{client}"
+            return (
+                f"{base}/geoip.dat" if Config.SERVE_GEOIP else "",
+                f"{base}/geosite.dat" if Config.SERVE_GEOSITE else "",
+            )
+        # Базы не раздаются с этого сервера — оставляем исходные upstream-ссылки
+        upstream = default_rule or {}
+        return (
+            upstream.get("Geoipurl") or Config.get_preset_geoip_url(self.preset_name) or "",
+            upstream.get("Geositeurl") or Config.get_preset_geosite_url(self.preset_name) or "",
+        )
+
+    def _rule_files(self) -> List[str]:
+        from app.config import Config
+
+        files = Config.get_active_rules(self._discover_config_files(), client=self.CLIENT_NAME, preset=self.preset_name)
+        extra = self._extra_rule_files()
+        # Для geogaga и vahellame правило у клиента одно — дополнительные не добавляются
+        if extra and self.preset_name not in ("geogaga", "vahellame"):
+            by_name = {name.upper(): name for name in files}
+            for name in extra:
+                by_name.setdefault(name, name)
+            files = sorted(by_name.values(), key=str.upper)
+        return files
+
+    def _publish_rules(self, target_dir: Path, default_rule: Optional[dict], geo_local: bool) -> Tuple[Set[str], bool]:
+        """Скачивает правила, подставляет ссылки на базы и публикует .JSON/.DEEPLINK."""
+        from app.config import Config
+        from app.publisher import Publisher
+
+        client = self.CLIENT_NAME
+        logger.info(f"Processing {client} rule files ({self.preset_name})...")
+        geoip_url, geosite_url = self._geo_urls(default_rule, geo_local)
+        serve_json = Config.should_serve_json(client)
+        serve_deeplink = self._should_publish_deeplink()
+        published: Set[str] = set()
+        success = True
+
+        for file_name in self._rule_files():
+            if not self.is_safe_config_filename(file_name):
+                logger.error(f"Skipping unsafe filename: {file_name}")
+                continue
+            logger.info(f"  Processing {file_name} for {client} ({self.preset_name})...")
+            file_key = file_name.rsplit(".", 1)[0].upper()
+            url = Config.get_rule_url(client, file_name, preset=self.preset_name)
+            try:
+                raw_bytes = self.downloader.fetch(url, f"{client}_{file_key}_{self.preset_name}", kind="rule")
+                data = self.parse_rule_payload(raw_bytes, client)
+                if geoip_url:
+                    data["Geoipurl"] = geoip_url
+                if geosite_url:
+                    data["Geositeurl"] = geosite_url
+                if not data.get("LastUpdated"):
+                    # Стабильная отметка версии: меняется только вместе с содержимым
+                    data["LastUpdated"] = str(int(hashlib.md5(raw_bytes).hexdigest()[:8], 16))
+
+                if serve_json:
+                    content = json.dumps(data, indent=2, ensure_ascii=False)
+                    if not Publisher.publish_file(target_dir, file_name, content, key_prefix=self.preset_prefix):
+                        success = False
+                        continue
+                    published.add(file_name)
+                if serve_deeplink:
+                    name = deeplink_filename_for(file_name)
+                    if Publisher.publish_file(target_dir, name, self.build_deeplink(client, data), key_prefix=self.preset_prefix):
+                        published.add(name)
+                    else:
+                        success = False
+            except Exception as e:
+                logger.error(f"Failed to process {file_name} for {client} ({self.preset_name}): {e}")
+                success = False
+
+        return published, success
 
     def _discover_config_files(self) -> List[str]:
         """Получает список JSON файлов из GitHub API репозитория для данного клиента."""
