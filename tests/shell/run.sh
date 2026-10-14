@@ -125,6 +125,23 @@ check "том с метками — без подсказки" bash -c '! grep -
 out="$(STUB_VOLUME_UNLABELED=1 bash "$INSTALL" status 2>&1)"
 check "том без меток — подсказка" grep -q "создан не через Docker Compose" <<<"$out"
 
+echo "== Предупреждение о томе не просачивается из up/restart"
+out="$(STUB_VOLUME_UNLABELED=1 bash "$INSTALL" restart 2>&1)"
+check "restart без WARN о томе" bash -c '! grep -q "was not created by Docker Compose" <<<"$1"' _ "$out"
+check "restart отработал" grep -q "Контейнер перезапущен" <<<"$out"
+
+echo "== update-script"
+sed 's/^SCRIPT_VERSION=.*/SCRIPT_VERSION="9.9.9"/' "$INSTALL" > "$WORK/remote.sh"
+out="$(STUB_SCRIPT="$WORK/remote.sh" bash "$INSTALL" update-script 2>&1)"; rc=$?
+check "обновление скрипта успешно" [ "$rc" -eq 0 ]
+check "сообщает переход версий" grep -q "v1.[0-9.]* → v9.9.9" <<<"$out"
+check "файл на диске заменён" grep -q '^SCRIPT_VERSION="9.9.9"' "$HOME/geo/install.sh"
+out="$(STUB_SCRIPT="$WORK/remote.sh" bash "$INSTALL" update-script 2>&1)"
+check "старая сессия при новом файле на диске — сказано прямо" grep -q "эта сессия запущена со старой версией" <<<"$out"
+out="$(STUB_SCRIPT="$WORK/remote.sh" bash "$HOME/geo/install.sh" update-script 2>&1)"
+check "актуальная версия — «уже актуален»" grep -q "Скрипт уже актуален (v9.9.9)" <<<"$out"
+cp "$INSTALL" "$HOME/geo/install.sh"
+
 echo "== Повторный запуск мастера сохраняет ответы"
 { echo; blank; } | bash "$INSTALL" install >/dev/null 2>&1
 check "токен не изменился" [ "$(env_get ROUTING_TOKEN)" = "$TOKEN" ]

@@ -1,4 +1,11 @@
 #!/usr/bin/env bash
-# Поддельный curl: сеть в тестах недоступна
+# Поддельный curl. Сети в тестах нет: если задан STUB_SCRIPT, «скачанным»
+# файлом (-o PATH) становится он — так проверяется update-script.
 echo "curl $*" >> "$STUB_LOG"
-exit 1
+[ -n "${STUB_SCRIPT:-}" ] || exit 1
+out=""
+while [ $# -gt 0 ]; do
+    if [ "$1" = "-o" ]; then out="$2"; shift 2; else shift; fi
+done
+[ -n "$out" ] || exit 1
+cp "$STUB_SCRIPT" "$out"

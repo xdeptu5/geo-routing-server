@@ -17,7 +17,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="1.7.1"
+SCRIPT_VERSION="1.7.2"
 CONFIG_RECORD="/etc/geo-routing-server.conf"
 DEFAULT_INSTALL_DIR="/opt/geo-routing-server"
 IMAGE_REPO="ghcr.io/xdeptu5/geo-routing-server"
@@ -27,6 +27,8 @@ SERVICE="geo-routing-server"
 # Минимальная версия контракта CLI в образе, которая нужна этому скрипту
 REQUIRED_CLI_API=2
 APPLY_RC=100
+# 1 — install.sh на диске новее кода этой сессии (см. reopen_if_script_replaced)
+SCRIPT_REPLACED=0
 # Служебные строки Compose про разовый контейнер и предупреждение о томе без меток
 COMPOSE_NOISE_RE='^(WARN\[[0-9]+\] volume "[^"]*" already exists but was not created by Docker Compose|[[:space:]]*Container [^[:space:]]+-run-[0-9a-f]+[[:space:]]+(Creating|Created|Starting|Started|Stopping|Stopped|Removing|Removed)[[:space:]]*$)'
 
@@ -386,7 +388,9 @@ compose_in() {
         echo -e "${C_RED}[!] Docker Compose не найден.${C_RESET}"
         return 1
     fi
-    (cd "$dir" && $compose_cmd "$@")
+    # Предупреждение о томе без меток Compose повторяет при каждом вызове;
+    # о нём один раз сообщает `geoserver status` (check_volume_labels)
+    (cd "$dir" && $compose_cmd "$@") 2> >(grep -vE "$COMPOSE_NOISE_RE" >&2 || true)
 }
 
 # `up -d` возвращает 0, даже если контейнер сразу падает (например, из-за
@@ -651,7 +655,14 @@ cmd_update_script() {
     echo -e "  Версия на GitHub: ${C_GREEN}v${remote_ver}${C_RESET}"
     if [ -f "$install_dir/install.sh" ] && cmp -s "$install_dir/install.sh" "$tmp_script" 2>/dev/null; then
         rm -f "$tmp_script"
-        echo -e "\n${C_GREEN}[✓] Скрипт уже актуален (v${remote_ver}).${C_RESET}\n"
+        if [ "$remote_ver" != "$SCRIPT_VERSION" ]; then
+            # Файл на диске уже новый (обновлён раньше), а работает старый код,
+            # загруженный при запуске этой сессии меню
+            echo -e "\n${C_GREEN}[✓] На диске уже v${remote_ver}; эта сессия запущена со старой версией v${SCRIPT_VERSION}.${C_RESET}\n"
+            SCRIPT_REPLACED=1
+        else
+            echo -e "\n${C_GREEN}[✓] Скрипт уже актуален (v${remote_ver}).${C_RESET}\n"
+        fi
         return 0
     fi
     # 755 явно: mktemp создаёт 0600, и "+x" дал бы 0711 — файл не читался бы без root
@@ -659,7 +670,19 @@ cmd_update_script() {
     mkdir -p "$install_dir"
     mv -f "$tmp_script" "$install_dir/install.sh"
     create_cli_shortcut "$install_dir"
-    echo -e "${C_GREEN}[✓] Скрипт управления обновлён.${C_RESET}\n"
+    SCRIPT_REPLACED=1
+    echo -e "${C_GREEN}[✓] Скрипт управления обновлён: v${SCRIPT_VERSION} → v${remote_ver}.${C_RESET}\n"
+}
+
+# Bash читает скрипт по ходу выполнения, а функции этой сессии уже загружены
+# из старой версии. После обновления скрипта меню перезапускается новой, иначе
+# оно продолжает работать старым кодом и показывать старую версию.
+reopen_if_script_replaced() {
+    if [ "$SCRIPT_REPLACED" = "1" ] && [ -t 0 ]; then
+        echo -e "${C_CYAN}[i] Перезапуск меню с новой версией скрипта...${C_RESET}"
+        sleep 1
+        exec bash "$(get_install_dir)/install.sh" update
+    fi
 }
 
 menu_updates() {
@@ -688,9 +711,10 @@ menu_updates() {
                 cmd_update_script || true
                 bash "$(get_install_dir)/install.sh" update-image || true
                 pause
+                reopen_if_script_replaced
                 ;;
             2) cmd_update || true; pause ;;
-            3) cmd_update_script || true; pause ;;
+            3) cmd_update_script || true; pause; reopen_if_script_replaced ;;
             4)
                 local version=""
                 read -r -p "Версия (например 1.7.0; latest — снять закрепление) [Enter = отмена]: " version || version=""

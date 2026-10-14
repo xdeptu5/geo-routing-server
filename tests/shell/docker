@@ -68,7 +68,12 @@ case "${1:-}" in
         case "${1:-}" in
             version) echo "Docker Compose version v2-stub"; exit 0 ;;
             run) shift; run_cli "$@"; exit $? ;;
-            up) touch "$STATE/running"; exit 0 ;;
+            up)
+                # Compose предупреждает о томе без своих меток при каждом up
+                if [ -n "${STUB_VOLUME_UNLABELED:-}" ]; then
+                    echo 'WARN[0000] volume "geo-routing-server_routing_data" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume' >&2
+                fi
+                touch "$STATE/running"; exit 0 ;;
             stop|down) rm -f "$STATE/running"; exit 0 ;;
             ps) echo "Up 5 seconds (healthy)"; exit 0 ;;
             exec)
