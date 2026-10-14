@@ -6,7 +6,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="1.5.2"
+SCRIPT_VERSION="1.5.3"
 CONFIG_RECORD="/etc/geo-routing-server.conf"
 DEFAULT_INSTALL_DIR="/opt/geo-routing-server"
 DOCKER_IMAGE="ghcr.io/xdeptu5/geo-routing-server:latest"
@@ -636,8 +636,15 @@ cmd_status() {
     printf "   ${C_LIGHT_GRAY}%-20s${C_RESET} ${C_WHITE}%s${C_RESET}\n" "Клиенты:" "$clients"
     printf "   ${C_LIGHT_GRAY}%-20s${C_RESET} ${C_WHITE}%s${C_RESET}\n" "Пресет:" "$preset_val"
     echo ""
-    echo -e "${C_YELLOW}[!] Контейнер остановлен.${C_RESET}"
-    echo -e "    Для формирования ссылок и актуального статуса запустите: ${C_BOLD}geoserver start${C_RESET}"
+    if is_container_running; then
+        # Контейнер работает, но сводку получить не удалось: обычно первая
+        # синхронизация ещё не закончилась.
+        echo -e "${C_YELLOW}[!] Контейнер запущен, но сводка ссылок пока недоступна (возможно, идёт первая синхронизация).${C_RESET}"
+        echo -e "    Проверьте ход синхронизации: ${C_BOLD}geoserver logs${C_RESET}"
+    else
+        echo -e "${C_YELLOW}[!] Контейнер остановлен.${C_RESET}"
+        echo -e "    Для формирования ссылок и актуального статуса запустите: ${C_BOLD}geoserver start${C_RESET}"
+    fi
 }
 
 cmd_sync() {
@@ -752,6 +759,15 @@ cmd_update() {
     if [ -z "$compose_cmd" ]; then
         echo -e "\n${C_RED}[!] Docker Compose не найден.${C_RESET}\n"
         return 1
+    fi
+    # До v1.5.2 привязки сквадов лежали в /app/squads.json — в слое контейнера,
+    # а не в томе. `up --force-recreate` уничтожает этот слой раньше, чем новый
+    # образ успеет перенести файл сам, поэтому копируем его в том, пока старый
+    # контейнер ещё работает. Существующий .squads.json не перезаписывается.
+    if is_container_running; then
+        (cd "$install_dir" && $compose_cmd exec -T geo-routing-server sh -c \
+            '[ -s /app/squads.json ] && [ ! -e /app/www/.squads.json ] && cp -p /app/squads.json /app/www/.squads.json && echo "[i] squads.json сохранён в томе данных"' \
+            2>/dev/null) || true
     fi
     echo -e "\n${C_YELLOW}[*] Загрузка свежего Docker-образа...${C_RESET}"
     if (cd "$install_dir" && $compose_cmd pull && $compose_cmd up -d --force-recreate); then

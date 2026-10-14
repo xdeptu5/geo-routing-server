@@ -1,0 +1,8 @@
+# Files that end up inside the Linux image or run on the host must keep LF:
+# with core.autocrlf=true a Windows checkout would otherwise turn them into
+# CRLF and `docker build` produces an image whose entrypoint fails with
+# "exec /usr/local/bin/docker-entrypoint.sh: no such file or directory".
+* text=auto eol=lf
+
+*.jpg binary
+*.png binary
