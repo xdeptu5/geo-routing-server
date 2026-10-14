@@ -47,6 +47,7 @@ out="$({ echo /opt; echo "~/geo"; blank; } | bash "$INSTALL" install 2>&1)"; rc=
 check "установка завершилась успешно" [ "$rc" -eq 0 ]
 check "/opt отклонён" grep -q "установка туда запрещена" <<<"$out"
 check "каталог записан абсолютным путём" [ "$(cat /etc/geo-routing-server.conf)" = "$HOME/geo" ]
+check "запись о каталоге — ровно одна строка" [ "$(wc -l < /etc/geo-routing-server.conf)" -eq 1 ]
 check ".env создан с правами 600" [ "$(stat -c %a "$HOME/geo/.env")" = 600 ]
 check "токен сгенерирован (32 hex)" grep -Eq '^ROUTING_TOKEN=[0-9a-f]{32}$' "$HOME/geo/.env"
 check "compose.yaml создан" grep -q "image: ghcr.io/xdeptu5/geo-routing-server:latest" "$HOME/geo/compose.yaml"
@@ -113,6 +114,16 @@ check "несуществующая версия — ошибка" [ "$rc" -eq 1
 check "compose.yaml возвращён к :1.7.0" [ "$(img)" = "ghcr.io/xdeptu5/geo-routing-server:1.7.0" ]
 bash "$INSTALL" update-image latest >/dev/null 2>&1
 check "снятие закрепления (latest)" [ "$(img)" = "ghcr.io/xdeptu5/geo-routing-server:latest" ]
+
+echo "== status: exec в работающем контейнере, подсказка про том без меток"
+n=$(log_len)
+out="$(bash "$INSTALL" status 2>&1)"
+check "status выполнен через exec" grep -q "compose exec -T geo-routing-server python3 -m app.cli status" <(calls_since "$n")
+check "без разового контейнера" bash -c "! grep -q 'compose run' <(tail -n +$((n + 1)) '$STUB_LOG')"
+check "ссылки показаны" grep -q "HAPP" <<<"$out"
+check "том с метками — без подсказки" bash -c '! grep -q "создан не через Docker Compose" <<<"$1"' _ "$out"
+out="$(STUB_VOLUME_UNLABELED=1 bash "$INSTALL" status 2>&1)"
+check "том без меток — подсказка" grep -q "создан не через Docker Compose" <<<"$out"
 
 echo "== Повторный запуск мастера сохраняет ответы"
 { echo; blank; } | bash "$INSTALL" install >/dev/null 2>&1

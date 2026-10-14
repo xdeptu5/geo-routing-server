@@ -17,7 +17,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="1.7.0"
+SCRIPT_VERSION="1.7.1"
 CONFIG_RECORD="/etc/geo-routing-server.conf"
 DEFAULT_INSTALL_DIR="/opt/geo-routing-server"
 IMAGE_REPO="ghcr.io/xdeptu5/geo-routing-server"
@@ -27,6 +27,8 @@ SERVICE="geo-routing-server"
 # Минимальная версия контракта CLI в образе, которая нужна этому скрипту
 REQUIRED_CLI_API=2
 APPLY_RC=100
+# Служебные строки Compose про разовый контейнер и предупреждение о томе без меток
+COMPOSE_NOISE_RE='^(WARN\[[0-9]+\] volume "[^"]*" already exists but was not created by Docker Compose|[[:space:]]*Container [^[:space:]]+-run-[0-9a-f]+[[:space:]]+(Creating|Created|Starting|Started|Stopping|Stopped|Removing|Removed)[[:space:]]*$)'
 
 # Переопределения для тестов и разработки: локальный образ и пропуск pull
 IMAGE="${GRS_IMAGE:-$DOCKER_IMAGE}"
@@ -107,12 +109,40 @@ check_dependencies() {
 # Каталог установки
 # ------------------------------------------------------------------------------
 
+# Абсолютный нормализованный путь (как `realpath -m`: компоненты могут не
+# существовать). У BusyBox (Alpine) `realpath` не знает -m: печатает путь,
+# но завершается ошибкой, и запасная ветка `|| echo` раньше дописывала путь
+# второй раз — каталог становился двумя строками и проходил мимо проверки
+# защищённых каталогов. Поэтому без GNU realpath путь разбирается здесь.
+abs_path() {
+    local p="${1:-}"
+    [ -n "$p" ] || return 0
+    [[ "$p" == /* ]] || p="$(pwd)/$p"
+    if realpath -m / >/dev/null 2>&1; then
+        realpath -m -- "$p"
+        return
+    fi
+    local -a parts=() out=()
+    local part
+    IFS=/ read -ra parts <<< "$p"
+    for part in "${parts[@]}"; do
+        case "$part" in
+            ""|.) ;;
+            ..) [ ${#out[@]} -gt 0 ] && unset 'out[${#out[@]}-1]' ;;
+            *) out+=("$part") ;;
+        esac
+    done
+    local joined
+    joined="$(IFS=/; printf '%s' "${out[*]}")"
+    printf '/%s\n' "$joined"
+}
+
 # Защищённые системные каталоги: запрет установки и удаления
 is_protected_dir() {
     local p="${1:-}"
     [ -n "$p" ] || return 0
     local real
-    real="$(realpath -m -- "$p" 2>/dev/null || true)"
+    real="$(abs_path "$p")"
     [ -n "$real" ] || real="$p"
     [ "$real" != "/" ] && real="${real%/}"
 
@@ -124,7 +154,7 @@ is_protected_dir() {
 
     if [ -n "${HOME:-}" ]; then
         local real_home
-        real_home="$(realpath -m -- "$HOME" 2>/dev/null || true)"
+        real_home="$(abs_path "$HOME")"
         [ -n "$real_home" ] && real_home="${real_home%/}"
         if [ "$real" = "$real_home" ]; then
             return 0
@@ -198,8 +228,7 @@ ask_install_dir() {
             \~) dir="$HOME" ;;
             \~/*) dir="${HOME}/${dir#\~/}" ;;
         esac
-        [[ "$dir" == /* ]] || dir="$(pwd)/$dir"
-        dir="$(realpath -m -- "$dir" 2>/dev/null || echo "$dir")"
+        dir="$(abs_path "$dir")"
         if is_protected_dir "$dir"; then
             echo -e "      ${C_RED}[!] '${dir}' — системный или домашний каталог, установка туда запрещена.${C_RESET}" >&2
             continue
@@ -295,9 +324,43 @@ cli_stack() {
     if ! { [ -t 0 ] && [ -t 1 ]; }; then tty=(-T); fi
     local -a facts=()
     mapfile -t facts < <(host_facts_args)
+    # stderr чистим от служебного вывода Compose про разовый контейнер
+    # (Creating/Created/...) и от повторяющегося предупреждения о томе без
+    # меток — о нём один раз сообщает `geoserver status` (check_volume_labels).
+    # Только переносимые флаги grep: на хостах с BusyBox (Alpine) нет
+    # --line-buffered, и grep, упав сразу, обрывал бы stderr самому Compose.
     (cd "$dir" && $compose_cmd run --rm --no-deps ${tty[@]+"${tty[@]}"} \
         --entrypoint python3 -v "$dir:/host" ${facts[@]+"${facts[@]}"} \
-        "$SERVICE" -m app.cli "$@")
+        "$SERVICE" -m app.cli "$@") 2> >(grep -vE "$COMPOSE_NOISE_RE" >&2 || true)
+}
+
+# Команды только для чтения (status, proxy): в работающем контейнере — через
+# exec, без создания разового контейнера; иначе — через cli_stack.
+cli_read() {
+    if is_container_running; then
+        local -a tty=()
+        if ! { [ -t 0 ] && [ -t 1 ]; }; then tty=(-T); fi
+        compose_in exec ${tty[@]+"${tty[@]}"} "$SERVICE" python3 -m app.cli "$@"
+    else
+        cli_stack "$@"
+    fi
+}
+
+# Том данных, созданный не через Compose (перенос с другого сервера, восстановление
+# из бэкапа, ручной `docker volume create`), работает, но Compose предупреждает о
+# нём при каждом запуске. Сообщаем один раз и говорим, как исправить.
+check_volume_labels() {
+    local dir project volume label
+    dir="$(get_install_dir)"
+    project="$(sed -n 's/^name:[[:space:]]*//p' "$dir/compose.yaml" 2>/dev/null | head -1 | tr -d "\"'")"
+    [ -n "$project" ] || project="$(basename "$dir")"
+    volume="${project}_routing_data"
+    label="$(docker volume inspect -f '{{index .Labels "com.docker.compose.project"}}' "$volume" 2>/dev/null)" || return 0
+    if [ -z "$label" ] || [ "$label" = "<no value>" ]; then
+        echo -e "${C_GRAY}[i] Том ${volume} создан не через Docker Compose (например, после переноса или восстановления).${C_RESET}"
+        echo -e "${C_GRAY}    На работу это не влияет — Compose использует его как есть. Убрать предупреждение: README → «Решение проблем».${C_RESET}"
+        echo ""
+    fi
 }
 
 # Образ, установленный до v1.6.0, не знает подкоманд config/setup
@@ -425,7 +488,8 @@ cmd_status() {
         echo -e "${C_YELLOW}Файл $dir/.env доступен только root. Запустите: ${C_BOLD}sudo geoserver status${C_RESET}"
         return 0
     fi
-    cli_stack status </dev/null || echo -e "${C_YELLOW}[!] Не удалось получить сводку. Проверьте: geoserver logs${C_RESET}"
+    check_volume_labels
+    cli_read status </dev/null || echo -e "${C_YELLOW}[!] Не удалось получить сводку. Проверьте: geoserver logs${C_RESET}"
 }
 
 cmd_sync() {
@@ -668,7 +732,7 @@ cmd_uninstall() {
         return 1
     fi
     local target
-    target="$(realpath -m -- "$install_dir" 2>/dev/null || true)"
+    target="$(abs_path "$install_dir")"
     [ -n "$target" ] || target="$install_dir"
     [ "$target" != "/" ] && target="${target%/}"
     if is_protected_dir "$target"; then
@@ -780,9 +844,9 @@ wizard_install() {
     fi
 
     echo -e "\n${C_GREEN}${C_BOLD}  Geo Routing Server установлен и запущен.${C_RESET}\n"
-    cli_stack status </dev/null || true
+    cli_read status </dev/null || true
     echo ""
-    cli_stack proxy </dev/null || true
+    cli_read proxy </dev/null || true
     echo -e "${C_CYAN}Для управления сервером используйте команду: ${C_BOLD}geoserver${C_RESET}\n"
 }
 
@@ -827,7 +891,7 @@ main_menu() {
             5) config_section schedule ;;
             6) config_section telegram ;;
             7) config_section clients ;;
-            8) cli_stack proxy </dev/null || true; pause ;;
+            8) cli_read proxy </dev/null || true; pause ;;
             9) menu_updates ;;
             10) cmd_restart || true; pause ;;
             11)
@@ -859,7 +923,7 @@ main() {
         update-image)                cmd_update "$@" ;;
         update-script|self-update)   cmd_update_script ;;
         update-all)                  cmd_update_script && bash "$(get_install_dir)/install.sh" update-image ;;
-        proxy)                       cli_stack proxy </dev/null ;;
+        proxy)                       cli_read proxy </dev/null ;;
         squads)                      cli_stack squads "$@" ;;
         cli)                         cli_stack "$@" ;;
         config|edit)

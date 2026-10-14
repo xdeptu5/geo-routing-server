@@ -75,10 +75,22 @@ jobs:
         run: shellcheck -S warning install.sh docker-entrypoint.sh tests/shell/run.sh tests/shell/docker tests/shell/curl
 
   installer-tests:
-    name: "install.sh: integration tests (stub docker, real CLI)"
+    name: "install.sh: integration tests (${{ matrix.userland }})"
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        # GNU coreutils (Debian/Ubuntu) и BusyBox (Alpine): у BusyBox другие
+        # флаги realpath/grep, и ошибки установщика проявлялись только там
+        include:
+          - userland: GNU
+            image: slim
+            prepare: "true"
+          - userland: BusyBox
+            image: alpine
+            prepare: "apk add -q --no-cache bash"
 
     steps:
       - name: Checkout repository
@@ -86,7 +98,9 @@ jobs:
 
       # Тесты пишут в /etc и /usr/local/bin, поэтому идут в одноразовом контейнере
       - name: Run tests/shell/run.sh in a clean container
-        run: docker run --rm -v "$PWD:/repo:ro" -w /repo python:${{ env.PYTHON_VERSION }}-slim bash tests/shell/run.sh
+        run: >-
+          docker run --rm -v "$PWD:/repo:ro" -w /repo python:${{ env.PYTHON_VERSION }}-${{ matrix.image }}
+          sh -c '${{ matrix.prepare }} && bash tests/shell/run.sh'
 
   build:
     name: Build and publish Docker image

@@ -571,9 +571,28 @@ docker compose exec geo-routing-server cat /app/www/.squads.json > squads-backup
 | Remnawave: ошибка соединения с `http://remnawave:3000` | Контейнер не подключён к Docker-сети панели. Укажите сеть в `geoserver` → пункт 4 или через `DOCKER_NETWORK`. |
 | Меню настроек сообщает, что образ старее `geoserver` | Скрипт обновлён, а образ ещё нет. Выполните `geoserver update-image`. |
 | `geoserver status` предупреждает, что синхронизация давно не проходила | Источник недоступен, и сервис раздаёт последнюю рабочую копию (в логах — `stale-if-error`), либо синхронизация падает с ошибкой — она показана в предупреждении. Включите Telegram-уведомления, чтобы узнавать о таком сразу. |
+| `WARN ... volume "geo-routing-server_routing_data" already exists but was not created by Docker Compose` | Том создан не через Compose, например после переноса сервера или восстановления из бэкапа. На работу это не влияет. Как пересоздать том с метками без потери данных — в блоке ниже. |
 | Контейнер из Docker-сети получает `404` на `/HAPP/...` | С v1.7.0 пути без токена доступны только на внутреннем порту: `http://geo-routing-server:81/HAPP/...`. Временно вернуть старое поведение — `INTERNAL_ACCESS_ON_PORT_80=true`. |
 
 ---
+
+<details>
+<summary>Пересоздать том данных с метками Compose (убрать предупреждение о томе)</summary>
+
+Выполните в каталоге установки (по умолчанию `/opt/geo-routing-server`). Данные сначала копируются во временный том, поэтому их можно вернуть на любом шаге:
+
+```bash
+docker compose down
+docker run --rm -v geo-routing-server_routing_data:/from -v grs_backup:/to alpine cp -a /from/. /to/
+docker volume rm geo-routing-server_routing_data
+docker compose create          # Compose создаёт том заново, уже со своими метками
+docker run --rm -v grs_backup:/from -v geo-routing-server_routing_data:/to alpine cp -a /from/. /to/
+docker compose up -d
+geoserver squads list          # проверьте, что привязки сквадов на месте
+docker volume rm grs_backup
+```
+
+</details>
 
 <a id="development"></a>
 ## Разработка

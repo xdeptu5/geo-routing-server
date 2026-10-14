@@ -50,6 +50,10 @@ case "${1:-}" in
     info|pull|logs|tag) exit 0 ;;
     image) exit 0 ;;
     network) printf 'bridge\nhost\nnone\nremnawave-network\n'; exit 0 ;;
+    volume)
+        # volume inspect -f '{{index .Labels ...}}' NAME — метка проекта Compose
+        if [ -n "${STUB_VOLUME_UNLABELED:-}" ]; then echo "<no value>"; else echo "geo-routing-server"; fi
+        exit 0 ;;
     inspect)
         running=false; [ -f "$STATE/running" ] && running=true
         case "$3" in
@@ -76,6 +80,15 @@ case "${1:-}" in
                     sh -c "${last//\/app\//$STATE/app/}"
                     exit $?
                 fi
+                # `exec ... SERVICE python3 -m app.cli ...` — настоящий CLI
+                args=("$@")
+                for i in "${!args[@]}"; do
+                    if [ "${args[$i]}" = "python3" ] && [ "${args[$((i + 1))]:-}" = "-m" ]; then
+                        BASE_DIR="$STATE/app" STORAGE_DIR="$STATE/app/www" PYTHONPATH="$REPO" \
+                            python3 "${args[@]:$((i + 1))}"
+                        exit $?
+                    fi
+                done
                 exit 0 ;;
             pull) [ -n "${STUB_PULL_FAIL:-}" ] && { echo "manifest unknown" >&2; exit 1; }; exit 0 ;;
             logs) exit 0 ;;
