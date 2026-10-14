@@ -469,6 +469,7 @@ ROUTING_SOURCE_PRESET=hydraponique,geogaga
 | `geoserver start` / `stop` | 11 | Запуск / остановка |
 | `geoserver config` | 12 | Открыть `.env` в редакторе и применить изменения |
 | `geoserver uninstall` | 13 | Удалить сервис и данные |
+| `geoserver repair-volume` | — | Пересоздать том данных с метками Compose, сохранив данные |
 | `geoserver squads list` / `add` / `remove` / `sync` | — | Сквады Remnawave без меню |
 | `geoserver config set` / `get` | — | Изменить или прочитать один параметр |
 
@@ -571,13 +572,13 @@ docker compose exec geo-routing-server cat /app/www/.squads.json > squads-backup
 | Remnawave: ошибка соединения с `http://remnawave:3000` | Контейнер не подключён к Docker-сети панели. Укажите сеть в `geoserver` → пункт 4 или через `DOCKER_NETWORK`. |
 | Меню настроек сообщает, что образ старее `geoserver` | Скрипт обновлён, а образ ещё нет. Выполните `geoserver update-image`. |
 | `geoserver status` предупреждает, что синхронизация давно не проходила | Источник недоступен, и сервис раздаёт последнюю рабочую копию (в логах — `stale-if-error`), либо синхронизация падает с ошибкой — она показана в предупреждении. Включите Telegram-уведомления, чтобы узнавать о таком сразу. |
-| `WARN ... volume "geo-routing-server_routing_data" already exists but was not created by Docker Compose` | Том создан не через Compose, например после переноса сервера или восстановления из бэкапа. На работу это не влияет. Как пересоздать том с метками без потери данных — в блоке ниже. |
+| `WARN ... volume "geo-routing-server_routing_data" already exists but was not created by Docker Compose` | Том создан не через Compose, например после переноса сервера или восстановления из бэкапа. На работу это не влияет. Чтобы убрать предупреждение навсегда, выполните `geoserver repair-volume`: том пересоздаётся с метками Compose через проверенную копию, данные сохраняются. Ручной способ — в блоке ниже. |
 | Контейнер из Docker-сети получает `404` на `/HAPP/...` | С v1.7.0 пути без токена доступны только на внутреннем порту: `http://geo-routing-server:81/HAPP/...`. Временно вернуть старое поведение — `INTERNAL_ACCESS_ON_PORT_80=true`. |
 
 ---
 
 <details>
-<summary>Пересоздать том данных с метками Compose (убрать предупреждение о томе)</summary>
+<summary>Пересоздать том данных вручную (то же, что делает <code>geoserver repair-volume</code>)</summary>
 
 Выполните в каталоге установки (по умолчанию `/opt/geo-routing-server`). Данные сначала копируются во временный том, поэтому их можно вернуть на любом шаге:
 

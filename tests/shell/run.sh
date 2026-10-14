@@ -125,9 +125,11 @@ check "том с метками — без подсказки" bash -c '! grep -
 out="$(STUB_VOLUME_UNLABELED=1 bash "$INSTALL" status 2>&1)"
 check "том без меток — подсказка" grep -q "создан не через Docker Compose" <<<"$out"
 
-echo "== Предупреждение о томе не просачивается из up/restart"
+echo "== Основные команды Compose: stderr не перехватывается"
+# Через пайп Compose теряет терминал и переходит на «сырой» вывод, поэтому
+# up/restart выводятся как есть; причину WARN о томе устраняет repair-volume.
 out="$(STUB_VOLUME_UNLABELED=1 bash "$INSTALL" restart 2>&1)"
-check "restart без WARN о томе" bash -c '! grep -q "was not created by Docker Compose" <<<"$1"' _ "$out"
+check "restart показывает вывод Compose без изменений" grep -q "was not created by Docker Compose" <<<"$out"
 check "restart отработал" grep -q "Контейнер перезапущен" <<<"$out"
 
 echo "== update-script"
@@ -141,6 +143,23 @@ check "старая сессия при новом файле на диске �
 out="$(STUB_SCRIPT="$WORK/remote.sh" bash "$HOME/geo/install.sh" update-script 2>&1)"
 check "актуальная версия — «уже актуален»" grep -q "Скрипт уже актуален (v9.9.9)" <<<"$out"
 cp "$INSTALL" "$HOME/geo/install.sh"
+
+echo "== repair-volume: том без меток пересоздаётся с данными"
+VOL="$STUB_STATE/vol/geo-routing-server_routing_data"
+mkdir -p "$VOL/tok/HAPP" && echo '[{"uuid":"keep"}]' > "$VOL/.squads.json" && head -c 4096 /dev/urandom > "$VOL/tok/HAPP/geoip.dat"
+fp() { (cd "$VOL" && find . -type f -exec md5sum {} + | sort); }
+before="$(fp)"
+out="$(echo y | bash "$INSTALL" repair-volume 2>&1)"; rc=$?
+check "repair-volume успешно" [ "$rc" -eq 0 ]
+check "том получил метку Compose" [ -f "$VOL.labeled" ]
+check "данные совпадают побайтово" [ "$(fp)" = "$before" ]
+check "временный том удалён" bash -c "! ls -d '$STUB_STATE'/vol/*_backup_* >/dev/null 2>&1"
+out="$(echo y | bash "$INSTALL" repair-volume 2>&1)"
+check "повторный запуск — ничего не делает" grep -q "исправлять нечего" <<<"$out"
+out="$(STUB_VOLUME_MISSING=1 bash "$INSTALL" repair-volume </dev/null 2>&1)"; rc=$?
+check "без тома — ошибка «не найден»" grep -q "не найден" <<<"$out"
+check "без тома — код 1" [ "$rc" -eq 1 ]
+rm -rf "$STUB_STATE/vol"
 
 echo "== Повторный запуск мастера сохраняет ответы"
 { echo; blank; } | bash "$INSTALL" install >/dev/null 2>&1

@@ -21,7 +21,28 @@ drain_stdin() {
     fi
 }
 
+# `docker run ... -v VOLUME:/path[:ro] --entrypoint sh IMAGE -c CMD` — команда
+# выполняется локально, пути томов подменяются на каталоги $STATE/vol/VOLUME
+run_sh() {
+    local cmd="${!#}" spec name path
+    while [ $# -gt 0 ]; do
+        if [ "$1" = "-v" ]; then
+            spec="$2"; name="${spec%%:*}"; path="${spec#*:}"; path="${path%%:*}"
+            if [[ "$name" != /* ]]; then
+                cmd="${cmd//$path/$STATE/vol/$name}"
+            fi
+            shift 2
+        else
+            shift
+        fi
+    done
+    sh -c "$cmd"
+}
+
 run_cli() {
+    case " $* " in
+        *" --entrypoint sh "*) run_sh "$@"; return $? ;;
+    esac
     drain_stdin
     # $@ — аргументы после "run"/"compose run": разбираем -v и -e, остальное — команда
     local host_dir="" ; local -a envs=() ; local -a rest=()
@@ -51,8 +72,23 @@ case "${1:-}" in
     image) exit 0 ;;
     network) printf 'bridge\nhost\nnone\nremnawave-network\n'; exit 0 ;;
     volume)
-        # volume inspect -f '{{index .Labels ...}}' NAME — метка проекта Compose
-        if [ -n "${STUB_VOLUME_UNLABELED:-}" ]; then echo "<no value>"; else echo "geo-routing-server"; fi
+        # Тома — каталоги $STATE/vol/NAME; метка Compose — файл NAME.labeled.
+        # Если каталога тома нет, метка задаётся STUB_VOLUME_UNLABELED.
+        name="${!#}"
+        case "${2:-}" in
+            create) mkdir -p "$STATE/vol/$name"; exit 0 ;;
+            rm) rm -rf "${STATE:?}/vol/$name" "$STATE/vol/$name.labeled"; exit 0 ;;
+            inspect)
+                [ -n "${STUB_VOLUME_MISSING:-}" ] && { echo "Error: no such volume: $name" >&2; exit 1; }
+                if [ -d "$STATE/vol/$name" ]; then
+                    [ -f "$STATE/vol/$name.labeled" ] && echo "geo-routing-server" || echo "<no value>"
+                elif [ -n "${STUB_VOLUME_UNLABELED:-}" ]; then
+                    echo "<no value>"
+                else
+                    echo "geo-routing-server"
+                fi
+                exit 0 ;;
+        esac
         exit 0 ;;
     inspect)
         running=false; [ -f "$STATE/running" ] && running=true
@@ -68,6 +104,11 @@ case "${1:-}" in
         case "${1:-}" in
             version) echo "Docker Compose version v2-stub"; exit 0 ;;
             run) shift; run_cli "$@"; exit $? ;;
+            create)
+                # Compose создаёт том проекта со своими метками
+                mkdir -p "$STATE/vol/geo-routing-server_routing_data"
+                touch "$STATE/vol/geo-routing-server_routing_data.labeled"
+                exit 0 ;;
             up)
                 # Compose предупреждает о томе без своих меток при каждом up
                 if [ -n "${STUB_VOLUME_UNLABELED:-}" ]; then

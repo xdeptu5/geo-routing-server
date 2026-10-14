@@ -17,7 +17,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="1.7.2"
+SCRIPT_VERSION="1.7.3"
 CONFIG_RECORD="/etc/geo-routing-server.conf"
 DEFAULT_INSTALL_DIR="/opt/geo-routing-server"
 IMAGE_REPO="ghcr.io/xdeptu5/geo-routing-server"
@@ -30,7 +30,8 @@ APPLY_RC=100
 # 1 — install.sh на диске новее кода этой сессии (см. reopen_if_script_replaced)
 SCRIPT_REPLACED=0
 # Служебные строки Compose про разовый контейнер и предупреждение о томе без меток
-COMPOSE_NOISE_RE='^(WARN\[[0-9]+\] volume "[^"]*" already exists but was not created by Docker Compose|[[:space:]]*Container [^[:space:]]+-run-[0-9a-f]+[[:space:]]+(Creating|Created|Starting|Started|Stopping|Stopped|Removing|Removed)[[:space:]]*$)'
+# (в обоих форматах: `WARN[0000] ...` в терминале и `level=warning msg=...` без него)
+COMPOSE_NOISE_RE='^(.*volume .* already exists but was not created by Docker Compose.*|[[:space:]]*Container [^[:space:]]+-run-[0-9a-f]+[[:space:]]+(Creating|Created|Starting|Started|Stopping|Stopped|Removing|Removed)[[:space:]]*$)'
 
 # Переопределения для тестов и разработки: локальный образ и пропуск pull
 IMAGE="${GRS_IMAGE:-$DOCKER_IMAGE}"
@@ -351,17 +352,96 @@ cli_read() {
 # Том данных, созданный не через Compose (перенос с другого сервера, восстановление
 # из бэкапа, ручной `docker volume create`), работает, но Compose предупреждает о
 # нём при каждом запуске. Сообщаем один раз и говорим, как исправить.
-check_volume_labels() {
-    local dir project volume label
+data_volume_name() {
+    local dir project
     dir="$(get_install_dir)"
     project="$(sed -n 's/^name:[[:space:]]*//p' "$dir/compose.yaml" 2>/dev/null | head -1 | tr -d "\"'")"
     [ -n "$project" ] || project="$(basename "$dir")"
-    volume="${project}_routing_data"
-    label="$(docker volume inspect -f '{{index .Labels "com.docker.compose.project"}}' "$volume" 2>/dev/null)" || return 0
-    if [ -z "$label" ] || [ "$label" = "<no value>" ]; then
+    echo "${project}_routing_data"
+}
+
+# 0 — том создан Compose (есть метка проекта); 1 — без меток; 2 — тома нет
+volume_label_state() {
+    local label
+    label="$(docker volume inspect -f '{{index .Labels "com.docker.compose.project"}}' "$1" </dev/null 2>/dev/null)" || return 2
+    [ -n "$label" ] && [ "$label" != "<no value>" ]
+}
+
+check_volume_labels() {
+    local volume rc=0
+    volume="$(data_volume_name)"
+    volume_label_state "$volume" || rc=$?
+    if [ "$rc" -eq 1 ]; then
         echo -e "${C_GRAY}[i] Том ${volume} создан не через Docker Compose (например, после переноса или восстановления).${C_RESET}"
-        echo -e "${C_GRAY}    На работу это не влияет — Compose использует его как есть. Убрать предупреждение: README → «Решение проблем».${C_RESET}"
+        echo -e "${C_GRAY}    На работу это не влияет, но Compose предупреждает о нём при каждом запуске. Исправить: ${C_BOLD}geoserver repair-volume${C_RESET}"
         echo ""
+    fi
+}
+
+# Пересоздаёт том данных с метками Compose, сохраняя содержимое. Метки у
+# существующего тома поменять нельзя, поэтому: копия во временный том →
+# сверка → новый том через `compose create` → копия обратно → сверка → запуск.
+# При любой ошибке временный том с данными остаётся и называется в сообщении.
+cmd_repair_volume() {
+    local volume backup image rc=0
+    volume="$(data_volume_name)"
+    volume_label_state "$volume" || rc=$?
+    if [ "$rc" -eq 2 ]; then
+        echo -e "${C_RED}[!] Том ${volume} не найден.${C_RESET}"
+        return 1
+    fi
+    if [ "$rc" -eq 0 ]; then
+        echo -e "${C_GREEN}[✓] Том ${volume} уже создан Docker Compose — исправлять нечего.${C_RESET}"
+        return 0
+    fi
+    image="${IMAGE_REPO}:$(current_image_tag)"
+    if ! docker image inspect "$image" >/dev/null 2>&1; then
+        echo -e "${C_RED}[!] Образ ${image} не найден локально — сначала: geoserver update-image${C_RESET}"
+        return 1
+    fi
+    echo -e "Том ${C_BOLD}${volume}${C_RESET} будет пересоздан с метками Docker Compose."
+    echo -e "Данные копируются во временный том и сверяются; контейнер на это время остановится."
+    local ans=""
+    read -r -p "Продолжить? [y/N]: " ans || ans=""
+    [[ "$ans" =~ ^[Yy]$ ]] || { echo "Отмена."; return 1; }
+
+    # Число файлов и суммарный размер — достаточная сверка полноты копии
+    volume_digest() {
+        docker run --rm -v "$1:/v:ro" --entrypoint sh "$image" -c \
+            'cd /v && echo "$(find . | wc -l) $(du -s . | cut -f1)"' </dev/null
+    }
+    copy_volume() {
+        docker run --rm -v "$1:/from:ro" -v "$2:/to" --entrypoint sh "$image" -c 'cp -a /from/. /to/' </dev/null
+    }
+
+    backup="${volume}_backup_$(date +%Y%m%d%H%M%S)"
+    local before after
+    echo -e "${C_YELLOW}[*] Остановка контейнера...${C_RESET}"
+    compose_in down </dev/null || return 1
+    before="$(volume_digest "$volume")" || return 1
+    echo -e "${C_YELLOW}[*] Копирование данных во временный том ${backup}...${C_RESET}"
+    if ! docker volume create "$backup" >/dev/null || ! copy_volume "$volume" "$backup" \
+        || [ "$(volume_digest "$backup")" != "$before" ]; then
+        echo -e "${C_RED}[!] Копия не совпала с оригиналом — исходный том не тронут. Запуск: geoserver start${C_RESET}"
+        return 1
+    fi
+    echo -e "${C_YELLOW}[*] Пересоздание тома...${C_RESET}"
+    if ! docker volume rm "$volume" >/dev/null || ! compose_in create </dev/null \
+        || ! copy_volume "$backup" "$volume" || [ "$(volume_digest "$volume")" != "$before" ]; then
+        echo -e "${C_RED}[!] Ошибка на этапе пересоздания. Данные целы во временном томе ${C_BOLD}${backup}${C_RESET}${C_RED} — не удаляйте его.${C_RESET}"
+        echo -e "    Восстановление: docker run --rm -v ${backup}:/from -v ${volume}:/to ${image} sh -c 'cp -a /from/. /to/'"
+        return 1
+    fi
+    after="$(volume_digest "$volume")"
+    docker volume rm "$backup" >/dev/null || true
+    apply_changes || return 1
+    rc=0
+    volume_label_state "$volume" || rc=$?
+    if [ "$rc" -eq 0 ]; then
+        echo -e "${C_GREEN}[✓] Том пересоздан с метками Compose, данные на месте (${after% *} файлов). Предупреждение больше не появится.${C_RESET}"
+    else
+        echo -e "${C_YELLOW}[!] Данные на месте, но метки у тома так и не появились — проверьте версию Docker Compose.${C_RESET}"
+        return 1
     fi
 }
 
@@ -388,9 +468,11 @@ compose_in() {
         echo -e "${C_RED}[!] Docker Compose не найден.${C_RESET}"
         return 1
     fi
-    # Предупреждение о томе без меток Compose повторяет при каждом вызове;
-    # о нём один раз сообщает `geoserver status` (check_volume_labels)
-    (cd "$dir" && $compose_cmd "$@") 2> >(grep -vE "$COMPOSE_NOISE_RE" >&2 || true)
+    # stderr не перенаправлять: Compose определяет по нему терминал. Через пайп
+    # он переключается на «сырой» вывод (каждый слой образа отдельной строкой)
+    # и меняет формат предупреждений. Причину предупреждения о томе без меток
+    # устраняет `geoserver repair-volume`, а не фильтр.
+    (cd "$dir" && $compose_cmd "$@")
 }
 
 # `up -d` возвращает 0, даже если контейнер сразу падает (например, из-за
@@ -818,6 +900,7 @@ cmd_help() {
     echo "  update-script          Обновить этот скрипт"
     echo "  update-all             Обновить скрипт, затем образ"
     echo "  cli [...]              Прямой вызов python -m app.cli"
+    echo "  repair-volume          Пересоздать том данных с метками Compose (убирает WARN о томе)"
     echo "  install                Повторно запустить мастер установки"
     echo "  uninstall              Удалить сервис"
     echo ""
@@ -958,6 +1041,7 @@ main() {
                 *) echo -e "${C_RED}Неизвестный раздел: $1${C_RESET}"; cmd_help; return 1 ;;
             esac
             ;;
+        repair-volume)               cmd_repair_volume ;;
         uninstall)                   cmd_uninstall ;;
         install|setup)               wizard_install ;;
         help|-h|--help)              cmd_help ;;
