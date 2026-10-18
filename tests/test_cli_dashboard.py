@@ -111,13 +111,49 @@ def test_pick_binds_selected_squads_and_syncs(squads, monkeypatch):
     sync.assert_called_once()
 
 
-def test_pick_skip_and_bad_number_change_nothing(squads, monkeypatch):
+def test_pick_skip_and_bad_number_change_nothing(squads, monkeypatch, capsys):
     remote = [{"uuid": UUID_A, "name": "Main"}]
-    for answer in ("", "5"):
-        feed(monkeypatch, answer)
+    # неверный номер переспрашивается, затем Enter — пропустить
+    for answers in ([""], ["5", ""]):
+        feed(monkeypatch, *answers)
         with patch("app.cli.fetch_external_squads", return_value=remote):
             assert cmd_squads_pick(squads) == 2
+    assert "Нет сквада с номером 5" in capsys.readouterr().out
     assert squads.list_squads() == []
+
+
+def test_pick_rule_first_then_squads_in_rounds(squads, monkeypatch, capsys):
+    """Сначала правило, потом его сквады; второй заход — другое правило другим сквадам."""
+    remote = [{"uuid": UUID_A, "name": "Main"}, {"uuid": UUID_B, "name": "VIP"}]
+    monkeypatch.setattr(Config, "get_display_rules", classmethod(lambda cls, **kw: ["HAPP.JSON", "WHITELIST.JSON"]))
+    # правило 1 → сквад 1, ещё? y → правило 2 → сквад 2, ещё? Enter
+    feed(monkeypatch, "1", "1", "y", "2", "2", "")
+    with patch("app.cli.fetch_external_squads", return_value=remote), \
+            patch.object(SquadManager, "sync_squads_to_remnawave", return_value=True) as sync:
+        assert cmd_squads_pick(squads) == 0
+    rules = {s["uuid"]: s["rule"] for s in squads.list_squads()}
+    assert rules == {UUID_A: "HAPP.JSON", UUID_B: "WHITELIST.JSON"}
+    sync.assert_called_once()
+    out = capsys.readouterr().out
+    assert out.count("Какое правило выдать?") == 2
+
+
+def test_pick_ctrl_c_after_first_round_keeps_and_applies(squads, monkeypatch):
+    remote = [{"uuid": UUID_A, "name": "Main"}]
+    queue = ["1", "1"]  # правило 1, сквад 1, затем Ctrl+C на вопросе «ещё?»
+
+    def fake_input(prompt=""):
+        if not queue:
+            raise KeyboardInterrupt
+        return queue.pop(0)
+
+    monkeypatch.setattr(builtins, "input", fake_input)
+    monkeypatch.setattr(Config, "get_display_rules", classmethod(lambda cls, **kw: ["HAPP.JSON", "WHITELIST.JSON"]))
+    with patch("app.cli.fetch_external_squads", return_value=remote), \
+            patch.object(SquadManager, "sync_squads_to_remnawave", return_value=True) as sync:
+        assert cmd_squads_pick(squads) == 0
+    assert [s["uuid"] for s in squads.list_squads()] == [UUID_A]
+    sync.assert_called_once()
 
 
 def test_pick_without_api_connection(squads, capsys):

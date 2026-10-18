@@ -590,7 +590,7 @@ def cmd_squads_pick(manager: Optional[SquadManager] = None) -> int:
 
     0 — привязки изменены, 2 — ничего не изменено, 1 — ошибка (нет связи с API).
     """
-    from app.ui import Cancelled, ask
+    from app.ui import Cancelled, ask, confirm
 
     mgr = manager or SquadManager()
     c = Colors(supports_color())
@@ -608,39 +608,58 @@ def cmd_squads_pick(manager: Optional[SquadManager] = None) -> int:
         print(f"{c.YELLOW}В панели нет внешних сквадов. Создайте их: Сквады → Внешние сквады.{c.RESET}")
         return 2
 
-    bound = {s["uuid"]: s for s in mgr.list_squads()}
-    print(f"\n{c.BOLD}Внешние сквады панели:{c.RESET}")
-    for i, sq in enumerate(squads, 1):
-        mark = f"  {c.GREEN}→ {bound[sq['uuid']]['rule']}{c.RESET}" if sq["uuid"] in bound else ""
-        print(f"  {i}) {sq['name'] or 'Без имени'} {c.GRAY}({sq['uuid'][:8]}…){c.RESET}{mark}")
+    def show_squads() -> None:
+        bound = {s["uuid"]: s for s in mgr.list_squads()}
+        print(f"\n{c.BOLD}Внешние сквады панели:{c.RESET}")
+        for i, sq in enumerate(squads, 1):
+            mark = f"  {c.GREEN}→ {bound[sq['uuid']]['rule']}{c.RESET}" if sq["uuid"] in bound else ""
+            print(f"  {i}) {sq['name'] or 'Без имени'} {c.GRAY}({sq['uuid'][:8]}…){c.RESET}{mark}")
 
-    rules = [r for r in Config.get_display_rules(client="HAPP")]
+    # Сначала правило, затем сквады для него: так ясно, что именно получит
+    # каждый сквад, и разным сквадам можно выдать разные правила за один заход
+    rules = [r for r in Config.get_display_rules(client="HAPP")] or ["HAPP.JSON"]
+    hint = "1" if len(squads) == 1 else "1,2"
+    changed = False
     try:
-        hint = "1" if len(squads) == 1 else "1,3"
-        picked = ask(f"\nКаким сквадам выдавать правила? Номера через запятую [например {hint}, Enter = пропустить]: ")
-        if not picked:
-            print("Сквады не изменены. Привязать позже: geoserver → 5.")
-            return 2
-        indexes = []
-        for part in picked.replace(" ", "").split(","):
-            if not part.isdigit() or not 1 <= int(part) <= len(squads):
-                print(f"{c.RED}Нет сквада с номером {part}.{c.RESET}")
-                return 2
-            indexes.append(int(part) - 1)
-        rule = rules[0] if rules else "HAPP.JSON"
-        if len(rules) > 1:
-            print("Какое правило выдавать выбранным сквадам?")
-            for i, r in enumerate(rules, 1):
-                print(f"  {i}) {r.removesuffix('.JSON')}")
-            answer = ask(f"Выберите [1-{len(rules)}, Enter = 1]: ", "1")
-            if answer.isdigit() and 1 <= int(answer) <= len(rules):
-                rule = rules[int(answer) - 1]
+        while True:
+            show_squads()
+            rule = rules[0]
+            if len(rules) > 1:
+                print("\nКакое правило выдать?")
+                for i, r in enumerate(rules, 1):
+                    print(f"  {i}) {r.removesuffix('.JSON')}")
+                while True:
+                    answer = ask(f"Выберите [1-{len(rules)}, Enter = 1]: ", "1")
+                    if answer.isdigit() and 1 <= int(answer) <= len(rules):
+                        rule = rules[int(answer) - 1]
+                        break
+                    print(f"{c.RED}Нет правила с номером {answer}.{c.RESET}")
+            else:
+                print(f"\nПравило: {c.BOLD}{rule.removesuffix('.JSON')}{c.RESET}")
+
+            label = rule.removesuffix(".JSON")
+            while True:
+                picked = ask(f"Каким сквадам выдавать «{label}»? Номера через запятую"
+                             f" [например {hint}, Enter = пропустить]: ")
+                parts = [p for p in picked.replace(" ", "").split(",") if p]
+                bad = [p for p in parts if not p.isdigit() or not 1 <= int(p) <= len(squads)]
+                if not bad:
+                    break
+                print(f"{c.RED}Нет сквада с номером {', '.join(bad)}.{c.RESET}")
+            for i in dict.fromkeys(int(p) - 1 for p in parts):
+                sq = squads[i]
+                mgr.add_squad(uuid=sq["uuid"], rule=rule, name=sq["name"] or None)
+                print(f"{c.GREEN}[✓] {sq['name'] or sq['uuid']} → {label}{c.RESET}")
+                changed = True
+
+            if len(rules) < 2 or not confirm("\nНазначить другое правило другим сквадам? [y/N]: "):
+                break
     except Cancelled:
+        pass
+
+    if not changed:
+        print("Сквады не изменены. Привязать позже: geoserver → 5.")
         return 2
-    for i in indexes:
-        sq = squads[i]
-        mgr.add_squad(uuid=sq["uuid"], rule=rule, name=sq["name"] or None)
-        print(f"{c.GREEN}[✓] {sq['name'] or sq['uuid']} → {rule}{c.RESET}")
     print("Применяю привязки в панели…")
     if not mgr.sync_squads_to_remnawave():
         print(f"{c.YELLOW}[!] Привязки сохранены, но панель их пока не приняла — повторится при следующей синхронизации.{c.RESET}")
