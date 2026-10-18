@@ -40,10 +40,11 @@ env_get() { grep -m1 "^$1=" "$HOME/geo/.env" | cut -d= -f2-; }
 blank() { for _ in $(seq 1 12); do echo; done; }
 : > "$STUB_LOG"
 
-echo "== Первая установка: '/opt' отклонён, '~/geo' раскрыт, ответы по умолчанию"
+echo "== Первая установка: '/opt' отклонён, '~/geo' раскрыт, домен обязателен, остальное по умолчанию"
 # Буквальная '~' намеренно: install.sh должен раскрыть её сам
 # shellcheck disable=SC2088
-out="$({ echo /opt; echo "~/geo"; blank; } | bash "$INSTALL" install 2>&1)"; rc=$?
+# каталог: /opt, ~/geo; режим и пресет — Enter; домен: пусто (переспросит), geo.test; дальше Enter
+out="$({ echo /opt; echo "~/geo"; echo; echo; echo; echo geo.test; blank; } | bash "$INSTALL" install 2>&1)"; rc=$?
 check "установка завершилась успешно" [ "$rc" -eq 0 ]
 check "/opt отклонён" grep -q "установка туда запрещена" <<<"$out"
 check "каталог записан абсолютным путём" [ "$(cat /etc/geo-routing-server.conf)" = "$HOME/geo" ]
@@ -55,7 +56,13 @@ check "install.sh сохранён с правами 755" [ "$(stat -c %a "$HOME
 check "команда geoserver установлена" grep -q "$HOME/geo/install.sh" /usr/local/bin/geoserver
 check "контейнер запущен через compose up -d" grep -q "^docker compose up -d$" "$STUB_LOG"
 check "мастер получил список сетей хоста" grep -q "GRS_HOST_NETWORKS=bridge,host,none,remnawave-network" "$STUB_LOG"
-check "после установки показаны ссылки" grep -q "geo.example.com" <<<"$out"
+check "пустой домен не принят" grep -q "Нужен домен" <<<"$out"
+check "шаг 1 — каталог (install.sh)" grep -q "Шаг 1. 📁" <<<"$out"
+check "шаг 2 — режим (мастер в образе)" grep -q "Шаг 2. 🎯" <<<"$out"
+check "дождались первой синхронизации" grep -q "wait-sync" "$STUB_LOG"
+check "без Remnawave выбор сквадов не предлагается" bash -c "! grep -q 'squads pick' '$STUB_LOG'"
+check "после установки показаны ссылки" grep -q "geo.test" <<<"$out"
+check "итог установки показан" grep -q "установлен и работает" <<<"$out"
 TOKEN="$(env_get ROUTING_TOKEN)"
 
 echo "== config set: проверка значения и применение"
@@ -78,7 +85,8 @@ check "расписание сохранено" [ "$(env_get SCHEDULE)" = "30 4 
 check "изменение применено" grep -q "^docker compose up -d$" <(calls_since "$n")
 
 echo "== Раздел меню: Remnawave пишет сеть в compose.yaml"
-printf '1\n\njwt-token\nremnawave-network\n0\n' | bash "$INSTALL" config remnawave >/dev/null 2>&1
+# подключить → сеть «remnawave-network» найдена и предложена первой (Enter) → адрес API (Enter) → токен
+printf '1\n\n\njwt-token\n0\n' | bash "$INSTALL" config remnawave >/dev/null 2>&1
 check "токен Remnawave сохранён" [ "$(env_get REMNAWAVE_TOKEN)" = "jwt-token" ]
 check "сеть добавлена в compose.yaml" grep -q 'name: "remnawave-network"' "$HOME/geo/compose.yaml"
 check "прежний compose.yaml сохранён" bash -c "ls '$HOME/geo'/compose.yaml.bak.* >/dev/null 2>&1"
@@ -162,8 +170,13 @@ check "без тома — код 1" [ "$rc" -eq 1 ]
 rm -rf "$STUB_STATE/vol"
 
 echo "== Повторный запуск мастера сохраняет ответы"
+n=$(log_len)
 { echo; blank; } | bash "$INSTALL" install >/dev/null 2>&1
 check "токен не изменился" [ "$(env_get ROUTING_TOKEN)" = "$TOKEN" ]
+check "с Remnawave после синхронизации предложен выбор сквадов" grep -q "squads pick" <(calls_since "$n")
+n=$(log_len)
+{ echo; blank; } | STUB_SYNC_RC=2 bash "$INSTALL" install >/dev/null 2>&1
+check "без готовой синхронизации выбор сквадов не запускается" bash -c "! grep -q 'squads pick' <(tail -n +$((n + 1)) '$STUB_LOG')"
 check "сеть Remnawave сохранилась" [ "$(env_get DOCKER_NETWORK)" = "remnawave-network" ]
 check "резервная копия .env" bash -c "ls '$HOME/geo'/.env.bak.* >/dev/null 2>&1"
 

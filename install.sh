@@ -25,7 +25,7 @@ DOCKER_IMAGE="${IMAGE_REPO}:latest"
 INSTALL_SCRIPT_URL="https://raw.githubusercontent.com/xdeptu5/geo-routing-server/main/install.sh"
 SERVICE="geo-routing-server"
 # Минимальная версия контракта CLI в образе, которая нужна этому скрипту
-REQUIRED_CLI_API=2
+REQUIRED_CLI_API=3
 APPLY_RC=100
 # 1 — install.sh на диске новее кода этой сессии (см. reopen_if_script_replaced)
 SCRIPT_REPLACED=0
@@ -291,7 +291,12 @@ host_facts_args() {
         printf '%s\n' "-e" "GRS_HOST_NETWORKS=$(printf '%s' "$nets" | paste -sd, -)"
     fi
     if command -v ss >/dev/null 2>&1; then
-        ports="$(ss -tlnH 2>/dev/null | awk '{print $4}' | sed -E 's/.*:([0-9]+)$/\1/' | sort -u | paste -sd, -)"
+        # Порт, который уже слушает наш контейнер, занятым не считается:
+        # иначе повторный запуск мастера предлагал бы сменить рабочий порт
+        local own
+        own="$(docker port "$SERVICE" 80/tcp </dev/null 2>/dev/null | sed -nE 's/.*:([0-9]+)$/\1/p' | head -n 1)"
+        ports="$(ss -tlnH 2>/dev/null | awk '{print $4}' | sed -E 's/.*:([0-9]+)$/\1/' | sort -u \
+            | grep -vx "${own:-none}" | paste -sd, -)"
         printf '%s\n' "-e" "GRS_HOST_PORTS=${ports}"
     fi
 }
@@ -779,11 +784,11 @@ menu_updates() {
         echo -e "  Скрипт:  v${SCRIPT_VERSION}"
         echo -e "  Образ:   $(current_image_tag)${running_version:+ (работает версия ${running_version})}"
         echo ""
-        echo "   1) Обновить всё (скрипт управления, затем Docker-образ)"
-        echo "   2) Обновить только Docker-образ"
-        echo "   3) Обновить только скрипт управления"
-        echo "   4) Закрепить или откатить версию образа"
-        echo "   0) Назад"
+        echo "   1) 🚀 Обновить всё (скрипт управления, затем Docker-образ)"
+        echo "   2) 🐳 Обновить только Docker-образ"
+        echo "   3) 📜 Обновить только скрипт управления"
+        echo "   4) 📌 Закрепить или откатить версию образа"
+        echo "   0) 🔙 Назад"
         echo ""
         read -r -p "Выберите действие [0-4]: " choice || return 0
         case "$choice" in
@@ -891,7 +896,7 @@ cmd_help() {
     echo "  config <раздел>        Раздел настроек: clients, schedule, telegram, remnawave"
     echo "  config set KEY VALUE   Изменить один параметр (с проверкой) и применить"
     echo "  config get KEY         Показать значение параметра"
-    echo "  squads [...]           Сквады Remnawave (list, add, remove, sync, migrate)"
+    echo "  squads [...]           Сквады Remnawave (pick, list, add, remove, sync, migrate)"
     echo "  proxy                  Готовые конфиги Caddy и Nginx"
     echo "  restart                Пересоздать контейнер с текущими настройками"
     echo "  start / stop           Запуск / остановка"
@@ -911,13 +916,63 @@ cmd_help() {
 # Установка
 # ------------------------------------------------------------------------------
 
+step_title() {
+    echo -e "\n${C_CYAN}${C_BOLD}$1${C_RESET}"
+    [ -n "${2:-}" ] && echo -e "${C_GRAY}$2${C_RESET}"
+    return 0
+}
+
+# Значение ключа из .env установки (последнее вхождение, без кавычек)
+env_value() {
+    local file
+    file="$(get_install_dir)/.env"
+    [ -r "$file" ] || return 0
+    sed -n "s/^$1=//p" "$file" | tail -n 1 | tr -d '\r' | sed -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'$/\1/"
+}
+
+# Раздаёт ли сервер файлы клиентам (нет — режим «только сквады Remnawave»)
+serves_files() {
+    local module clients
+    clients="$(env_value ENABLED_CLIENTS | tr -d ' ' | tr '[:lower:]' '[:upper:]')"
+    [ -z "$clients" ] && return 0
+    for module in ${clients//,/ }; do
+        case "$module" in
+            HAPP_DEEPLINK|HAPP_LOCAL) ;;
+            *) return 0 ;;
+        esac
+    done
+    return 1
+}
+
+# Ждёт первую синхронизацию после запуска: 0 — успех, 1 — с ошибками, 2 — не дождались
+wait_first_sync() {
+    local since="$1"
+    if [ "$(env_value SYNC_ON_START | tr '[:upper:]' '[:lower:]')" = "false" ]; then
+        return 2
+    fi
+    compose_in exec -T "$SERVICE" python3 -m app.cli wait-sync --since "$since" --timeout 240 </dev/null
+}
+
+# Привязка сквадов выбором из списка панели. После изменений — полная
+# синхронизация: она обновляет сводку `status` и заголовки сквадов в панели.
+cmd_squads_pick() {
+    local rc=0
+    cli_stack squads pick || rc=$?
+    if [ "$rc" -eq 0 ] && is_container_running; then
+        cmd_sync || true
+    fi
+    return "$rc"
+}
+
 wizard_install() {
     print_banner
     check_root
+    step_title "🔍 Проверка системы"
     check_dependencies
+    echo -e "${C_GREEN}[✓] Docker и Docker Compose готовы.${C_RESET}"
 
-    echo -e "${C_WHITE}${C_BOLD}Первоначальная настройка${C_RESET}\n"
-    echo -e "${C_CYAN}Каталог установки${C_RESET}"
+    step_title "Шаг 1. 📁 Где хранить файлы сервиса?" \
+        "Здесь будут .env и compose.yaml. Обычно менять не нужно — просто нажмите Enter."
     local install_dir
     install_dir="$(ask_install_dir "$(get_install_dir)")"
     mkdir -p "$install_dir"
@@ -926,15 +981,16 @@ wizard_install() {
     if [ -n "${GRS_IMAGE:-}" ] && docker image inspect "$IMAGE" >/dev/null 2>&1; then
         echo -e "${C_GRAY}[i] Используется локальный образ ${IMAGE}${C_RESET}"
     else
-        echo -e "\n${C_YELLOW}[*] Загрузка образа ${IMAGE}...${C_RESET}"
-        if ! docker pull "$IMAGE"; then
+        echo -e "${C_YELLOW}📥 Загрузка образа ${IMAGE}…${C_RESET}"
+        if ! docker pull -q "$IMAGE" >/dev/null; then
             echo -e "${C_RED}[!] Не удалось загрузить образ (см. ошибку выше).${C_RESET}"
             return 1
         fi
+        echo -e "${C_GREEN}[✓] Образ загружен.${C_RESET}"
     fi
 
-    # Вопросы мастера, проверка ответов, .env и compose.yaml — в CLI образа
-    if ! cli_image "$install_dir" setup --host-dir /host --image "$IMAGE"; then
+    # Остальные вопросы, проверка ответов, .env и compose.yaml — в CLI образа
+    if ! cli_image "$install_dir" setup --host-dir /host --image "$IMAGE" --first-step 2; then
         echo -e "${C_RED}[!] Установка прервана: настройки не сохранены.${C_RESET}"
         return 1
     fi
@@ -944,61 +1000,117 @@ wizard_install() {
         echo -e "      ${C_YELLOW}[!] Команда geoserver не создана.${C_RESET}"
     fi
 
-    echo -e "\n${C_YELLOW}[*] Запуск сервиса...${C_RESET}"
+    step_title "🚀 Запуск сервиса"
+    local since
+    since="$(date +%s)"
     if ! apply_changes; then
         echo -e "${C_YELLOW}Проверьте настройки (geoserver config) и запустите установку заново.${C_RESET}"
         return 1
     fi
 
-    echo -e "\n${C_GREEN}${C_BOLD}  Geo Routing Server установлен и запущен.${C_RESET}\n"
-    cli_read status </dev/null || true
+    step_title "⏳ Первая синхронизация" "Скачиваю правила и гео-базы — обычно это занимает до минуты."
+    local sync_rc=0
+    wait_first_sync "$since" || sync_rc=$?
+    case "$sync_rc" in
+        0) echo -e "${C_GREEN}[✓] Правила и гео-базы готовы.${C_RESET}" ;;
+        1) echo -e "${C_YELLOW}[!] Синхронизация прошла с ошибками — подробности: geoserver logs${C_RESET}" ;;
+        *) echo -e "${C_GRAY}[i] Синхронизация ещё идёт в фоне; результат: geoserver status${C_RESET}" ;;
+    esac
+
+    if [ -n "$(env_value REMNAWAVE_TOKEN)" ] && [ "$sync_rc" -ne 2 ]; then
+        step_title "👥 Сквады Remnawave" \
+            "Выберите внешние сквады панели, которым сервис будет обновлять правила Happ."
+        cmd_squads_pick || true
+    fi
+
+    install_summary
+}
+
+# Итог установки: что получилось и что осталось сделать — по режиму
+install_summary() {
     echo ""
-    cli_read proxy </dev/null || true
-    echo -e "${C_CYAN}Для управления сервером используйте команду: ${C_BOLD}geoserver${C_RESET}\n"
+    hr 54
+    echo -e "${C_GREEN}${C_BOLD}  🎉 Geo Routing Server установлен и работает${C_RESET}"
+    hr 54
+    if serves_files; then
+        cli_read status </dev/null || true
+        step_title "🌐 Осталось: открыть доступ по HTTPS" \
+            "Добавьте этот блок в конфиг Caddy или Nginx на сервере — сервис слушает только 127.0.0.1."
+        cli_read proxy </dev/null || true
+    else
+        echo -e "  Сервер не раздаёт файлы: он обновляет правила Happ в сквадах Remnawave"
+        echo -e "  по расписанию. Сквады и правила: ${C_BOLD}geoserver${C_RESET} → 5."
+    fi
+    echo -e "\n${C_CYAN}🧭 Управление сервером: ${C_BOLD}geoserver${C_RESET}\n"
 }
 
 # ------------------------------------------------------------------------------
 # Главное меню
 # ------------------------------------------------------------------------------
 
+menu_item() {
+    printf '  %3s) %s\n' "$1" "$2"
+}
+
+# Раскладка меню зафиксирована с 1.7.3 — номера и названия пунктов не меняются:
+# их запоминают и на них ссылаются подсказки («geoserver → 5») и README.
+# Новый пункт получает следующий свободный номер (14, 15, …), убранный
+# оставляет пропуск, а пункт, ненужный в текущем режиме, скрывается, и его
+# номер не переходит к другому. Группы — только заголовки над номерами.
 main_menu() {
     while true; do
         print_banner
-        echo -e "  ${C_WHITE}Каталог:${C_RESET} $(get_install_dir)"
-        echo -e "  ${C_WHITE}Статус:${C_RESET}  $(get_container_status)"
+        local serves=0 running=0
+        serves_files && serves=1
+        is_container_running && running=1
+        echo -e "  📁 $(get_install_dir)   $(get_container_status)"
         hr 54
-        echo ""
-        echo "  1) Статус и ссылки для клиентов"
-        echo "  2) Синхронизировать сейчас"
-        echo "  3) Логи контейнера"
-        echo "  4) Remnawave и сквады"
-        echo "  5) Расписание синхронизации"
-        echo "  6) Telegram-уведомления"
-        echo "  7) Клиенты, источник правил, гео-базы"
-        echo "  8) Конфиги Caddy / Nginx"
-        echo "  9) Центр обновлений"
-        echo " 10) Перезапустить контейнер"
-        if is_container_running; then
-            echo " 11) Остановить контейнер"
+        if [ "$running" -eq 1 ]; then
+            cli_read dashboard </dev/null 2>/dev/null || true
         else
-            echo " 11) Запустить контейнер"
+            echo -e "  ${C_YELLOW}💡 Сервис остановлен — запустить: пункт 11${C_RESET}"
         fi
-        echo " 12) Редактировать .env"
-        echo " 13) Удалить сервис"
-        echo "  0) Выход"
+        hr 54
+
+        echo -e "  ${C_GRAY}Работа${C_RESET}"
+        if [ "$serves" -eq 1 ]; then
+            menu_item 1 "📊 Статус и ссылки для клиентов"
+        else
+            menu_item 1 "📊 Статус и сквады"
+        fi
+        menu_item 2 "🔄 Синхронизировать сейчас"
+        menu_item 3 "📜 Логи контейнера"
+        echo -e "\n  ${C_GRAY}Настройки${C_RESET}"
+        menu_item 4 "🧩 Режим, источник правил, гео-базы"
+        menu_item 5 "🔗 Remnawave и сквады"
+        menu_item 6 "⏰ Расписание синхронизации"
+        menu_item 7 "📨 Telegram-уведомления"
+        [ "$serves" -eq 1 ] && menu_item 8 "📋 Конфиги Caddy / Nginx"
+        echo -e "\n  ${C_GRAY}Обслуживание${C_RESET}"
+        menu_item 9 "📦 Центр обновлений"
+        menu_item 10 "🔁 Перезапустить контейнер"
+        if [ "$running" -eq 1 ]; then
+            menu_item 11 "🛑 Остановить контейнер"
+        else
+            menu_item 11 "🚀 Запустить контейнер"
+        fi
+        menu_item 12 "📝 Редактировать .env"
+        menu_item 13 "❌ Удалить сервис"
+        echo ""
+        menu_item 0 "🚪 Выход"
         echo ""
         local choice=""
-        read -r -p "  Выберите действие [0-13]: " choice || exit 0
+        read -r -p "  Выберите пункт: " choice || exit 0
 
         case "$choice" in
             1) cmd_status || true; pause ;;
             2) cmd_sync || true; pause ;;
             3) cmd_logs ;;
-            4) config_section remnawave ;;
-            5) config_section schedule ;;
-            6) config_section telegram ;;
-            7) config_section clients ;;
-            8) cli_read proxy </dev/null || true; pause ;;
+            4) config_section clients ;;
+            5) config_section remnawave ;;
+            6) config_section schedule ;;
+            7) config_section telegram ;;
+            8) if [ "$serves" -eq 1 ]; then cli_read proxy </dev/null || true; pause; fi ;;
             9) menu_updates ;;
             10) cmd_restart || true; pause ;;
             11)
@@ -1031,7 +1143,9 @@ main() {
         update-script|self-update)   cmd_update_script ;;
         update-all)                  cmd_update_script && bash "$(get_install_dir)/install.sh" update-image ;;
         proxy)                       cli_read proxy </dev/null ;;
-        squads)                      cli_stack squads "$@" ;;
+        squads)
+            if [ "${1:-}" = "pick" ]; then cmd_squads_pick; else cli_stack squads "$@"; fi
+            ;;
         cli)                         cli_stack "$@" ;;
         config|edit)
             case "${1:-}" in

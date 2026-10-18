@@ -46,10 +46,10 @@ def read_env(host):
 # ------------------------------------------------------------------------------
 
 def test_fresh_install_with_defaults(tmp_path, answers):
-    answers("", "", "", "", "", "")  # домен, токен, клиенты, пресет, порт, Remnawave
+    answers("", "", "geo.test", "", "", "")  # режим, пресет, домен, порт, Remnawave, сохранить
     assert run_setup(tmp_path, "img:test") == 0
     env = read_env(tmp_path)
-    assert env.get("DOMAIN") == "geo.example.com"
+    assert env.get("DOMAIN") == "geo.test"
     assert len(env.get("ROUTING_TOKEN")) == 32
     assert env.get("ENABLED_CLIENTS") == "HAPP,INCY"
     assert env.get("ROUTING_SOURCE_PRESET") == "geogaga"
@@ -60,11 +60,10 @@ def test_fresh_install_with_defaults(tmp_path, answers):
 
 
 def test_invalid_answers_are_asked_again(tmp_path, answers):
-    answers("bad domain", "geo.test", "abc", "goodtoken", "9", "2", "2", "99999", "8443", "")
+    answers("9", "2", "2", "bad domain", "geo.test", "99999", "8443", "", "")
     assert run_setup(tmp_path, "img") == 0
     env = read_env(tmp_path)
     assert env.get("DOMAIN") == "geo.test"
-    assert env.get("ROUTING_TOKEN") == "goodtoken"
     assert env.get("ENABLED_CLIENTS") == "HAPP"
     assert env.get("ROUTING_SOURCE_PRESET") == "hydraponique"
     assert env.get("ROUTING_RULES") == "JSONSUB,WHITELIST"
@@ -104,7 +103,7 @@ def test_rerun_keeps_previous_values_and_backs_up(tmp_path, answers):
 
 def test_placeholder_token_is_replaced(tmp_path, answers):
     (tmp_path / ".env").write_text("ROUTING_TOKEN=change_me_to_random_secret_token\n", encoding="utf-8")
-    answers("", "", "", "", "", "")
+    answers("", "", "geo.test", "", "", "")
     assert run_setup(tmp_path, "img") == 0
     token = read_env(tmp_path).get("ROUTING_TOKEN")
     assert token != "change_me_to_random_secret_token" and len(token) == 32
@@ -112,12 +111,57 @@ def test_placeholder_token_is_replaced(tmp_path, answers):
 
 def test_setup_with_remnawave_and_unknown_network(tmp_path, answers, monkeypatch, capsys):
     monkeypatch.setenv("GRS_HOST_NETWORKS", "bridge,host")
-    answers("", "", "", "", "", "y", "https://panel.example.com", "jwt-token", "remnawave-network")
+    # режим, пресет, домен, порт, подключить, «сеть вручную», сеть, адрес API, токен, сохранить
+    answers("", "", "geo.test", "", "y", "1", "remnawave-network", "", "jwt-token", "")
     assert run_setup(tmp_path, "img") == 0
     env = read_env(tmp_path)
-    assert env.get("REMNAWAVE_BASE_URL") == "https://panel.example.com/api"
+    assert env.get("REMNAWAVE_BASE_URL") == "http://remnawave:3000/api"
     assert env.get("DOCKER_NETWORK") == "remnawave-network"
     assert "не найдена в Docker" in capsys.readouterr().out
+
+
+def test_rules_only_mode_skips_domain_and_port(tmp_path, answers, monkeypatch, capsys):
+    monkeypatch.setenv("GRS_HOST_NETWORKS", "bridge,remnawave-network")
+    # режим «только сквады», пресет, гео-базы из GitHub, сеть remnawave-network, адрес API, токен, сохранить
+    answers("4", "", "", "", "", "jwt-token", "")
+    assert run_setup(tmp_path, "img") == 0
+    out = capsys.readouterr().out
+    assert "Домен" not in out and "Локальный порт" not in out
+    env = read_env(tmp_path)
+    assert env.get("ENABLED_CLIENTS") == "HAPP_DEEPLINK"
+    assert env.get("DOMAIN") == "" and env.get("HTTP_PORT") == ""
+    assert env.get("DOCKER_NETWORK") == "remnawave-network"
+    compose = yaml.safe_load((tmp_path / "compose.yaml").read_text(encoding="utf-8"))
+    assert "ports" not in compose["services"]["geo-routing-server"]
+
+
+def test_rules_only_mode_requires_token(tmp_path, answers, capsys):
+    # другой сервер по HTTPS; пустой токен не принимается
+    answers("4", "", "", "2", "panel.example.com", "", "jwt", "")
+    assert run_setup(tmp_path, "img") == 0
+    assert "Без токена" in capsys.readouterr().out
+    assert read_env(tmp_path).get("REMNAWAVE_TOKEN") == "jwt"
+
+
+def test_busy_port_is_not_default(tmp_path, answers, monkeypatch):
+    monkeypatch.setenv("GRS_HOST_PORTS", "22,8080,8081")
+    answers("", "", "geo.test", "", "", "")
+    assert run_setup(tmp_path, "img") == 0
+    assert read_env(tmp_path).get("HTTP_PORT") == "8082"
+
+
+def test_summary_no_asks_again_with_previous_answers(tmp_path, answers):
+    # первый проход: домен geo.one и «n»; во втором Enter везде оставляет geo.one
+    answers("", "", "geo.one", "", "", "n", "", "", "", "", "", "")
+    assert run_setup(tmp_path, "img") == 0
+    assert read_env(tmp_path).get("DOMAIN") == "geo.one"
+
+
+def test_first_step_offsets_numbering(tmp_path, answers, capsys):
+    answers("", "", "geo.test", "", "", "")
+    assert run_setup(tmp_path, "img", first_step=2) == 0
+    out = capsys.readouterr().out
+    assert "Шаг 2." in out and "Шаг 1." not in out
 
 
 def test_cancel_leaves_files_untouched(tmp_path, monkeypatch):
@@ -211,7 +255,7 @@ def test_telegram_configure_test_and_disable(installed, answers, monkeypatch):
 
 
 def test_remnawave_connect_writes_network_into_compose(installed, answers):
-    answers("1", "", "jwt-token", "remnawave-network")
+    answers("1", "", "remnawave-network", "", "jwt-token")  # подключить, сеть вручную, сеть, API, токен
     assert run_section("remnawave", installed, "img") == APPLY
     env = read_env(installed)
     assert env.get("REMNAWAVE_BASE_URL") == "http://remnawave:3000/api"
@@ -221,7 +265,7 @@ def test_remnawave_connect_writes_network_into_compose(installed, answers):
 
 
 def test_remnawave_connect_without_token_saves_nothing(installed, answers):
-    answers("1", "", "", "", "0")
+    answers("1", "", "net", "", "", "0")
     assert run_section("remnawave", installed) == 0
     assert read_env(installed).get("REMNAWAVE_BASE_URL") == ""
 

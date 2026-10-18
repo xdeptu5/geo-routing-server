@@ -39,12 +39,17 @@ from app.validators import (
 
 APPLY = 100
 
-CLIENT_CHOICES: List[Tuple[str, str]] = [
-    ("HAPP,INCY", "Happ и Incy (рекомендуется)"),
-    ("HAPP", "Только Happ"),
-    ("INCY", "Только Incy"),
-    ("HAPP_DEEPLINK", "Только обновление сквадов Remnawave (базы на внешнем узле)"),
+# Режимы работы мастера: (ENABLED_CLIENTS, название, пояснение)
+MODE_CHOICES: List[Tuple[str, str, str]] = [
+    ("HAPP,INCY", "Раздавать правила и гео-базы для Happ и Incy (рекомендуется)",
+     "клиенты получают файлы по HTTPS с вашего домена; Remnawave можно подключить дополнительно"),
+    ("HAPP", "Раздавать только для Happ", "то же, без файлов Incy"),
+    ("INCY", "Раздавать только для Incy", "то же, без файлов Happ"),
+    ("HAPP_DEEPLINK", "Только обновлять правила Happ в сквадах Remnawave",
+     "домен, порт и HTTPS не нужны: правила попадают к пользователям через подписку панели"),
 ]
+# Для раздела «Клиенты» в меню
+CLIENT_CHOICES: List[Tuple[str, str]] = [(v, label) for v, label, _ in MODE_CHOICES]
 
 # (значение ROUTING_SOURCE_PRESET, ROUTING_RULES по умолчанию, подпись)
 PRESET_CHOICES: List[Tuple[str, str, str]] = [
@@ -112,7 +117,7 @@ def _choose(ctx: HostContext, options: List[str], default: int, allow_back: bool
     for i, label in enumerate(options, 1):
         print(f"  {i}) {label}")
     if allow_back:
-        print("  0) Назад")
+        print("  0) 🔙 Назад")
     hint = f"[1-{len(options)}, Enter = {default + 1}]" if default >= 0 else f"[0-{len(options)}]"
     while True:
         answer = ask(f"Выберите {hint}: ", str(default + 1) if default >= 0 else "")
@@ -146,154 +151,292 @@ def _check_network(ctx: HostContext, name: str) -> str:
 # Мастер установки
 # ------------------------------------------------------------------------------
 
-def run_setup(host_dir: Path, image: Optional[str] = None) -> int:
+def run_setup(host_dir: Path, image: Optional[str] = None, first_step: int = 1) -> int:
+    """Мастер установки: режим → источник правил → то, что нужно режиму → сводка."""
     ctx = HostContext(host_dir, image)
     c = ctx.c
-    env = ctx.env
-    prev = env.as_dict() if env.exists else {}
+    prev = ctx.env.as_dict() if ctx.env.exists else {}
+    print(f"{c.BOLD}🧭 Настройка Geo Routing Server{c.RESET}")
+    print(f"{c.GRAY}Несколько вопросов, в конце — сводка для проверки. Enter принимает предложенное значение,"
+          f" Ctrl+C — выход без изменений.{c.RESET}")
     try:
-        if env.exists:
-            backup = env.backup()
-            print(f"{c.GRAY}[i] Найден существующий .env — сохранена резервная копия: {backup.name}{c.RESET}")
-
-        # 1. Домен
-        print(f"\n{c.CYAN}[1/5] Публичный домен сервера{c.RESET}")
-        print(f"{c.GRAY}      Домен с HTTPS, на который клиенты будут обращаться за файлами{c.RESET}")
-        def_domain = normalize_domain(prev.get("DOMAIN", ""))
-        if not is_valid_domain(def_domain):
-            def_domain = "geo.example.com"
         while True:
-            domain = normalize_domain(ask(f"      Домен [Enter = {def_domain}]: ", def_domain))
-            if is_valid_domain(domain):
+            answers = _ask_setup(ctx, prev, first_step)
+            _print_summary(ctx, answers)
+            reply = ask("Сохранить и запустить? [Y — да, n — ответить заново]: ", "y").lower()
+            if reply in ("y", "yes", "д", "да"):
                 break
-            ctx.err(f"Некорректный домен '{domain}'. Пример: geo.example.com")
-
-        # 2. Токен
-        print(f"\n{c.CYAN}[2/5] Секретный URL-токен доступа{c.RESET}")
-        prev_token = prev.get("ROUTING_TOKEN", "")
-        if is_valid_token(prev_token):
-            def_token, prompt = prev_token, "      Токен [Enter = оставить текущий]: "
-        else:
-            def_token = generate_token()
-            prompt = f"      Токен [Enter = сгенерировать {def_token}]: "
-        while True:
-            token = ask(prompt, def_token)
-            if is_valid_token(token):
-                break
-            ctx.err("Токен: минимум 4 символа из A-Z, a-z, 0-9, '_' или '-'.")
-
-        # 3. Клиенты
-        print(f"\n{c.CYAN}[3/5] Клиенты{c.RESET}")
-        prev_clients = prev.get("ENABLED_CLIENTS", "").replace(" ", "").upper()
-        values = [v for v, _ in CLIENT_CHOICES]
-        labels = [label for _, label in CLIENT_CHOICES]
-        if prev_clients in ("", "INCY,HAPP"):
-            prev_clients = "HAPP,INCY" if prev_clients else ""
-        if prev_clients and prev_clients not in values:
-            # Нестандартная комбинация (HAPP_GEO, INCY_GEO и т.п.) — не теряем её по Enter
-            values.append(prev_clients)
-            labels.append(f"Оставить текущее значение: {prev_clients}")
-        default = values.index(prev_clients) if prev_clients in values else 0
-        clients = values[_choose(ctx, labels, default, allow_back=False)]
-
-        # 4. Источник правил
-        print(f"\n{c.CYAN}[4/5] Источник правил и гео-баз{c.RESET}")
-        prev_preset = prev.get("ROUTING_SOURCE_PRESET", "").replace(" ", "").lower()
-        preset_values = [p for p, _, _ in PRESET_CHOICES]
-        default = preset_values.index(prev_preset) if prev_preset in preset_values else 0
-        idx = _choose(ctx, [label for _, _, label in PRESET_CHOICES], default, allow_back=False)
-        preset, rules, _ = PRESET_CHOICES[idx]
-        if preset == prev_preset and prev.get("ROUTING_RULES"):
-            rules = prev["ROUTING_RULES"]
-
-        # 5. Порт
-        print(f"\n{c.CYAN}[5/5] Локальный HTTP-порт для обратного прокси{c.RESET}")
-        def_port = parse_port(prev.get("HTTP_PORT", "")) or 8080
-        while True:
-            port = parse_port(ask(f"      Порт [Enter = {def_port}]: ", str(def_port)))
-            if port:
-                break
-            ctx.err("Порт должен быть числом от 1 до 65535.")
-        if port in ctx.busy_ports and str(port) != prev.get("HTTP_PORT", ""):
-            ctx.warn(f"Порт {port} уже занят на сервере.")
-
-        # Remnawave (необязательно)
-        remna_url = normalize_remnawave_url(prev.get("REMNAWAVE_BASE_URL", ""))
-        remna_token = prev.get("REMNAWAVE_TOKEN", "")
-        network = prev.get("DOCKER_NETWORK", "")
-        has_prev = bool(remna_url and remna_token)
-        print()
-        question = (
-            "Перенастроить интеграцию с Remnawave? [y/N, Enter = оставить текущую]: "
-            if has_prev else "Настроить интеграцию с Remnawave сейчас? [y/N]: "
-        )
-        if confirm(question):
-            remna_url, remna_token, network = _ask_remnawave(ctx, remna_url, remna_token, network)
-        elif not has_prev:
-            remna_url = remna_token = ""
+            prev = {**prev, **{k: str(v) for k, v in answers.items()}}
     except Cancelled:
         print("Отмена: настройки не изменены.")
         return 1
+    _write_setup(ctx, prev, answers)
+    return 0
 
-    new = EnvFile(env.path)
+
+def _serves_files(clients: str) -> bool:
+    """Нужна ли публичная раздача файлов (домен, порт, токен) для ENABLED_CLIENTS."""
+    from app.config import Config
+
+    modules = {m.strip().upper() for m in clients.split(",") if m.strip()}
+    return bool(modules) and not modules.issubset(Config.RULES_ONLY_MODULES)
+
+
+def _free_port(start: int, busy: Set[int]) -> int:
+    port = start
+    while port in busy and port < 65535:
+        port += 1
+    return port
+
+
+def _ask_setup(ctx: HostContext, prev: Dict[str, str], first_step: int = 1) -> Dict[str, str]:
+    c = ctx.c
+    step = first_step - 1
+
+    def title(text: str, hint: str = "") -> None:
+        nonlocal step
+        step += 1
+        print(f"\n{c.CYAN}{c.BOLD}Шаг {step}. {text}{c.RESET}")
+        if hint:
+            print(f"{c.GRAY}{hint}{c.RESET}")
+
+    answers: Dict[str, str] = {}
+
+    # Режим — от него зависят все остальные вопросы
+    title("🎯 Что будет делать сервер?")
+    values = [v for v, _, _ in MODE_CHOICES]
+    labels = [f"{label}\n     {c.GRAY}{hint}{c.RESET}" for _, label, hint in MODE_CHOICES]
+    prev_clients = prev.get("ENABLED_CLIENTS", "").replace(" ", "").upper()
+    if prev_clients == "INCY,HAPP":
+        prev_clients = "HAPP,INCY"
+    if prev_clients and prev_clients not in values:
+        values.append(prev_clients)
+        labels.append(f"Оставить текущий набор модулей: {prev_clients}")
+    default = values.index(prev_clients) if prev_clients in values else 0
+    clients = values[_choose(ctx, labels, default, allow_back=False)]
+    answers["ENABLED_CLIENTS"] = clients
+    serves = _serves_files(clients)
+
+    # Источник правил
+    title("📚 Откуда брать правила маршрутизации и гео-базы?",
+          "Они обновляются автоматически по расписанию. Сменить источник можно позже: geoserver → 4.")
+    prev_preset = prev.get("ROUTING_SOURCE_PRESET", "").replace(" ", "").lower()
+    preset_values = [p for p, _, _ in PRESET_CHOICES]
+    default = preset_values.index(prev_preset) if prev_preset in preset_values else 0
+    preset, rules, _ = PRESET_CHOICES[_choose(ctx, [label for _, _, label in PRESET_CHOICES], default, allow_back=False)]
+    if preset == prev_preset and prev.get("ROUTING_RULES"):
+        rules = prev["ROUTING_RULES"]
+    answers["ROUTING_SOURCE_PRESET"] = preset
+    answers["ROUTING_RULES"] = rules
+
+    if serves:
+        # Домен — без «примерного» значения по умолчанию: Enter не должен
+        # давать заведомо нерабочую установку
+        title("🌐 Домен, по которому клиенты будут получать файлы",
+              "Домен должен указывать на этот сервер. HTTPS настраивается в Caddy или Nginx —"
+              " готовый конфиг будет показан после установки.")
+        prev_domain = normalize_domain(prev.get("DOMAIN", ""))
+        if not is_valid_domain(prev_domain) or prev_domain == "geo.example.com":
+            prev_domain = ""
+        while True:
+            prompt = f"Домен [Enter = {prev_domain}]: " if prev_domain else "Домен, например geo.mydomain.com: "
+            domain = normalize_domain(ask(prompt, prev_domain))
+            if is_valid_domain(domain):
+                break
+            ctx.err("Нужен домен вида geo.mydomain.com" if not domain else f"Некорректный домен '{domain}'.")
+        answers["DOMAIN"] = domain
+
+        # Порт — по умолчанию свободный; занятый можно выбрать только явно
+        title("🔌 Локальный порт для обратного прокси",
+              "Контейнер слушает только 127.0.0.1 — наружу его выставит Caddy или Nginx.")
+        prev_port = parse_port(prev.get("HTTP_PORT", ""))
+        if prev_port and prev_port not in ctx.busy_ports:
+            def_port = prev_port
+        else:
+            def_port = _free_port(prev_port or 8080, ctx.busy_ports)
+            if def_port != (prev_port or 8080):
+                ctx.warn(f"Порт {prev_port or 8080} занят другим процессом — предлагаю свободный {def_port}.")
+        while True:
+            port = parse_port(ask(f"Порт [Enter = {def_port}]: ", str(def_port)))
+            if not port:
+                ctx.err("Нужно число от 1 до 65535.")
+                continue
+            if port in ctx.busy_ports and not confirm(f"Порт {port} уже занят на сервере. Всё равно использовать? [y/N]: "):
+                continue
+            break
+        answers["HTTP_PORT"] = str(port)
+
+        # Токен — без отдельного вопроса: его достаточно сгенерировать
+        prev_token = prev.get("ROUTING_TOKEN", "")
+        answers["ROUTING_TOKEN"] = prev_token if is_valid_token(prev_token) else generate_token()
+        kept = answers["ROUTING_TOKEN"] == prev_token
+        print(f"{c.GRAY}Секретный токен для ссылок: {'прежний' if kept else 'сгенерирован автоматически'}"
+              f" (сменить: geoserver config set ROUTING_TOKEN …).{c.RESET}")
+        answers["PUBLIC_GEO_BASE_URL"] = prev.get("PUBLIC_GEO_BASE_URL", "")
+    else:
+        # Без раздачи клиенты скачивают базы по ссылкам внутри правил
+        title("🗺 Откуда клиенты будут скачивать гео-базы?",
+              "Этот сервер файлы не раздаёт, поэтому в правила записывается внешний адрес баз.")
+        prev_ext = prev.get("PUBLIC_GEO_BASE_URL", "")
+        idx = _choose(ctx, [
+            "Из источника правил (GitHub) — ничего настраивать не нужно",
+            "С моего узла раздачи гео-баз (другой geo-routing-server)",
+        ], 1 if prev_ext else 0, allow_back=False)
+        ext = ""
+        while idx == 1 and not ext:
+            prompt = (f"Адрес узла с токеном [Enter = {prev_ext}]: " if prev_ext
+                      else "Адрес узла с токеном, например https://geo.mydomain.com/<токен>: ")
+            ext = normalize_public_url(ask(prompt, prev_ext))
+        answers["PUBLIC_GEO_BASE_URL"] = ext
+
+    # Remnawave: в режиме «только сквады» — обязательно
+    prev_url = normalize_remnawave_url(prev.get("REMNAWAVE_BASE_URL", ""))
+    prev_jwt = prev.get("REMNAWAVE_TOKEN", "")
+    prev_net = prev.get("DOCKER_NETWORK", "")
+    if not serves:
+        title("🔗 Подключение к Remnawave", "В этом режиме сервер работает только вместе с панелью.")
+        want = True
+    else:
+        title("🔗 Remnawave (необязательно)",
+              "Сервис может сам обновлять правила Happ во внешних сквадах панели.")
+        if prev_url and prev_jwt and confirm("Подключение уже настроено. Оставить как есть? [Y/n]: ", default=True):
+            answers.update(REMNAWAVE_BASE_URL=prev_url, REMNAWAVE_TOKEN=prev_jwt, DOCKER_NETWORK=prev_net)
+            return answers
+        want = confirm("Подключить панель Remnawave? [y/N]: ")
+    if want:
+        url, jwt, network = _ask_remnawave(ctx, prev_url, prev_jwt, prev_net, required=not serves)
+        answers.update(REMNAWAVE_BASE_URL=url, REMNAWAVE_TOKEN=jwt, DOCKER_NETWORK=network)
+    else:
+        answers.update(REMNAWAVE_BASE_URL="", REMNAWAVE_TOKEN="", DOCKER_NETWORK="")
+    return answers
+
+
+def _print_summary(ctx: HostContext, a: Dict[str, str]) -> None:
+    c = ctx.c
+    mode = next((label for v, label, _ in MODE_CHOICES if v == a["ENABLED_CLIENTS"]), a["ENABLED_CLIENTS"])
+    preset = next((label.split(" — ")[0] for v, _, label in PRESET_CHOICES if v == a["ROUTING_SOURCE_PRESET"]),
+                  a["ROUTING_SOURCE_PRESET"])
+    rows = [("Режим", mode), ("Источник правил", preset)]
+    if a.get("DOMAIN"):
+        rows += [("Домен", a["DOMAIN"]), ("Локальный порт", f"127.0.0.1:{a['HTTP_PORT']}")]
+    else:
+        rows.append(("Гео-базы для клиентов", a.get("PUBLIC_GEO_BASE_URL") or "из источника правил (GitHub)"))
+    if a.get("REMNAWAVE_TOKEN"):
+        where = f"сеть Docker «{a['DOCKER_NETWORK']}»" if a.get("DOCKER_NETWORK") else "по сети"
+        rows.append(("Remnawave", f"{a['REMNAWAVE_BASE_URL']} ({where})"))
+    else:
+        rows.append(("Remnawave", "не подключена"))
+    print(f"\n{c.CYAN}{'─' * 56}{c.RESET}\n{c.BOLD}📝 Проверьте настройки{c.RESET}")
+    width = max(len(k) for k, _ in rows)
+    for key, value in rows:
+        print(f"  {key.ljust(width)}  {c.WHITE}{value}{c.RESET}")
+    print(f"{c.CYAN}{'─' * 56}{c.RESET}")
+
+
+def _write_setup(ctx: HostContext, prev: Dict[str, str], a: Dict[str, str]) -> None:
+    c = ctx.c
+    if ctx.env.exists:
+        backup = ctx.env.backup()
+        print(f"{c.GRAY}[i] Прежний .env сохранён: {backup.name}{c.RESET}")
+    serves = _serves_files(a["ENABLED_CLIENTS"])
+    new = EnvFile(ctx.env.path)
     new.lines = [
         "# ==============================================================================",
         "# GEO ROUTING SERVER CONFIGURATION",
         "# ==============================================================================",
     ]
     values_map: Dict[str, str] = {
-        "DOMAIN": domain,
-        "ROUTING_TOKEN": token,
-        "ENABLED_CLIENTS": clients,
-        "ROUTING_SOURCE_PRESET": preset,
-        "ROUTING_RULES": rules,
+        "DOMAIN": a.get("DOMAIN", ""),
+        "ROUTING_TOKEN": a.get("ROUTING_TOKEN", ""),
+        "ENABLED_CLIENTS": a["ENABLED_CLIENTS"],
+        "ROUTING_SOURCE_PRESET": a["ROUTING_SOURCE_PRESET"],
+        "ROUTING_RULES": a["ROUTING_RULES"],
         "SERVE_FORMATS": prev.get("SERVE_FORMATS", "CLIENT_OPTIMIZED"),
         "SERVE_GEOIP": prev.get("SERVE_GEOIP", "true"),
         "SERVE_GEOSITE": prev.get("SERVE_GEOSITE", "true"),
-        "PUBLIC_GEO_BASE_URL": prev.get("PUBLIC_GEO_BASE_URL", ""),
-        "HTTP_BIND": prev.get("HTTP_BIND", "127.0.0.1"),
-        "HTTP_PORT": str(port),
+        "PUBLIC_GEO_BASE_URL": a.get("PUBLIC_GEO_BASE_URL", ""),
+        "HTTP_BIND": prev.get("HTTP_BIND", "127.0.0.1") if serves else "",
+        "HTTP_PORT": a.get("HTTP_PORT", "") if serves else "",
         "SCHEDULE": prev.get("SCHEDULE", DEFAULT_SCHEDULE),
         "SYNC_ON_START": prev.get("SYNC_ON_START", "true"),
     }
     for key, value in values_map.items():
         if value:
             new.set(key, value)
-    if remna_url and remna_token:
+    if a.get("REMNAWAVE_TOKEN"):
         new.lines += ["", "# Remnawave API"]
-        new.set("REMNAWAVE_BASE_URL", remna_url)
-        new.set("REMNAWAVE_TOKEN", remna_token)
-    if network:
-        new.set("DOCKER_NETWORK", network)
+        new.set("REMNAWAVE_BASE_URL", a["REMNAWAVE_BASE_URL"])
+        new.set("REMNAWAVE_TOKEN", a["REMNAWAVE_TOKEN"])
+    if a.get("DOCKER_NETWORK"):
+        new.set("DOCKER_NETWORK", a["DOCKER_NETWORK"])
     carried = {k: v for k, v in prev.items() if k not in WIZARD_KEYS}
     if carried:
         new.lines += ["", "# Перенесено из прежнего .env"]
         for key, value in carried.items():
             new.set(key, value)
     new.save()
-    ok_path = new.path
-    print(f"\n{c.GREEN}[✓] Конфигурация сохранена: {ok_path.name}{c.RESET}")
-
-    backup = composefile.write(ctx.host_dir, ctx.image, network)
+    backup = composefile.write(ctx.host_dir, ctx.image, a.get("DOCKER_NETWORK", ""), publish=serves)
     if backup:
         print(f"{c.GRAY}[i] Прежний compose.yaml сохранён: {backup.name}{c.RESET}")
-    ctx.ok("compose.yaml готов")
-    return 0
+    ctx.ok("Настройки сохранены.")
 
 
-def _ask_remnawave(ctx: HostContext, url: str, token: str, network: str) -> Tuple[str, str, str]:
-    """Спрашивает URL, токен и сеть панели. Пустой токен — интеграция не сохраняется."""
-    def_url = url or "http://remnawave:3000/api"
-    url = normalize_remnawave_url(ask(f"  ▸ URL API панели [Enter = {def_url}]: ", def_url))
-    hint = "Enter = оставить текущий" if token else "обязательно"
-    token = ask(f"  ▸ JWT-токен администратора [{hint}]: ", token)
-    print(f"{ctx.c.GRAY}    Если панель в Docker на этом сервере, укажите её сеть — тогда адрес"
-          f" http://remnawave:3000 будет доступен из контейнера.{ctx.c.RESET}")
-    net_hint = f"Enter = {network}" if network else "Enter = не подключать"
-    network = _check_network(ctx, ask(f"  ▸ Docker-сеть панели [{net_hint}]: ", network))
+def _remnawave_networks(ctx: HostContext) -> List[str]:
+    """Сети хоста, похожие на сеть панели Remnawave."""
+    return sorted(n for n in (ctx.networks or set()) if "remna" in n.lower())
+
+
+def _ask_remnawave(ctx: HostContext, url: str, token: str, network: str,
+                   required: bool = False) -> Tuple[str, str, str]:
+    """Где панель, адрес API и токен. Пустой токен — интеграция не сохраняется (если не required)."""
+    c = ctx.c
+    candidates = _remnawave_networks(ctx)
+    if network and network not in candidates:
+        candidates.insert(0, network)
+    options = [f"Панель в Docker на этом сервере — сеть «{n}»" for n in candidates]
+    options += ["Панель в Docker на этом сервере — указать сеть вручную",
+                "Панель на другом сервере (подключение по HTTPS)"]
+    remote = len(options) - 1
+    if network in candidates:
+        default = candidates.index(network)
+    elif url.startswith("https://") or not candidates:
+        default = remote if url.startswith("https://") else len(candidates)
+    else:
+        default = 0
+    print("📍 Где работает панель?")
+    idx = _choose(ctx, options, default, allow_back=False)
+
+    if idx == remote:
+        network = ""
+        def_url = url if url.startswith("https://") else ""
+        while True:
+            entered = ask(f"Адрес панели [Enter = {def_url}]: " if def_url
+                          else "Адрес панели, например https://panel.mydomain.com: ", def_url)
+            url = normalize_remnawave_url(normalize_public_url(entered)) if entered else ""
+            if url:
+                break
+            ctx.err("Нужен адрес панели.")
+    else:
+        if idx < len(candidates):
+            network = candidates[idx]
+        else:
+            network = ""
+            while not network:
+                network = _check_network(ctx, ask("Имя Docker-сети панели: "))
+        def_url = url if url and not url.startswith("https://") else "http://remnawave:3000/api"
+        print(f"{c.GRAY}Внутри сети панель доступна по имени контейнера (обычно remnawave) и порту 3000.{c.RESET}")
+        url = normalize_remnawave_url(ask(f"Адрес API в сети [Enter = {def_url}]: ", def_url))
+
+    print(f"{c.GRAY}API-токен создаётся в панели: Настройки → API-токены (Settings → API Tokens).{c.RESET}")
+    while True:
+        entered = ask("API-токен [Enter = оставить текущий]: " if token else "API-токен: ", token)
+        if entered or not required:
+            token = entered
+            break
+        ctx.err("Без токена этот режим работать не сможет.")
     if not token:
-        ctx.warn("Токен Remnawave не указан — интеграция не будет сохранена.")
-        return "", "", network
+        ctx.warn("Токен не указан — Remnawave не будет подключена.")
+        return "", "", ""
     return url, token, network
 
 
@@ -313,7 +456,7 @@ def _save(ctx: HostContext, message: str) -> int:
 def section_clients(ctx: HostContext) -> int:
     env, c = ctx.env, ctx.c
     while True:
-        ctx.header("Клиенты, форматы и гео-базы")
+        ctx.header("🧩 Клиенты, форматы и гео-базы")
         preset = env.get("ROUTING_SOURCE_PRESET", "geogaga")
         print(f"  Клиенты:          {c.GREEN}{env.get('ENABLED_CLIENTS', 'HAPP,INCY')}{c.RESET}")
         print(f"  Источник правил:  {c.CYAN}{preset}{c.RESET}  (правила: {env.get('ROUTING_RULES', 'все')})")
@@ -323,19 +466,26 @@ def section_clients(ctx: HostContext) -> int:
         print(f"  Внешние базы:     {env.get('PUBLIC_GEO_BASE_URL') or 'нет — раздаются с этого сервера'}")
         print()
         choice = _choose(ctx, [
-            "Выбрать клиентов",
-            "Выбрать источник правил",
-            "Выбрать форматы файлов",
-            "Включить / выключить раздачу geoip.dat",
-            "Включить / выключить раздачу geosite.dat",
-            "Внешний URL гео-баз (PUBLIC_GEO_BASE_URL)",
+            "🎯 Выбрать режим / клиентов",
+            "📚 Выбрать источник правил",
+            "📄 Выбрать форматы файлов",
+            "🌍 Включить / выключить раздачу geoip.dat",
+            "🏷 Включить / выключить раздачу geosite.dat",
+            "🗺 Внешний URL гео-баз (PUBLIC_GEO_BASE_URL)",
         ], default=-1)
         if choice is None:
             return 0
         if choice == 0:
             idx = _choose(ctx, [label for _, label in CLIENT_CHOICES], -1)
             if idx is not None:
+                before = _serves_files(env.get("ENABLED_CLIENTS", "HAPP,INCY"))
                 env.set("ENABLED_CLIENTS", CLIENT_CHOICES[idx][0])
+                after = _serves_files(CLIENT_CHOICES[idx][0])
+                if before != after:
+                    # Режим без раздачи файлов не публикует порт, и наоборот
+                    composefile.write(ctx.host_dir, ctx.image, env.get("DOCKER_NETWORK"), publish=after)
+                    if after and not env.get("DOMAIN"):
+                        ctx.warn("Для раздачи файлов нужен домен: geoserver config set DOMAIN geo.mydomain.com")
                 if _save(ctx, "Клиенты сохранены."):
                     return APPLY
         elif choice == 1:
@@ -375,16 +525,16 @@ def section_schedule(ctx: HostContext) -> int:
     env, c = ctx.env, ctx.c
     while True:
         current = env.get("SCHEDULE", DEFAULT_SCHEDULE)
-        ctx.header("Расписание синхронизации")
+        ctx.header("⏰ Расписание синхронизации")
         print(f"  Сейчас: {c.GREEN}{human_schedule(current)}{c.RESET} {c.GRAY}({current}, время UTC){c.RESET}\n")
         choice = _choose(ctx, [
-            "Ежедневно в заданное время (ЧЧ:ММ)",
-            "Каждые N часов",
-            "Ежедневно в 10:00 UTC (13:00 МСК) — по умолчанию",
-            "Ежедневно в 12:00 UTC (15:00 МСК)",
-            "Каждые 6 часов",
-            "Каждые 12 часов",
-            "Своё cron-выражение",
+            "🕐 Ежедневно в заданное время (ЧЧ:ММ)",
+            "🔁 Каждые N часов",
+            "⭐ Ежедневно в 10:00 UTC (13:00 МСК) — по умолчанию",
+            "📅 Ежедневно в 12:00 UTC (15:00 МСК)",
+            "⏱ Каждые 6 часов",
+            "⏱ Каждые 12 часов",
+            "🛠 Своё cron-выражение",
         ], default=-1)
         if choice is None:
             return 0
@@ -423,7 +573,7 @@ def section_telegram(ctx: HostContext, sender: Optional[Callable[..., bool]] = N
         chat = env.get("TELEGRAM_CHAT_ID")
         thread = env.get("TELEGRAM_THREAD_ID")
         notify = env.get("TELEGRAM_NOTIFY_SUCCESS", "false").lower() == "true"
-        ctx.header("Telegram-уведомления")
+        ctx.header("📨 Telegram-уведомления")
         configured = bool(token and chat)
         if configured:
             print(f"  Статус:   {c.GREEN}включены{c.RESET}")
@@ -431,14 +581,14 @@ def section_telegram(ctx: HostContext, sender: Optional[Callable[..., bool]] = N
             print(f"  Chat ID:  {chat}" + (f"   тема: {thread}" if thread else ""))
             print(f"  Отчёты:   {'все, включая успешные обновления' if notify else 'только ошибки'}\n")
             choice = _choose(ctx, [
-                "Отправить тестовое сообщение",
-                "Изменить бота / чат / тему",
-                "Переключить отчёты об успешных обновлениях",
-                "Отключить уведомления",
+                "📤 Отправить тестовое сообщение",
+                "🛠 Изменить бота / чат / тему",
+                "🔔 Переключить отчёты об успешных обновлениях",
+                "🔕 Отключить уведомления",
             ], default=-1)
         else:
             print(f"  Статус:   {c.GRAY}выключены{c.RESET}\n")
-            choice = _choose(ctx, ["Настроить уведомления"], default=-1)
+            choice = _choose(ctx, ["🛠 Настроить уведомления"], default=-1)
             if choice == 0:
                 choice = 1
         if choice is None:
@@ -483,10 +633,10 @@ def section_remnawave(ctx: HostContext) -> int:
         url = env.get("REMNAWAVE_BASE_URL")
         token = env.get("REMNAWAVE_TOKEN")
         network = env.get("DOCKER_NETWORK")
-        ctx.header("Интеграция с Remnawave")
+        ctx.header("🔗 Интеграция с Remnawave")
         if not (url and token):
             print("  Сервис может сам обновлять правила Happ во внешних сквадах панели.\n")
-            choice = _choose(ctx, ["Подключить панель"], default=-1)
+            choice = _choose(ctx, ["🔌 Подключить панель"], default=-1)
             if choice is None:
                 return 0
             url, token, network = _ask_remnawave(ctx, url, token, network)
@@ -505,10 +655,10 @@ def section_remnawave(ctx: HostContext) -> int:
         print(f"  Токен:    {_mask(token)}")
         print(f"  Сеть:     {network or 'не подключена'}\n")
         choice = _choose(ctx, [
-            "Сквады: список, добавление, удаление",
-            "Синхронизировать сквады сейчас",
-            "Изменить URL, токен или Docker-сеть",
-            "Отключить интеграцию",
+            "👥 Сквады: список, добавление, удаление",
+            "🔄 Синхронизировать сквады сейчас",
+            "🛠 Изменить URL, токен или Docker-сеть",
+            "🔌 Отключить интеграцию",
         ], default=-1)
         if choice is None:
             return 0
@@ -548,7 +698,8 @@ def _set_network(ctx: HostContext, network: str) -> None:
     else:
         ctx.env.delete("DOCKER_NETWORK")
     if network != previous:
-        backup = composefile.write(ctx.host_dir, ctx.image, network)
+        backup = composefile.write(ctx.host_dir, ctx.image, network,
+                                   publish=_serves_files(ctx.env.get("ENABLED_CLIENTS", "HAPP,INCY")))
         ctx.env.changed = True
         if backup:
             print(f"{ctx.c.GRAY}[i] compose.yaml обновлён, прежний сохранён: {backup.name}{ctx.c.RESET}")

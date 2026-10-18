@@ -221,7 +221,7 @@ def _build_preset_sections(token: str, storage_dir: Optional[Path], preset: Opti
             except Exception:
                 pass
             if not squads and not (os.getenv("REMNAWAVE_GLOBAL_RULE") or os.getenv("GITHUB_RAW_URL")):
-                happ_lines.append("      [i] Сквады ещё не привязаны. Добавьте сквад через: geoserver -> пункт 4")
+                happ_lines.append("      [i] Сквады ещё не привязаны. Привяжите сквады: geoserver squads pick (или geoserver -> пункт 5)")
                 if Config.should_serve_deeplink("HAPP"):
                     happ_lines.append("  - Доступные диплинки правил (ручной импорт):")
                     for r in happ_rules:
@@ -232,7 +232,7 @@ def _build_preset_sections(token: str, storage_dir: Optional[Path], preset: Opti
                 remna_token = os.getenv("REMNAWAVE_TOKEN", "").strip()
                 if remna_base and not remna_token:
                     happ_lines.append("  [!] Remnawave API: указан URL, но отсутствует REMNAWAVE_TOKEN")
-                    happ_lines.append("      Автопатч не активен. Введите токен через команду: geoserver -> пункт 4")
+                    happ_lines.append("      Автопатч не активен. Введите токен через команду: geoserver -> пункт 5")
                 else:
                     if Config.should_serve_deeplink("HAPP"):
                         happ_lines.append("  - Правила Happ (диплинки happ://routing/onadd/...):")

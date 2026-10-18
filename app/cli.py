@@ -38,6 +38,10 @@ def get_safe_token() -> str:
                 return content
         except Exception:
             pass
+    # Режим «только сквады» работает без токена: синхронизация пишет файлы
+    # в каталог local (Config.get_token), там их и ищут status / wait-sync
+    if Config.ENABLED_CLIENTS and set(Config.ENABLED_CLIENTS).issubset(Config.RULES_ONLY_MODULES):
+        return "local"
     return token or "change_me_to_random_secret_token"
 
 
@@ -566,6 +570,175 @@ def cmd_squads_migrate(
         return 0
 
 
+def fetch_external_squads() -> Optional[list]:
+    """Внешние сквады из API панели: [{'uuid', 'name'}] или None при ошибке связи."""
+    url = f"{RemnawaveSync.get_api_url()}/external-squads"
+    res = RemnawaveSync._api_request("GET", url)
+    if res is None:
+        return None
+    raw = res.get("response", res.get("data", []))
+    if isinstance(raw, dict):
+        raw = raw.get("externalSquads", raw.get("items", []))
+    return [
+        {"uuid": str(s["uuid"]).lower(), "name": str(s.get("name") or "")}
+        for s in raw if isinstance(s, dict) and s.get("uuid")
+    ] if isinstance(raw, list) else []
+
+
+def cmd_squads_pick(manager: Optional[SquadManager] = None) -> int:
+    """Привязка сквадов выбором из списка, полученного из API панели.
+
+    0 — привязки изменены, 2 — ничего не изменено, 1 — ошибка (нет связи с API).
+    """
+    from app.ui import Cancelled, ask
+
+    mgr = manager or SquadManager()
+    c = Colors(supports_color())
+    if not RemnawaveSync.is_configured():
+        print(f"{c.YELLOW}Remnawave не подключена: geoserver → 5.{c.RESET}")
+        return 1
+    print(f"Загрузка внешних сквадов из {RemnawaveSync.get_api_url()} ...")
+    squads = fetch_external_squads()
+    if squads is None:
+        print(f"{c.RED}[!] Нет связи с API панели (подробности выше).{c.RESET}")
+        print("    Проверьте адрес и токен (geoserver → 5) и, если панель в Docker на этом сервере,")
+        print("    что выбрана её сеть — иначе адрес вида http://remnawave:3000 не открывается.")
+        return 1
+    if not squads:
+        print(f"{c.YELLOW}В панели нет внешних сквадов. Создайте их: Сквады → Внешние сквады.{c.RESET}")
+        return 2
+
+    bound = {s["uuid"]: s for s in mgr.list_squads()}
+    print(f"\n{c.BOLD}Внешние сквады панели:{c.RESET}")
+    for i, sq in enumerate(squads, 1):
+        mark = f"  {c.GREEN}→ {bound[sq['uuid']]['rule']}{c.RESET}" if sq["uuid"] in bound else ""
+        print(f"  {i}) {sq['name'] or 'Без имени'} {c.GRAY}({sq['uuid'][:8]}…){c.RESET}{mark}")
+
+    rules = [r for r in Config.get_display_rules(client="HAPP")]
+    try:
+        hint = "1" if len(squads) == 1 else "1,3"
+        picked = ask(f"\nКаким сквадам выдавать правила? Номера через запятую [например {hint}, Enter = пропустить]: ")
+        if not picked:
+            print("Сквады не изменены. Привязать позже: geoserver → 5.")
+            return 2
+        indexes = []
+        for part in picked.replace(" ", "").split(","):
+            if not part.isdigit() or not 1 <= int(part) <= len(squads):
+                print(f"{c.RED}Нет сквада с номером {part}.{c.RESET}")
+                return 2
+            indexes.append(int(part) - 1)
+        rule = rules[0] if rules else "HAPP.JSON"
+        if len(rules) > 1:
+            print("Какое правило выдавать выбранным сквадам?")
+            for i, r in enumerate(rules, 1):
+                print(f"  {i}) {r.removesuffix('.JSON')}")
+            answer = ask(f"Выберите [1-{len(rules)}, Enter = 1]: ", "1")
+            if answer.isdigit() and 1 <= int(answer) <= len(rules):
+                rule = rules[int(answer) - 1]
+    except Cancelled:
+        return 2
+    for i in indexes:
+        sq = squads[i]
+        mgr.add_squad(uuid=sq["uuid"], rule=rule, name=sq["name"] or None)
+        print(f"{c.GREEN}[✓] {sq['name'] or sq['uuid']} → {rule}{c.RESET}")
+    print("Применяю привязки в панели…")
+    if not mgr.sync_squads_to_remnawave():
+        print(f"{c.YELLOW}[!] Привязки сохранены, но панель их пока не приняла — повторится при следующей синхронизации.{c.RESET}")
+    return 0
+
+
+def _format_time(iso: Optional[str]) -> str:
+    try:
+        moment = datetime.fromisoformat(str(iso)).astimezone(timezone.utc)
+    except (TypeError, ValueError):
+        return "?"
+    return f"{moment:%d.%m %H:%M} UTC"
+
+
+def dashboard_lines(info: Dict[str, Any], schedule: str) -> list[str]:
+    """Короткая сводка для шапки главного меню: режим, синхронизация, Remnawave
+    и одна подсказка «что сделать дальше» (номера — пункты главного меню)."""
+    from app.hostconfig import MODE_CHOICES, _serves_files
+    from app.validators import human_schedule, is_valid_domain
+
+    enabled = info.get("enabled_clients") or []
+    clients = ",".join(enabled) if isinstance(enabled, (list, tuple, set)) else str(enabled)
+    serves = _serves_files(clients)
+    wanted = {m.strip().upper() for m in clients.split(",") if m.strip()}
+    mode = next((label for v, label, _ in MODE_CHOICES if set(v.split(",")) == wanted), clients or "?")
+    domain = info.get("domain") or ""
+    domain_ok = is_valid_domain(domain) and domain != "geo.example.com"
+    where = f" · {domain}" if serves and domain_ok else ""
+
+    state = info.get("status") or "not_run"
+    when = _format_time(info.get("last_sync"))
+    sync = {
+        "success": f"✅ {when}",
+        "partial": f"🟡 частично, {when}",
+        "failed": f"❌ ошибка, {when}",
+        "running": "⏳ идёт сейчас",
+    }.get(state, "⏳ ещё не выполнялась")
+
+    remna = info.get("remnawave") or {}
+    squads = remna.get("squads_count", 0)
+    if remna.get("configured"):
+        panel = f"подключена · сквадов: {squads}" + ("" if info.get("remnawave_ok", True) else " · ❌ ошибка API")
+    else:
+        panel = "не подключена"
+
+    lines = [
+        f"🎯 Режим:          {mode}{where}",
+        f"🔄 Синхронизация:  {sync} · {human_schedule(schedule)}",
+        f"🔗 Remnawave:      {panel}",
+    ]
+    hint = ""
+    if serves and not domain_ok:
+        hint = "укажите домен для раздачи файлов: geoserver config set DOMAIN geo.mydomain.com"
+    elif not serves and not remna.get("configured"):
+        hint = "в этом режиме нужна панель Remnawave → пункт 5"
+    elif remna.get("configured") and not info.get("remnawave_ok", True):
+        hint = "панель не отвечает: проверьте адрес и токен → пункт 5"
+    elif remna.get("configured") and not squads:
+        hint = "привяжите сквады панели к правилам → пункт 5"
+    elif state in ("failed", "partial"):
+        hint = "последняя синхронизация с ошибками: подробности в логах → пункт 3"
+    elif serves and state == "success":
+        hint = "ссылки для клиентов → пункт 1, конфиг Caddy / Nginx → пункт 8"
+    if hint:
+        lines.append(f"💡 Дальше:         {hint}")
+    return lines
+
+
+def cmd_dashboard() -> int:
+    for line in dashboard_lines(get_status_info(), Config.SCHEDULE):
+        print(f"  {line}")
+    return 0
+
+
+def cmd_wait_sync(since: float, timeout: int) -> int:
+    """Ждёт первую синхронизацию после запуска (для install.sh).
+
+    0 — успех, 1 — завершилась с ошибками, 2 — не дождались.
+    """
+    import time
+
+    token = get_safe_token()
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        status_file, _ = find_status_files(token)
+        if status_file and status_file.stat().st_mtime >= since:
+            try:
+                state = json.loads(status_file.read_text(encoding="utf-8")).get("state")
+            except (OSError, ValueError):
+                state = None
+            if state == "success":
+                return 0
+            if state in ("failed", "partial"):
+                return 1
+        time.sleep(2)
+    return 2
+
+
 def menu_squads(mgr: SquadManager) -> None:
     """Подменю управления сквадами Remnawave."""
     c = Colors(supports_color())
@@ -574,11 +747,11 @@ def menu_squads(mgr: SquadManager) -> None:
         print(f"{c.BOLD}{c.WHITE}⚡ Управление сквадами Remnawave{c.RESET}")
         print(f"{c.CYAN}{'-'*55}{c.RESET}")
         print("  1) 📋 Список привязок")
-        print("  2) ➕ Добавить / изменить сквад")
+        print("  2) 👥 Добавить / изменить сквад")
         print("  3) ❌ Удалить сквад")
-        print("  4) 🔄 Синхронизировать с Remnawave API")
+        print("  4) 🔄 Синхронизировать с Remnawave")
         print("  5) 📥 Миграция существующих привязок из .env")
-        print("  0) ⬅️ Назад в главное меню")
+        print("  0) 🔙 Назад")
         print(f"{c.CYAN}{'-'*55}{c.RESET}")
 
         try:
@@ -593,7 +766,10 @@ def menu_squads(mgr: SquadManager) -> None:
             except (KeyboardInterrupt, EOFError):
                 pass
         elif choice == "2":
-            cmd_squads_add(manager=mgr)
+            # Выбор из списка панели; ручной ввод UUID — только если API недоступен
+            if not RemnawaveSync.is_configured() or cmd_squads_pick(mgr) == 1:
+                print("Ввод вручную:")
+                cmd_squads_add(manager=mgr)
             try:
                 input(f"{c.GRAY}Нажмите Enter, чтобы продолжить...{c.RESET}")
             except (KeyboardInterrupt, EOFError):
@@ -638,7 +814,7 @@ def cmd_menu(manager: Optional[SquadManager] = None) -> int:
         print(f"{c.CYAN}{'='*60}{c.RESET}")
         print("  1) 📊 Статус и ссылки")
         print("  2) 🔄 Запуск синхронизации")
-        print("  3) ⚡ Настройка сквадов Remnawave")
+        print("  3) 🔗 Настройка сквадов Remnawave")
         print("  4) 📋 Сниппеты Caddy / Nginx")
         print("  0) 🚪 Выход")
         print(f"{c.CYAN}{'-'*60}{c.RESET}")
@@ -717,12 +893,19 @@ def build_parser() -> argparse.ArgumentParser:
     p_sq_rm.add_argument("--uuid", dest="uuid_opt", help="UUID сквада (опция)")
 
     squads_sub.add_parser("sync", help="Применить привязки сквадов в Remnawave API")
+    squads_sub.add_parser("pick", help="Привязать сквады выбором из списка панели")
 
     p_sq_mig = squads_sub.add_parser("migrate", help="Мигрировать сквады из .env в squads.json")
     p_sq_mig.add_argument("--env-path", help="Путь к файлу .env")
 
     # menu
     subparsers.add_parser("menu", help="Интерактивное TUI-меню")
+
+    # dashboard / wait-sync: служебные команды для install.sh
+    subparsers.add_parser("dashboard", help="Краткая сводка для главного меню")
+    p_wait = subparsers.add_parser("wait-sync", help="Дождаться синхронизации после запуска")
+    p_wait.add_argument("--since", type=float, default=0.0, help="Учитывать результат не старше (unix time)")
+    p_wait.add_argument("--timeout", type=int, default=180, help="Сколько ждать, секунд")
 
     # version: версия приложения и контракта с install.sh
     subparsers.add_parser("version", help="Версия приложения и CLI API")
@@ -731,6 +914,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_setup = subparsers.add_parser("setup", help="Мастер установки (пишет .env и compose.yaml)")
     p_setup.add_argument("--host-dir", default="/host", help="Каталог установки на хосте")
     p_setup.add_argument("--image", help="Образ для compose.yaml")
+    p_setup.add_argument("--first-step", type=int, default=1, help="Номер первого шага (часть шагов задаёт install.sh)")
 
     p_config = subparsers.add_parser("config", help="Разделы настроек .env")
     p_config.add_argument(
@@ -795,10 +979,16 @@ def main(args: Optional[list[str]] = None) -> int:
     if parsed_args.command == "version":
         return cmd_version()
 
+    if parsed_args.command == "dashboard":
+        return cmd_dashboard()
+
+    if parsed_args.command == "wait-sync":
+        return cmd_wait_sync(parsed_args.since, parsed_args.timeout)
+
     if parsed_args.command == "setup":
         from app.hostconfig import run_setup
 
-        return run_setup(Path(parsed_args.host_dir), parsed_args.image)
+        return run_setup(Path(parsed_args.host_dir), parsed_args.image, parsed_args.first_step)
 
     if parsed_args.command == "config":
         return cmd_config(parsed_args)
@@ -815,6 +1005,8 @@ def main(args: Optional[list[str]] = None) -> int:
             if RemnawaveSync.is_configured():
                 return cmd_squads()
             return cmd_squads_list()
+        elif sq_cmd == "pick":
+            return cmd_squads_pick()
         elif sq_cmd == "list":
             return cmd_squads_list()
         elif sq_cmd == "add":

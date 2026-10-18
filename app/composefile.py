@@ -20,9 +20,7 @@ services:
     restart: unless-stopped
     env_file:
       - .env
-{networks}    ports:
-      - "${{HTTP_BIND:-127.0.0.1}}:${{HTTP_PORT:-8080}}:80"
-    security_opt:
+{networks}{ports}    security_opt:
       - no-new-privileges:true
     cap_drop:
       - ALL
@@ -53,7 +51,13 @@ volumes:
 {network_defs}"""
 
 
-def render(image: str = DEFAULT_IMAGE, network: str = "") -> str:
+_PORTS = '''    ports:
+      - "${HTTP_BIND:-127.0.0.1}:${HTTP_PORT:-8080}:80"
+'''
+
+
+def render(image: str = DEFAULT_IMAGE, network: str = "", publish: bool = True) -> str:
+    """publish=False — без проброса порта: режим «только сквады Remnawave» файлы не раздаёт."""
     if network and not is_valid_docker_network(network):
         raise ValueError(f"Недопустимое имя Docker-сети: {network!r}")
     if network:
@@ -67,13 +71,14 @@ def render(image: str = DEFAULT_IMAGE, network: str = "") -> str:
     else:
         networks = ""
         network_defs = ""
-    return _SERVICE.format(image=image, networks=networks, network_defs=network_defs)
+    return _SERVICE.format(image=image, networks=networks, ports=_PORTS if publish else "",
+                           network_defs=network_defs)
 
 
-def write(host_dir: Path, image: str = DEFAULT_IMAGE, network: str = "") -> Optional[Path]:
+def write(host_dir: Path, image: str = DEFAULT_IMAGE, network: str = "", publish: bool = True) -> Optional[Path]:
     """Пишет compose.yaml, предварительно сохранив прежний файл. Возвращает путь бэкапа."""
     path = Path(host_dir) / "compose.yaml"
-    content = render(image, network)
+    content = render(image, network, publish)
     backup = None
     if path.is_file():
         if path.read_text(encoding="utf-8") == content:

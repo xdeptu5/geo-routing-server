@@ -126,6 +126,9 @@ case "${1:-}" in
                     sh -c "${last//\/app\//$STATE/app/}"
                     exit $?
                 fi
+                # Ожидание первой синхронизации: настоящей синхронизации в
+                # тестах нет, результат задаёт STUB_SYNC_RC (по умолчанию успех)
+                case " $* " in *" wait-sync "*) exit "${STUB_SYNC_RC:-0}" ;; esac
                 # `exec ... SERVICE python3 -m app.cli ...` — настоящий CLI
                 args=("$@")
                 for i in "${!args[@]}"; do

@@ -31,7 +31,7 @@ def test_config_set_requires_key_and_value(tmp_path):
 
 
 def test_setup_subcommand_writes_files(tmp_path, monkeypatch):
-    answers = iter(["", "", "", "", "", ""])
+    answers = iter(["", "", "geo.test", "", "", ""])
     monkeypatch.setattr(builtins, "input", lambda prompt="": next(answers))
     monkeypatch.delenv("GRS_HOST_NETWORKS", raising=False)
     assert main(["setup", "--host-dir", str(tmp_path), "--image", "img:1"]) == 0
