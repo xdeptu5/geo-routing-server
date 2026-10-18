@@ -388,6 +388,8 @@ def main():
     # 5. Инициализируем активные процессоры для всех активных пресетов
     active_processors = []
     failures = 0
+    # Что именно не удалось — для понятного Telegram-алерта (а не «N failed processor(s)»)
+    failed_parts: list[str] = []
 
     for preset in Config.ACTIVE_PRESETS:
         p_name = None if preset.lower() == Config.PRIMARY_PRESET.lower() else preset
@@ -401,6 +403,7 @@ def main():
                 # контейнер выглядел бы «работающим» (и рестартующимся без explicit failed).
                 logger.error(f"Failed to initialize HappProcessor ({preset}): {e}")
                 failures += 1
+                failed_parts.append(f"Happ, пресет {preset}: {e}")
 
         if Config.client_enabled("INCY"):
             try:
@@ -408,6 +411,7 @@ def main():
             except Exception as e:
                 logger.error(f"Failed to initialize IncyProcessor ({preset}): {e}")
                 failures += 1
+                failed_parts.append(f"Incy, пресет {preset}: {e}")
 
     if not active_processors:
         # Ранний выход при провале старта: фиксируем статус ошибки и выходим с
@@ -418,12 +422,16 @@ def main():
         sys.exit(1)
 
     for processor in active_processors:
+        client = processor.__class__.__name__.removesuffix("Processor")
+        preset_label = processor.preset_name or Config.PRIMARY_PRESET
         try:
             if not processor.process():
                 failures += 1
+                failed_parts.append(f"{client}, пресет {preset_label}: не удалось скачать или обработать правила")
         except Exception as e:
             logger.error(f"Processor {processor.__class__.__name__} ({processor.preset_name}) encountered unhandled exception: {e}")
             failures += 1
+            failed_parts.append(f"{client}, пресет {preset_label}: {e}")
             
     # Создаем симлинки для локальных сервисов в Docker
     ensure_internal_symlinks(Config.STORAGE_DIR, token)
@@ -435,12 +443,10 @@ def main():
             remna_ok = False
             err_details = "\n• ".join(RemnawaveSync.last_errors) if RemnawaveSync.last_errors else "Не удалось обновить сквады в Remnawave API"
             logger.warning(f"[Remnawave] Synchronization with Remnawave API completed with errors:\n{err_details}")
-            TelegramNotifier.alert_failure(f"Ошибка Remnawave API:\n• {err_details}")
-    
+            failed_parts += [f"Remnawave: {e}" for e in RemnawaveSync.last_errors] or ["Remnawave: не удалось обновить сквады"]
+
     if failures > 0:
-        err_text = f"Synchronization finished with {failures} failed processor(s)"
-        logger.error(err_text)
-        TelegramNotifier.alert_failure(err_text)
+        logger.error(f"Synchronization finished with {failures} failed processor(s)")
 
     all_errors = list(RemnawaveSync.last_errors) if hasattr(RemnawaveSync, "last_errors") else []
     if failures > 0:
@@ -483,6 +489,8 @@ def main():
             generated_files=published_files,
         )
         logger.warning(f"Synchronization completed with warnings/errors (status: {status_state}).")
+        # Одно сообщение на синхронизацию, а не по одному на каждую ошибку
+        TelegramNotifier.alert_failure(failed_parts, partial=status_state == "partial")
         banner = print_summary_banner(token, Config.STORAGE_DIR)
         write_sync_summary(Config.STORAGE_DIR, token, banner)
         sys.exit(1)

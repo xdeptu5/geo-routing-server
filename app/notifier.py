@@ -4,14 +4,14 @@ import logging
 import re
 import urllib.request
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Union
 from app.config import Config
 from app.publisher import PublishedFileInfo
 
 logger = logging.getLogger("geo-routing-server")
 
 class TelegramNotifier:
-    """Умные, информативные Telegram-уведомления без спама с поддержкой топиков (Thread ID)."""
+    """Короткие Telegram-уведомления без спама, с поддержкой тем (Thread ID)."""
     
     @staticmethod
     def _send_message(
@@ -75,78 +75,83 @@ class TelegramNotifier:
             logger.warning(f"Failed to send Telegram notification: {e}")
             return False
 
+    # --------------------------------------------------------------------------
+    # Тексты сообщений: коротко, только то, что изменилось, и что делать
+    # --------------------------------------------------------------------------
+
+    @staticmethod
+    def _title(icon: str, text: str) -> str:
+        """Заголовок с доменом — только если сервер раздаёт файлы и домен настоящий."""
+        from app.validators import is_valid_domain
+
+        domain = Config.DOMAIN or ""
+        serves = not (Config.ENABLED_CLIENTS and set(Config.ENABLED_CLIENTS).issubset(Config.RULES_ONLY_MODULES))
+        where = ""
+        if serves and is_valid_domain(domain) and domain != "geo.example.com":
+            where = f" · {html.escape(domain)}"
+        return f"{icon} <b>{text}</b>{where}"
+
+    @staticmethod
+    def _when() -> str:
+        return f"<i>{datetime.now(timezone.utc):%d.%m %H:%M} UTC</i>"
+
+    @staticmethod
+    def _size(size_bytes: int) -> str:
+        if size_bytes >= 1024 * 1024:
+            return f"{size_bytes / 1024 / 1024:.1f} МБ"
+        return f"{max(1, round(size_bytes / 1024))} КБ"
+
     @classmethod
-    def alert_failure(cls, error_msg: str) -> None:
-        """Отправляет алерт при ошибке синхронизации."""
-        now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-        safe_domain = html.escape(Config.DOMAIN)
-        safe_msg = html.escape(str(error_msg))
-        text = (
-            f"⚠️ <b>[Geo Routing Server] Ошибка синхронизации!</b>\n\n"
-            f"🌐 <b>Домен:</b> <code>{safe_domain}</code>\n"
-            f"⏱ <b>Время:</b> {now_str}\n\n"
-            f"❌ <b>Причина ошибки:</b>\n"
-            f"<code>{safe_msg}</code>\n\n"
-            f"🛡 <i>Ранее опубликованные файлы не повреждены и продолжают раздаваться клиентам.</i>"
-        )
+    def alert_failure(cls, problems: Union[str, List[str]], partial: bool = False) -> None:
+        """Одно сообщение на синхронизацию: что сломалось и что делать.
+
+        partial — часть файлов обновилась, остальное раздаётся в прежней версии.
+        """
+        items = [problems] if isinstance(problems, str) else list(problems)
+        items = [" ".join(str(p).split()) for p in items if str(p).strip()] or ["причина в логах"]
+        shown = [html.escape(p if len(p) <= 200 else p[:197] + "…") for p in items[:3]]
+        if len(items) > 3:
+            shown.append(f"и ещё {len(items) - 3}")
+        title = "Синхронизация прошла с ошибками" if partial else "Синхронизация не удалась"
+        effect = "Остальное обновлено." if partial else "Клиенты получают прежние версии файлов."
+        text = "\n".join([
+            cls._title("⚠️" if partial else "❌", title),
+            *[f"• {p}" for p in shown],
+            "",
+            f"{effect} Подробности: <code>geoserver logs</code>",
+            cls._when(),
+        ])
         cls._send_message(text)
 
     @classmethod
     def notify_changes(cls, token: str, registry: Dict[str, PublishedFileInfo], any_changed: bool) -> None:
-        """
-        Отправляет уведомление об успешном обновлении:
-        - Только если TELEGRAM_NOTIFY_SUCCESS включен
-        - И только если файлы РЕАЛЬНО изменились (без спама при 304 Not Modified)
-        """
+        """Сообщение об обновлении — только если TELEGRAM_NOTIFY_SUCCESS включён
+        и файлы реально изменились (без спама при 304 Not Modified)."""
         if not Config.TELEGRAM_NOTIFY_SUCCESS or not any_changed:
             return
-            
-        now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-        safe_domain = html.escape(Config.DOMAIN)
-        base_url = html.escape(Config.get_base_url(token))
-        
-        # Собираем информацию о geo-файлах
-        geo_lines = []
-        for key, info in registry.items():
-            if info.filename.endswith(".dat"):
-                size_kb = round(info.size_bytes / 1024, 1)
-                short_hash = info.sha256[:12]
-                status_icon = "🆕" if info.is_updated else "▫️"
-                safe_key = html.escape(key)
-                geo_lines.append(f"{status_icon} <code>{safe_key}</code>: {size_kb} KB (<code>{short_hash}...</code>)")
-                
-        geo_block = "\n".join(geo_lines) if geo_lines else "—"
-        
-        # Формируем информацию о правилах и интеграциях
-        info_lines = []
-        happ_rules = [r.upper().removesuffix(".JSON") for r in Config.get_active_rules([], "HAPP")]
-        incy_rules = [r.upper().removesuffix(".JSON") for r in Config.get_active_rules([], "INCY")]
-        
-        # 1. Интеграция с Remnawave API (если настроена)
-        from app.remnawave import RemnawaveSync
-        if RemnawaveSync.is_configured():
-            info_lines.append("⚡ <b>Remnawave API:</b> сквады маршрутизации синхронизированы")
-        elif Config.client_enabled("HAPP", "rules"):
-            happ_links = [f"• <b>{r}:</b> <code>{base_url}/HAPP/{r}.DEEPLINK</code>" for r in happ_rules]
-            happ_block = "\n".join(happ_links)
-            info_lines.append(f"📱 <b>Happ (диплинки правил):</b>\n{happ_block}")
+        updated = [info for info in registry.values() if info.is_updated]
+        if not updated:
+            return
 
-        # 2. Ссылки на заголовок autorouting для Incy
-        if Config.client_enabled("INCY", "rules"):
-            incy_links = [f"• <b>{r}:</b> <code>incy://autorouting/onadd/{base_url}/INCY/{r}.JSON</code>" for r in incy_rules]
-            incy_block = "\n".join(incy_links)
-            info_lines.append(f"🔗 <b>Autorouting Header (Incy):</b>\n{incy_block}")
-            
-        extra_block = ("\n\n" + "\n\n".join(info_lines)) if info_lines else ""
-        
-        text = (
-            f"🚀 <b>[Geo Routing Server] Вышли обновленные базы!</b>\n\n"
-            f"🌐 <b>Домен:</b> <code>{safe_domain}</code>\n"
-            f"⏱ <b>Время:</b> {now_str}\n\n"
-            f"📊 <b>Geo-базы:</b>\n{geo_block}"
-            f"{extra_block}"
-        )
-        cls._send_message(text)
+        # Один и тот же файл публикуется для нескольких клиентов — показываем один раз
+        geo: Dict[str, int] = {}
+        rules: Dict[str, None] = {}
+        for info in updated:
+            if info.filename.endswith(".dat"):
+                geo.setdefault(info.filename, info.size_bytes)
+            else:
+                rules.setdefault(info.filename.rsplit(".", 1)[0].upper(), None)
+
+        lines = [cls._title("✅", "Обновлено")]
+        if geo:
+            lines.append("🗺 " + ", ".join(f"{name} ({cls._size(size)})" for name, size in sorted(geo.items())))
+        if rules:
+            lines.append("📚 Правила: " + ", ".join(html.escape(r) for r in rules))
+        from app.remnawave import RemnawaveSync
+        if rules and RemnawaveSync.is_configured():
+            lines.append("🔗 Сквады Remnawave получили новые правила")
+        lines.append(cls._when())
+        cls._send_message("\n".join(lines))
 
     @classmethod
     def send_test_message(
@@ -155,13 +160,10 @@ class TelegramNotifier:
         chat_id: Optional[str] = None,
         thread_id: Optional[str] = None,
     ) -> bool:
-        """Отправляет тестовое уведомление для проверки настроек бота."""
-        safe_domain = html.escape(Config.DOMAIN)
-        text = (
-            f"🔔 <b>[Geo Routing Server] Тестовое уведомление</b>\n\n"
-            f"🌐 <b>Домен:</b> <code>{safe_domain}</code>\n"
-            f"✅ Связь с Telegram Bot API успешно установлена!\n"
-            f"Бот готов присылать отчёты об обновлениях баз и предупреждения об ошибках."
-        )
+        """Тестовое сообщение для проверки настроек бота."""
+        what = "ошибки синхронизации и обновления баз" if Config.TELEGRAM_NOTIFY_SUCCESS else "ошибки синхронизации"
+        text = "\n".join([
+            cls._title("🔔", "Уведомления работают"),
+            f"Сюда будут приходить: {what}.",
+        ])
         return cls._send_message(text, bot_token=bot_token, chat_id=chat_id, thread_id=thread_id)
-
